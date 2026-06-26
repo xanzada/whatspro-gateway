@@ -99,7 +99,7 @@ async function listInstances() {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
-app.get(['/whatspro', '/'], requireUiOrApi, (req, res) => {
+app.get(['/whatspro', '/'], (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'whatspro.html'));
 });
 
