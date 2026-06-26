@@ -143,6 +143,24 @@ app.get('/api/wa/status/:instanceId', requireUiOrApi, async (req, res) => {
   res.json(await getInstanceStatus(instanceId));
 });
 
+// Инстансты қосу (whatspro.html интерфейсі үшін)
+app.post('/api/wa/instances', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.body?.instanceId || '').trim();
+  const label = String(req.body?.label || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  await saveInstance(instanceId, label);
+  res.json({ success: true, instanceId, label });
+});
+
+// Инстансты өшіру (whatspro.html интерфейсі үшін)
+app.delete('/api/wa/instances/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  await stopWhatsAppInstance(instanceId).catch(() => {});
+  if (redisClient.isOpen) await redisClient.hDel(INSTANCE_STORE_KEY, instanceId);
+  res.json({ success: true });
+});
+
 app.post('/api/wa/restart/:instanceId', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
