@@ -1,0 +1,1626 @@
+<!doctype html>
+<html lang="kk">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>WhatsPro</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0a0f1a;
+            --panel: #111827;
+            --panel-2: #172235;
+            --panel-3: #203047;
+            --line: #28384f;
+            --text: #f6f8fc;
+            --soft: #c9d5e4;
+            --muted: #879bb4;
+            --green: #10b981;
+            --blue: #3b82f6;
+            --orange: #f59e0b;
+            --red: #ef4444;
+            --radius: 8px;
+            --shadow: 0 18px 50px rgba(0, 0, 0, .26);
+        }
+
+        * { box-sizing: border-box; }
+        html, body { min-height: 100%; }
+        body {
+            margin: 0;
+            background:
+                radial-gradient(circle at 16% 0%, rgba(16, 185, 129, .12), transparent 22rem),
+                radial-gradient(circle at 82% 6%, rgba(59, 130, 246, .09), transparent 22rem),
+                var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            letter-spacing: 0;
+        }
+
+        button, input { font: inherit; }
+        button { border: 0; cursor: pointer; }
+        svg { width: 17px; height: 17px; }
+
+        .page {
+            width: min(1120px, calc(100% - 28px));
+            margin: 0 auto;
+            padding: 18px 0 42px;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .brand {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 11px;
+        }
+
+        .brand-icon, .card-icon {
+            width: 40px;
+            height: 40px;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            border-radius: var(--radius);
+            background: #0f766e;
+            color: white;
+            box-shadow: 0 12px 30px rgba(16, 185, 129, .2);
+        }
+
+        .brand-text { min-width: 0; }
+
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .lang-toggle {
+            min-width: 48px;
+            height: 38px;
+            padding: 0 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: rgba(23, 34, 53, .92);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 950;
+        }
+
+        .lang-toggle:hover { background: var(--panel-3); }
+
+        .eyebrow {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 0 2px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 850;
+            text-transform: uppercase;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--green);
+            box-shadow: 0 0 0 4px rgba(16, 185, 129, .12);
+        }
+
+        h1, h2, h3, p { margin: 0; }
+        h1 {
+            overflow: hidden;
+            font-size: 22px;
+            line-height: 1.15;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        h2 { font-size: 17px; }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: rgba(17, 24, 39, .9);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .control-panel {
+            display: grid;
+            grid-template-columns: .8fr 1fr auto;
+            gap: 10px;
+            align-items: end;
+            padding: 14px;
+        }
+
+        .field {
+            min-width: 0;
+            display: grid;
+            gap: 6px;
+        }
+
+        label {
+            color: #a8b7cc;
+            font-size: 11px;
+            font-weight: 850;
+        }
+
+        input {
+            width: 100%;
+            height: 38px;
+            padding: 0 11px;
+            border: 1px solid #304258;
+            border-radius: var(--radius);
+            outline: none;
+            background: #0d1422;
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+        input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(16, 185, 129, .14); }
+        input::placeholder { color: #6f8198; font-weight: 650; }
+
+        .primary, .secondary, .danger, .icon-btn {
+            min-height: 38px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            font-weight: 900;
+            white-space: nowrap;
+        }
+
+        .primary {
+            padding: 0 13px;
+            background: var(--green);
+            color: white;
+            box-shadow: 0 12px 26px rgba(16, 185, 129, .18);
+        }
+
+        .primary:hover { background: #0ea371; }
+        .secondary {
+            padding: 0 11px;
+            border: 1px solid #34506f;
+            background: #17253a;
+            color: var(--soft);
+        }
+
+        .danger {
+            padding: 0 11px;
+            border: 1px solid rgba(239, 68, 68, .28);
+            background: rgba(239, 68, 68, .1);
+            color: #fca5a5;
+        }
+
+        .icon-btn {
+            width: 38px;
+            padding: 0;
+            border: 1px solid var(--line);
+            background: var(--panel-2);
+            color: var(--soft);
+        }
+
+        .icon-btn:hover, .secondary:hover { background: var(--panel-3); color: white; }
+        .primary:disabled, .secondary:disabled, .danger:disabled, .icon-btn:disabled {
+            cursor: not-allowed;
+            opacity: .58;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            padding: 0 14px 14px;
+        }
+
+        .stat {
+            min-width: 0;
+            padding: 10px;
+            border: 1px solid #26384f;
+            border-radius: var(--radius);
+            background: #0d1524;
+        }
+
+        .stat span {
+            display: block;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 850;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .stat strong {
+            display: block;
+            margin-top: 3px;
+            font-size: 19px;
+        }
+
+        .request-link {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px 14px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .field-hint {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 750;
+            line-height: 1.35;
+        }
+
+        .request-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .request-card {
+            display: grid;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: rgba(17, 24, 39, .86);
+        }
+
+        .request-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .request-title {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+
+        .request-title strong {
+            overflow: hidden;
+            font-size: 14px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .request-title span {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .request-fields {
+            display: grid;
+            grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) auto auto;
+            gap: 8px;
+            align-items: end;
+        }
+
+        .login-panel {
+            display: grid;
+            gap: 14px;
+            padding: 16px;
+        }
+
+        .login-panel p {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .login-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+        }
+
+        .auth-message {
+            min-height: 18px;
+            color: #fca5a5;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 18px 0 10px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .wa-card {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 138px;
+            gap: 12px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: rgba(17, 24, 39, .92);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, .16);
+        }
+
+        .card-main {
+            min-width: 0;
+            display: grid;
+            gap: 10px;
+        }
+
+        .card-head {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: 36px minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+        }
+
+        .card-icon {
+            width: 36px;
+            height: 36px;
+            background: #14532d;
+            box-shadow: none;
+            color: #bbf7d0;
+        }
+
+        .label-row {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        h3 {
+            min-width: 0;
+            overflow: hidden;
+            font-size: 15px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .instance {
+            overflow: hidden;
+            color: #94a8c2;
+            font-size: 12px;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            height: 20px;
+            padding: 0 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 950;
+        }
+
+        .badge.connected { background: rgba(16, 185, 129, .13); color: #86efac; }
+        .badge.qr_ready { background: rgba(245, 158, 11, .15); color: #fcd34d; }
+        .badge.not_running { background: rgba(148, 163, 184, .12); color: #cbd5e1; }
+        .badge.error { background: rgba(239, 68, 68, .13); color: #fca5a5; }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        .qr-box {
+            width: 138px;
+            min-height: 138px;
+            display: grid;
+            place-items: center;
+            align-self: start;
+            border: 1px solid #324960;
+            border-radius: var(--radius);
+            background: #edf2f7;
+            overflow: hidden;
+        }
+
+        .qr-box img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .qr-empty {
+            padding: 12px;
+            color: #53657a;
+            font-size: 12px;
+            font-weight: 850;
+            text-align: center;
+        }
+
+        .qr-empty small {
+            display: block;
+            margin-top: 6px;
+            font-size: 10px;
+            line-height: 1.35;
+            color: #64748b;
+        }
+
+        .meta {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            flex-wrap: wrap;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .status-detail {
+            max-width: 360px;
+            color: #8ea3bd;
+            font-size: 11px;
+            font-weight: 800;
+            line-height: 1.35;
+        }
+
+        .scanner-panel {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+            gap: 18px;
+            align-items: center;
+            padding: 18px;
+        }
+
+        .connect-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+            margin-top: 14px;
+        }
+
+        .scanner-title {
+            display: grid;
+            gap: 8px;
+        }
+
+        .scanner-title h2 { font-size: 22px; }
+        .scanner-title p {
+            max-width: 560px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .scanner-qr {
+            width: 100%;
+            aspect-ratio: 1;
+            display: grid;
+            place-items: center;
+            border: 1px solid #324960;
+            border-radius: var(--radius);
+            background: #edf2f7;
+            overflow: hidden;
+        }
+
+        .scanner-qr img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .empty {
+            display: grid;
+            place-items: center;
+            min-height: 210px;
+            border: 1px dashed #34465e;
+            border-radius: var(--radius);
+            background: rgba(17, 24, 39, .58);
+            color: var(--muted);
+            text-align: center;
+            padding: 22px;
+        }
+
+        .empty strong {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text);
+            font-size: 17px;
+        }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 22px;
+            z-index: 40;
+            max-width: calc(100vw - 32px);
+            transform: translateX(-50%) translateY(90px);
+            padding: 10px 13px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: #111827;
+            color: white;
+            box-shadow: var(--shadow);
+            opacity: 0;
+            transition: .22s ease;
+        }
+
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        [hidden] { display: none !important; }
+
+        body.scan-mode .admin-only { display: none !important; }
+        body.scan-mode .page { width: min(760px, calc(100% - 24px)); }
+        body.scan-mode .topbar { justify-content: flex-start; }
+        body.login-mode .admin-only { display: none !important; }
+
+        @media (max-width: 900px) {
+            .page {
+                width: min(100% - 18px, 680px);
+                padding-top: 12px;
+            }
+
+            .topbar { align-items: center; }
+            .brand-icon { width: 36px; height: 36px; }
+            h1 { font-size: 20px; }
+            .lang-toggle { height: 36px; min-width: 44px; }
+            .control-panel { grid-template-columns: 1fr; padding: 12px; }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 12px 12px; }
+            .request-link { grid-template-columns: 1fr; align-items: stretch; }
+            .request-fields, .connect-form, .login-form { grid-template-columns: 1fr; }
+            .grid { grid-template-columns: 1fr; }
+            .wa-card { grid-template-columns: 1fr; padding: 11px; }
+            .qr-box { width: 150px; min-height: 150px; justify-self: center; }
+            .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .actions .primary, .actions .secondary, .actions .danger { width: 100%; }
+            .scanner-panel { grid-template-columns: 1fr; padding: 14px; }
+            .scanner-title h2 { font-size: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.8a9.2 9.2 0 0 0-7.85 14.02L3 21l4.34-1.1A9.2 9.2 0 1 0 12 2.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M9.1 7.8c-.3-.67-.55-.68-.8-.68h-.69c-.24 0-.63.09-.96.45-.33.36-1.26 1.23-1.26 3s1.29 3.47 1.47 3.71c.18.24 2.49 3.99 6.16 5.43 3.05 1.2 3.67.96 4.33.9.66-.06 2.13-.87 2.43-1.71.3-.84.3-1.56.21-1.71-.09-.15-.33-.24-.69-.42-.36-.18-2.13-1.05-2.46-1.17-.33-.12-.57-.18-.81.18-.24.36-.93 1.17-1.14 1.41-.21.24-.42.27-.78.09-.36-.18-1.52-.56-2.9-1.79-1.07-.96-1.8-2.14-2.01-2.5-.21-.36-.02-.55.16-.73.16-.16.36-.42.54-.63.18-.21.24-.36.36-.6.12-.24.06-.45-.03-.63-.09-.18-.78-1.94-1.13-2.58Z" fill="currentColor" opacity=".9"/></svg>
+                </div>
+                <div class="brand-text">
+                    <p class="eyebrow"><span class="dot"></span><span>WhatsPro</span></p>
+                    <h1 id="page-title">WhatsApp instance басқару</h1>
+                </div>
+            </div>
+            <div class="top-actions">
+                <button class="lang-toggle" id="language-toggle" type="button" hidden>KZ</button>
+            </div>
+        </header>
+
+        <section class="panel" id="login-panel" hidden>
+            <form class="login-panel" id="login-form">
+                <div>
+                    <h2>Кіру</h2>
+                    <p>WhatsPro басқару панеліне кіру үшін логин мен пароль енгізіңіз. Сессия 30 күн сақталады.</p>
+                </div>
+                <div class="login-form">
+                    <div class="field">
+                        <label for="login-user">Логин</label>
+                        <input id="login-user" autocomplete="username" placeholder="admin" required>
+                    </div>
+                    <div class="field">
+                        <label for="login-pass">Пароль</label>
+                        <input id="login-pass" type="password" autocomplete="current-password" required>
+                    </div>
+                    <button class="primary" id="login-submit" type="submit">Кіру</button>
+                </div>
+                <div class="auth-message" id="auth-message"></div>
+            </form>
+        </section>
+
+        <section class="panel admin-only">
+            <form class="control-panel" id="instance-form">
+                <div class="field">
+                    <label for="instance">NocoDB instance_id</label>
+                    <input id="instance" autocomplete="off" placeholder="prestige" required pattern="[A-Za-z0-9_-]{2,64}">
+                </div>
+                <div class="field">
+                    <label for="label">Атауы</label>
+                    <input id="label" autocomplete="off" placeholder="Crazy Суши">
+                </div>
+                <button class="primary" id="add-btn" type="submit">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg>
+                    Қосу
+                </button>
+            </form>
+            <div class="stats">
+                <div class="stat"><span>Барлығы</span><strong id="stat-total">0</strong></div>
+                <div class="stat"><span>Қосылған</span><strong id="stat-connected">0</strong></div>
+                <div class="stat"><span>QR</span><strong id="stat-qr">0</strong></div>
+                <div class="stat"><span>Тоқтаған</span><strong id="stat-off">0</strong></div>
+            </div>
+            <form class="request-link" id="invite-form">
+                <div class="field">
+                    <label for="invite-name">Операторға жіберетін ресторан сілтемесі</label>
+                    <input id="invite-name" autocomplete="off" placeholder="Crazy Суши" required>
+                    <span class="field-hint">Ресторан атауын жазып, осы операторға арналған QR сілтемені көшіріңіз.</span>
+                </div>
+                <button class="secondary" id="create-invite-link" type="submit">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M9 9h9v11H9zM6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                    Сілтеме жасау
+                </button>
+            </form>
+        </section>
+
+        <section class="panel" id="request-panel" hidden>
+            <div class="scanner-panel">
+                <div class="scanner-title">
+                    <span class="badge qr_ready" id="request-status">Сұраныс</span>
+                    <h2 id="request-heading">WhatsApp қосуға сұраныс</h2>
+                    <p id="request-copy">Ресторан атауын жазып жіберіңіз. Админ қабылдағаннан кейін QR осы бетте шығады.</p>
+                    <form class="connect-form" id="request-form">
+                        <div class="field">
+                            <label for="request-name">Ресторан атауы</label>
+                            <input id="request-name" autocomplete="organization" placeholder="Crazy Суши" required>
+                        </div>
+                        <div class="field">
+                            <label for="request-contact">Байланыс</label>
+                            <input id="request-contact" autocomplete="tel" inputmode="tel" placeholder="+7 ..." required>
+                        </div>
+                        <button class="primary" id="request-submit" type="submit">Сұраныс жіберу</button>
+                    </form>
+                </div>
+                <div class="scanner-qr" id="request-state">
+                    <div class="qr-empty">Сұраныс күтілуде</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" id="scanner-panel" hidden>
+            <div class="scanner-panel">
+                <div class="scanner-title">
+                    <span class="badge qr_ready" id="scanner-status">Дайындалуда</span>
+                    <h2 id="scanner-heading">WhatsApp QR сканер</h2>
+                    <p id="scanner-copy">WhatsApp қосымшасынан Linked devices бөліміне кіріп, QR кодты сканерлеңіз.</p>
+                    <div class="actions">
+                        <button class="primary" id="scanner-start" type="button">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7L8 5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                            QR жаңарту
+                        </button>
+                    </div>
+                </div>
+                <div class="scanner-qr" id="scanner-qr">
+                    <div class="qr-empty">QR дайындалуда</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="section-head admin-only">
+            <h2>Скан сұраныстары</h2>
+            <button class="icon-btn" id="requests-refresh-btn" type="button" title="Жаңарту" aria-label="Жаңарту">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </div>
+
+        <section class="request-list admin-only" id="request-list">
+            <div class="empty"><div><strong>Сұраныстар оқылуда</strong><span>Оператор link ашқанда өтініш осы жерде шығады</span></div></div>
+        </section>
+
+        <div class="section-head admin-only">
+            <h2>Закрептелген ресторандар</h2>
+            <button class="icon-btn" id="reload-btn" type="button" title="Жаңарту" aria-label="Жаңарту">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </div>
+
+        <section class="grid admin-only" id="instance-grid">
+            <div class="empty"><div><strong>Тізім оқылуда</strong><span>Redis және API жауабы күтілуде</span></div></div>
+        </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+        const qs = new URLSearchParams(location.search);
+        const scanInstance = (qs.get('scan') || '').trim();
+        const connectMode = qs.get('connect') === '1';
+        let activeRequestId = (qs.get('request') || '').trim();
+        let activeScanInstance = scanInstance;
+        const adminMode = !scanInstance && !connectMode && !activeRequestId;
+        const instanceInput = document.getElementById('instance');
+        const labelInput = document.getElementById('label');
+        const grid = document.getElementById('instance-grid');
+        const requestList = document.getElementById('request-list');
+        const loginPanel = document.getElementById('login-panel');
+        const loginForm = document.getElementById('login-form');
+        const inviteForm = document.getElementById('invite-form');
+        const inviteNameInput = document.getElementById('invite-name');
+        const authMessage = document.getElementById('auth-message');
+        const languageToggle = document.getElementById('language-toggle');
+        const toast = document.getElementById('toast');
+
+        let instances = [];
+        let scanRequests = [];
+        const requestDrafts = new Map();
+        let toastTimer = null;
+        let busy = false;
+        let scannerStarted = false;
+        let adminRefreshTimer = null;
+        let operatorLang = localStorage.getItem('whatspro_operator_lang') === 'ru' ? 'ru' : 'kk';
+
+        if (qs.get('instance')) instanceInput.value = qs.get('instance');
+
+        function showToast(text) {
+            clearTimeout(toastTimer);
+            toast.textContent = text;
+            toast.classList.add('show');
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+        }
+
+        function showLogin(message = '') {
+            document.body.classList.add('login-mode');
+            loginPanel.hidden = false;
+            authMessage.textContent = message;
+        }
+
+        function showAdmin() {
+            document.body.classList.remove('login-mode');
+            loginPanel.hidden = true;
+            authMessage.textContent = '';
+        }
+
+        function escapeHtml(value) {
+            return String(value || '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[char]));
+        }
+
+        const operatorCopy = {
+            kk: {
+                lang: 'KZ',
+                connectTitle: 'WhatsApp қосу сұранысы',
+                scannerTitle: 'WhatsApp QR сканер',
+                requestStatus: 'Сұраныс',
+                requestHeading: 'WhatsApp қосуға сұраныс',
+                requestCopy: 'Админ қабылдағаннан кейін QR осы бетте шығады. Бетті ашық қалдырыңыз.',
+                nameLabel: 'Ресторан атауы',
+                namePlaceholder: 'Crazy Суши',
+                contactLabel: 'WhatsApp нөмірі',
+                contactPlaceholder: '+7 ...',
+                submit: 'Сұраныс жіберу',
+                waitingEmpty: 'Сұраныс күтілуде',
+                waitingStatus: 'Күтіп тұр',
+                waitingHeading: 'Сұраныс жіберілді',
+                waitingCopy: 'Қабылданғаннан кейін WhatsApp QR осы бетте автоматты түрде шығады.',
+                waitingState: 'QR дайындалуын күтіп тұр',
+                rejectedStatus: 'Отказ',
+                rejectedCopy: 'Сұраныс қабылданбады. Админге хабарласыңыз.',
+                rejectedState: 'Сұраныс қабылданбады',
+                missingRequest: 'Сұраныс табылмады',
+                invalidLinkCopy: 'Админнен жаңа ресторан сілтемесін сұраңыз.',
+                nameRequired: 'Ресторан атауын жазыңыз',
+                contactRequired: 'WhatsApp нөмірін жазыңыз',
+                requestFailed: 'Сұраныс жіберілмеді',
+                qrRefresh: 'QR жаңарту',
+                scannerHeading: 'WhatsApp QR сканер',
+                scannerCopy: 'WhatsApp қосымшасынан Linked devices бөліміне кіріп, QR кодты сканерлеңіз.',
+                qrLoading: 'QR дайындалуда',
+                qrScanCopy: 'WhatsApp қосымшасынан Linked devices бөліміне кіріп, осы QR кодты сканерлеңіз.',
+                connected: 'WhatsApp қосылды',
+                connectedCopy: 'Бұл ресторанның WhatsApp аккаунты қосылды. Бетті жаба беруге болады.',
+                loadingCopy: 'QR дайындалғанша бірнеше секунд күтіңіз. Егер QR жаңарса, бет оны автоматты түрде ауыстырады.',
+                instanceMissing: 'Instance табылмады',
+                instanceMissingCopy: 'Бұл сілтеме үшін instance алдын ала тіркелуі керек.',
+                error: 'Қате'
+            },
+            ru: {
+                lang: 'RU',
+                connectTitle: 'Запрос на подключение WhatsApp',
+                scannerTitle: 'WhatsApp QR сканер',
+                requestStatus: 'Запрос',
+                requestHeading: 'Запрос на подключение WhatsApp',
+                requestCopy: 'После подтверждения админом QR появится на этой странице. Оставьте страницу открытой.',
+                nameLabel: 'Название ресторана',
+                namePlaceholder: 'Crazy Суши',
+                contactLabel: 'WhatsApp номер',
+                contactPlaceholder: '+7 ...',
+                submit: 'Отправить запрос',
+                waitingEmpty: 'Запрос ожидает',
+                waitingStatus: 'Ожидает',
+                waitingHeading: 'Запрос отправлен',
+                waitingCopy: 'После подтверждения WhatsApp QR автоматически появится на этой странице.',
+                waitingState: 'Ожидаем подготовку QR',
+                rejectedStatus: 'Отказ',
+                rejectedCopy: 'Запрос отклонен. Свяжитесь с администратором.',
+                rejectedState: 'Запрос отклонен',
+                missingRequest: 'Запрос не найден',
+                invalidLinkCopy: 'Попросите у администратора новую ссылку ресторана.',
+                nameRequired: 'Введите название ресторана',
+                contactRequired: 'Введите WhatsApp номер',
+                requestFailed: 'Запрос не отправлен',
+                qrRefresh: 'Обновить QR',
+                scannerHeading: 'WhatsApp QR сканер',
+                scannerCopy: 'Откройте WhatsApp, зайдите в Linked devices и отсканируйте QR код.',
+                qrLoading: 'QR готовится',
+                qrScanCopy: 'Откройте WhatsApp, зайдите в Linked devices и отсканируйте этот QR код.',
+                connected: 'WhatsApp подключен',
+                connectedCopy: 'WhatsApp аккаунт ресторана подключен. Эту страницу можно закрыть.',
+                loadingCopy: 'Подождите несколько секунд, пока QR подготовится. Если QR обновится, страница заменит его автоматически.',
+                instanceMissing: 'Instance не найден',
+                instanceMissingCopy: 'Для этой ссылки instance должен быть заранее зарегистрирован.',
+                error: 'Ошибка'
+            }
+        };
+
+        function opText(key) {
+            return operatorCopy[operatorLang][key] || operatorCopy.kk[key] || key;
+        }
+
+        function applyOperatorLanguage() {
+            languageToggle.textContent = opText('lang');
+            document.documentElement.lang = operatorLang === 'ru' ? 'ru' : 'kk';
+
+            const requestNameLabel = document.querySelector('label[for="request-name"]');
+            const requestContactLabel = document.querySelector('label[for="request-contact"]');
+            const requestSubmit = document.getElementById('request-submit');
+            const scannerStart = document.getElementById('scanner-start');
+
+            if (requestNameLabel) requestNameLabel.textContent = opText('nameLabel');
+            if (requestContactLabel) requestContactLabel.textContent = opText('contactLabel');
+            document.getElementById('request-name').placeholder = opText('namePlaceholder');
+            document.getElementById('request-contact').placeholder = opText('contactPlaceholder');
+            if (requestSubmit) requestSubmit.textContent = opText('submit');
+            if (scannerStart) {
+                scannerStart.lastChild.textContent = ` ${opText('qrRefresh')}`;
+            }
+
+            if (connectMode || activeRequestId) {
+                document.getElementById('page-title').textContent = opText('connectTitle');
+                document.getElementById('request-status').textContent = opText('requestStatus');
+                if (!document.getElementById('request-form').hidden && !activeRequestId) {
+                    document.getElementById('request-heading').textContent = opText('requestHeading');
+                    document.getElementById('request-copy').textContent = opText('requestCopy');
+                    document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('waitingEmpty'))}</div>`;
+                }
+            }
+
+            if (scanInstance) {
+                document.getElementById('page-title').textContent = opText('scannerTitle');
+                document.getElementById('scanner-heading').textContent = `${activeScanInstance} QR`;
+                document.getElementById('scanner-copy').textContent = opText('scannerCopy');
+            }
+        }
+
+        function setOperatorLanguage(lang) {
+            operatorLang = lang === 'ru' ? 'ru' : 'kk';
+            localStorage.setItem('whatspro_operator_lang', operatorLang);
+            applyOperatorLanguage();
+        }
+
+        async function requestJson(path, options = {}) {
+            const { skipAuthRedirect, timeout = 12000, ...fetchOptions } = options;
+            const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+            const method = String(fetchOptions.method || 'GET').toUpperCase();
+            const attempts = method === 'GET' ? 2 : 1;
+            let lastError;
+
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeout);
+
+                try {
+                    const response = await fetch(path, {
+                        ...fetchOptions,
+                        headers,
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        signal: controller.signal
+                    });
+
+                    let data = {};
+                    try { data = await response.json(); } catch (error) {}
+
+                    if (!response.ok) {
+                        const errorMessage = data.error || data.details || `HTTP_${response.status}`;
+                        if (adminMode && response.status === 401 && !skipAuthRedirect) {
+                            showLogin('Сессия аяқталды. Қайта кіріңіз.');
+                        }
+                        const httpError = new Error(errorMessage);
+                        httpError.status = response.status;
+                        throw httpError;
+                    }
+
+                    return data;
+                } catch (error) {
+                    lastError = error.name === 'AbortError' ? new Error('REQUEST_TIMEOUT') : error;
+                    const retryHttp = [502, 503, 504].includes(lastError.status);
+                    if ((!lastError.status || retryHttp) && attempt < attempts) await new Promise(resolve => setTimeout(resolve, 400));
+                    else break;
+                } finally {
+                    clearTimeout(timer);
+                }
+            }
+
+            throw lastError;
+        }
+
+        function statusMeta(status) {
+            if (status === 'connected') return { label: 'Қосылды', cls: 'connected' };
+            if (status === 'qr_ready') return { label: 'QR дайын', cls: 'qr_ready' };
+            if (status === 'starting') return { label: 'Қосылып жатыр', cls: 'qr_ready' };
+            if (status === 'restarting') return { label: 'Қайта қосылады', cls: 'qr_ready' };
+            if (status === 'disconnected') return { label: 'Байланыс үзілді', cls: 'error' };
+            if (status === 'auth_failure') return { label: 'QR керек', cls: 'error' };
+            if (status === 'error') return { label: 'Қате', cls: 'error' };
+            return { label: 'Тоқтап тұр', cls: 'not_running' };
+        }
+
+        function operatorStatusLabel(status) {
+            if (status === 'connected') return opText('connected');
+            if (status === 'qr_ready') return 'QR';
+            if (status === 'starting') return opText('qrLoading');
+            if (status === 'restarting') return operatorLang === 'ru' ? 'Перезапуск' : 'Қайта қосылуда';
+            if (status === 'disconnected') return operatorLang === 'ru' ? 'Отключено' : 'Байланыс үзілді';
+            if (status === 'auth_failure') return operatorLang === 'ru' ? 'Нужен QR' : 'QR керек';
+            if (status === 'error') return opText('error');
+            return opText('qrLoading');
+        }
+
+        function formatWaReason(reason) {
+            const text = String(reason || '').replace(/^initialize_failed:\s*/i, '').replace(/^chromium_resource_error:\s*/i, '').trim();
+            if (!text) return '';
+            if (text === 'restore_timeout') return 'Ескі сессия қалпына келмеді, қайта ашылады';
+            if (text === 'chrome_profile_locked') return 'Chrome lock тазаланып жатыр';
+            if (/Target closed/i.test(text)) return 'Chromium ерте жабылып қалды';
+            if (/Requesting main frame too early/i.test(text)) return 'Chromium беті дайын болмай жабылды';
+            if (/state_check_failed/i.test(text)) return 'WhatsApp status тексерісі өтпеді';
+            return text.length > 96 ? `${text.slice(0, 93)}...` : text;
+        }
+
+        function statusDetail(item) {
+            const reason = formatWaReason(item?.reason);
+            const nextMs = Number(item?.nextRestartInMs || 0);
+            if (item?.status === 'restarting' && nextMs > 0) {
+                const seconds = Math.max(1, Math.ceil(nextMs / 1000));
+                return reason ? `${reason}. Келесі әрекет: ${seconds} сек` : `Келесі әрекет: ${seconds} сек`;
+            }
+            return reason;
+        }
+
+        function scannerUrl(instanceId) {
+            return `${location.origin}/whatspro?scan=${encodeURIComponent(instanceId)}`;
+        }
+
+        function requestUrl(requestId) {
+            return `${location.origin}/whatspro?request=${encodeURIComponent(requestId)}`;
+        }
+
+        async function copyText(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                showToast('Сілтеме көшірілді');
+            } catch (error) {
+                window.prompt('Сілтемені көшіріңіз', text);
+            }
+        }
+
+        function updateStats() {
+            const offlineStatuses = new Set(['not_running', 'stopped', 'disconnected', 'auth_failure', 'error']);
+            document.getElementById('stat-total').textContent = instances.length;
+            document.getElementById('stat-connected').textContent = instances.filter(item => item.status === 'connected').length;
+            document.getElementById('stat-qr').textContent = instances.filter(item => item.status === 'qr_ready').length;
+            document.getElementById('stat-off').textContent = instances.filter(item => !item.status || offlineStatuses.has(item.status)).length;
+        }
+
+        function qrBlock(item) {
+            if (item.status === 'qr_ready' && item.qr) {
+                return `<div class="qr-box"><img src="${escapeHtml(item.qr)}" alt="${escapeHtml(item.instanceId)} QR"></div>`;
+            }
+
+            const labels = {
+                connected: 'WhatsApp қосылды',
+                starting: 'WhatsApp ашылып жатыр',
+                restarting: 'Қайта қосылады',
+                disconnected: 'Байланыс үзілді',
+                auth_failure: 'QR керек',
+                error: 'Қате'
+            };
+            const label = labels[item.status] || 'QR әлі жоқ';
+            const detail = statusDetail(item);
+            return `<div class="qr-box"><div class="qr-empty">${escapeHtml(label)}${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</div></div>`;
+        }
+
+        async function startAdminDashboard() {
+            showAdmin();
+            await Promise.all([loadInstances(true), loadScanRequests(true)]);
+
+            if (adminRefreshTimer) clearInterval(adminRefreshTimer);
+            adminRefreshTimer = setInterval(() => {
+                loadInstances(true);
+                loadScanRequests(true);
+            }, 7000);
+        }
+
+        async function checkAdminSession() {
+            showLogin('');
+
+            try {
+                await requestJson('/api/whatspro/session', { skipAuthRedirect: true });
+                await startAdminDashboard();
+            } catch (error) {
+                showLogin('Логин мен пароль енгізіңіз.');
+            }
+        }
+
+        async function submitLogin(event) {
+            event.preventDefault();
+
+            const username = document.getElementById('login-user').value.trim();
+            const password = document.getElementById('login-pass').value;
+
+            if (!username || !password) {
+                showLogin('Логин мен парольді толтырыңыз.');
+                return;
+            }
+
+            document.getElementById('login-submit').disabled = true;
+            authMessage.textContent = '';
+
+            try {
+                await requestJson('/api/whatspro/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ username, password }),
+                    skipAuthRedirect: true
+                });
+                await startAdminDashboard();
+            } catch (error) {
+                showLogin('Логин немесе пароль қате.');
+            } finally {
+                document.getElementById('login-submit').disabled = false;
+            }
+        }
+
+        function render() {
+            updateStats();
+
+            if (!instances.length) {
+                grid.innerHTML = '<div class="empty"><div><strong>Ресторан қосылмаған</strong><span>Instance енгізіп, QR генерациясын бастаңыз</span></div></div>';
+                return;
+            }
+
+            grid.innerHTML = instances.map(item => {
+                const meta = statusMeta(item.status);
+                const label = item.label || item.instanceId;
+                const created = item.updatedAt ? new Date(item.updatedAt).toLocaleString('kk-KZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                const detail = statusDetail(item);
+
+                return `
+                    <article class="wa-card" data-instance="${escapeHtml(item.instanceId)}">
+                        <div class="card-main">
+                            <div class="card-head">
+                                <div class="card-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.8a9.2 9.2 0 0 0-7.85 14.02L3 21l4.34-1.1A9.2 9.2 0 1 0 12 2.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M8.8 8.1c-.18-.43-.38-.44-.56-.44h-.49c-.18 0-.46.07-.7.34-.23.27-.9.93-.9 2.26s.92 2.62 1.05 2.8c.13.18 1.78 3.01 4.4 4.1 2.18.9 2.62.72 3.1.68.47-.05 1.52-.66 1.73-1.3.22-.64.22-1.18.16-1.3-.07-.11-.24-.18-.5-.32-.26-.13-1.52-.79-1.76-.88-.24-.09-.41-.13-.58.14-.17.27-.66.88-.82 1.06-.15.18-.3.2-.56.07-.26-.14-1.09-.42-2.07-1.35-.77-.72-1.29-1.62-1.44-1.9-.15-.27-.02-.42.11-.56.12-.12.26-.32.39-.48.13-.16.17-.27.26-.45.09-.18.04-.34-.02-.48-.06-.13-.56-1.46-.8-1.95Z" fill="currentColor"/></svg>
+                                </div>
+                                <div>
+                                    <div class="label-row">
+                                        <h3>${escapeHtml(label)}</h3>
+                                        <span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>
+                                    </div>
+                                    <div class="instance">${escapeHtml(item.instanceId)}</div>
+                                </div>
+                            </div>
+                            <div class="meta">
+                                <span>Закреп</span>
+                                ${created ? `<span>${escapeHtml(created)}</span>` : ''}
+                            </div>
+                            ${detail ? `<div class="status-detail">${escapeHtml(detail)}</div>` : ''}
+                            <div class="actions">
+                                <button class="primary" type="button" data-action="start" data-instance="${escapeHtml(item.instanceId)}" data-label="${escapeHtml(label)}">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7L8 5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                                    QR
+                                </button>
+                                <button class="secondary" type="button" data-action="refresh" data-instance="${escapeHtml(item.instanceId)}">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    Жаңарту
+                                </button>
+                                <button class="secondary" type="button" data-action="logout" data-instance="${escapeHtml(item.instanceId)}">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M9 21H6.8A2.8 2.8 0 0 1 4 18.2V5.8A2.8 2.8 0 0 1 6.8 3H9M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    Logout
+                                </button>
+                                <button class="danger" type="button" data-action="delete" data-instance="${escapeHtml(item.instanceId)}">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    Өшіру
+                                </button>
+                            </div>
+                        </div>
+                        ${qrBlock(item)}
+                    </article>`;
+            }).join('');
+        }
+
+        async function loadInstances(silent = false) {
+            try {
+                const data = await requestJson('/api/wa/instances');
+                instances = data.instances || [];
+                render();
+            } catch (error) {
+                if (!silent) showToast('Тізім оқылмады');
+            }
+        }
+
+        function requestStatusMeta(status) {
+            if (status === 'approved') return { label: 'Қабылданды', cls: 'connected' };
+            if (status === 'rejected') return { label: 'Отказ', cls: 'error' };
+            return { label: 'Күтіп тұр', cls: 'qr_ready' };
+        }
+
+        function storeRequestDrafts() {
+            requestList.querySelectorAll('.request-card').forEach(card => {
+                const requestId = card.dataset.requestId;
+                if (!requestId) return;
+
+                const instanceEl = card.querySelector('[data-field="instanceId"]');
+                const labelEl = card.querySelector('[data-field="label"]');
+                if (!instanceEl || !labelEl || instanceEl.disabled) return;
+
+                requestDrafts.set(requestId, {
+                    instanceId: instanceEl.value,
+                    label: labelEl.value
+                });
+            });
+        }
+
+        function shouldHoldRequestRender() {
+            const active = document.activeElement;
+            return Boolean(active && requestList.contains(active) && active.matches('input'));
+        }
+
+        function renderScanRequests() {
+            storeRequestDrafts();
+
+            if (!scanRequests.length) {
+                requestList.innerHTML = '<div class="empty"><div><strong>Сұраныс жоқ</strong><span>Оператор link ашқанда өтініш осы жерде көрінеді</span></div></div>';
+                return;
+            }
+
+            requestList.innerHTML = scanRequests.map(request => {
+                const meta = requestStatusMeta(request.status);
+                const created = request.createdAt ? new Date(request.createdAt).toLocaleString('kk-KZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                const canEdit = request.status === 'pending';
+                const draft = canEdit ? requestDrafts.get(request.id) : null;
+                const label = draft?.label ?? request.label ?? request.requestedName ?? '';
+                const instance = draft?.instanceId ?? request.instanceId ?? '';
+
+                if (!canEdit) requestDrafts.delete(request.id);
+
+                return `
+                    <article class="request-card" data-request-id="${escapeHtml(request.id)}">
+                        <div class="request-top">
+                            <div class="request-title">
+                                <strong>${escapeHtml(request.requestedName || 'Ресторан операторы')}</strong>
+                                <span>${escapeHtml([request.contact, created].filter(Boolean).join(' · '))}</span>
+                            </div>
+                            <span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>
+                        </div>
+                        <div class="request-fields">
+                            <div class="field">
+                                <label>instance</label>
+                                <input data-field="instanceId" value="${escapeHtml(instance)}" placeholder="prestige" ${canEdit ? '' : 'disabled'}>
+                            </div>
+                            <div class="field">
+                                <label>Атауы</label>
+                                <input data-field="label" value="${escapeHtml(label)}" placeholder="Crazy Суши" ${canEdit ? '' : 'disabled'}>
+                            </div>
+                            ${canEdit ? `
+                                <button class="primary" type="button" data-action="approve-request">Қабылдау</button>
+                                <button class="danger" type="button" data-action="reject-request">Отказ</button>
+                            ` : `
+                                <button class="secondary" type="button" data-action="copy-approved-link" ${instance ? '' : 'disabled'}>QR ссылка</button>
+                                <button class="secondary" type="button" disabled>${escapeHtml(meta.label)}</button>
+                            `}
+                        </div>
+                    </article>`;
+            }).join('');
+        }
+
+        async function loadScanRequests(silent = false) {
+            try {
+                const data = await requestJson('/api/wa/scan-requests');
+                scanRequests = data.requests || [];
+                if (shouldHoldRequestRender()) return;
+                renderScanRequests();
+            } catch (error) {
+                if (!silent) showToast('Сұраныстар оқылмады');
+            }
+        }
+
+        async function approveScanRequest(card) {
+            const requestId = card.dataset.requestId;
+            const instanceId = card.querySelector('[data-field="instanceId"]').value.trim();
+            const label = card.querySelector('[data-field="label"]').value.trim();
+
+            if (!/^[A-Za-z0-9_-]{2,64}$/.test(instanceId)) {
+                showToast('Instance форматы қате');
+                return;
+            }
+
+            await requestJson(`/api/wa/scan-requests/${encodeURIComponent(requestId)}/approve`, {
+                method: 'POST',
+                body: JSON.stringify({ instanceId, label })
+            });
+            requestDrafts.delete(requestId);
+            showToast('Сұраныс қабылданды');
+            await Promise.all([loadScanRequests(true), loadInstances(true)]);
+            grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        async function rejectScanRequest(card) {
+            const requestId = card.dataset.requestId;
+            await requestJson(`/api/wa/scan-requests/${encodeURIComponent(requestId)}/reject`, {
+                method: 'POST',
+                body: JSON.stringify({})
+            });
+            requestDrafts.delete(requestId);
+            showToast('Сұраныс қабылданбады');
+            await loadScanRequests(true);
+        }
+
+        async function createInviteLink(event) {
+            event.preventDefault();
+
+            const name = inviteNameInput.value.trim();
+            if (!name) {
+                showToast('Ресторан атауын жазыңыз');
+                return;
+            }
+
+            const button = document.getElementById('create-invite-link');
+            button.disabled = true;
+
+            try {
+                const data = await requestJson('/api/wa/scan-invitations', {
+                    method: 'POST',
+                    body: JSON.stringify({ name })
+                });
+
+                await copyText(requestUrl(data.request.id));
+                inviteNameInput.value = '';
+            } catch (error) {
+                showToast('Сілтеме жасалмады');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function addInstance(event) {
+            event.preventDefault();
+            if (busy) return;
+
+            const instanceId = instanceInput.value.trim();
+            const label = labelInput.value.trim();
+
+            if (!/^[A-Za-z0-9_-]{2,64}$/.test(instanceId)) {
+                showToast('Instance форматы қате');
+                return;
+            }
+
+            busy = true;
+            document.getElementById('add-btn').disabled = true;
+
+            try {
+                await requestJson('/api/wa/instances', {
+                    method: 'POST',
+                    body: JSON.stringify({ instanceId, label })
+                });
+                await requestJson('/api/wa/start', {
+                    method: 'POST',
+                    body: JSON.stringify({ instanceId, label })
+                });
+                instanceInput.value = '';
+                labelInput.value = '';
+                showToast('Instance қосылды');
+                await loadInstances(true);
+            } catch (error) {
+                if (error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+                    showToast('NocoDB ішінде бұл instance табылмады');
+                } else {
+                    showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN' ? 'Логин немесе пароль қате' : 'Instance қосылмады');
+                }
+            } finally {
+                busy = false;
+                document.getElementById('add-btn').disabled = false;
+            }
+        }
+
+        async function startInstance(instanceId, label) {
+            await requestJson('/api/wa/start', {
+                method: 'POST',
+                body: JSON.stringify({ instanceId, label })
+            });
+            showToast('QR генерациясы басталды');
+            await loadInstances(true);
+        }
+
+        async function refreshInstance(instanceId) {
+            const data = await requestJson(`/api/wa/status/${encodeURIComponent(instanceId)}`);
+            instances = instances.map(item => item.instanceId === instanceId ? { ...item, ...data } : item);
+            render();
+        }
+
+        async function logoutInstance(instanceId) {
+            if (!confirm(`${instanceId} WhatsApp сессиясынан шығасыз ба? Қайта қосу үшін QR сканерлеу керек болады.`)) return;
+            await requestJson('/api/wa/logout', {
+                method: 'POST',
+                body: JSON.stringify({ instanceId })
+            });
+            showToast('Сессия жабылды');
+            await loadInstances(true);
+        }
+
+        async function deleteInstance(instanceId) {
+            if (!confirm(`${instanceId} өшірілсін бе?`)) return;
+            await requestJson(`/api/wa/instances/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
+            showToast('Instance өшірілді');
+            await loadInstances(true);
+        }
+
+        function showRequestWaiting(request) {
+            document.getElementById('request-form').hidden = true;
+            document.getElementById('request-status').className = 'badge qr_ready';
+            document.getElementById('request-status').textContent = opText('waitingStatus');
+            document.getElementById('request-heading').textContent = request?.requestedName || opText('waitingHeading');
+            document.getElementById('request-copy').textContent = opText('waitingCopy');
+            document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('waitingState'))}</div>`;
+        }
+
+        function showRequestRejected() {
+            document.getElementById('request-form').hidden = true;
+            document.getElementById('request-status').className = 'badge error';
+            document.getElementById('request-status').textContent = opText('rejectedStatus');
+            document.getElementById('request-copy').textContent = opText('rejectedCopy');
+            document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('rejectedState'))}</div>`;
+        }
+
+        function showInvalidConnectLink() {
+            document.getElementById('request-form').hidden = true;
+            document.getElementById('request-status').className = 'badge error';
+            document.getElementById('request-status').textContent = opText('error');
+            document.getElementById('request-heading').textContent = opText('missingRequest');
+            document.getElementById('request-copy').textContent = opText('invalidLinkCopy');
+            document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('missingRequest'))}</div>`;
+        }
+
+        async function submitOperatorRequest(event) {
+            event.preventDefault();
+            const name = document.getElementById('request-name').value.trim();
+            const contact = document.getElementById('request-contact').value.trim();
+
+            if (!name) {
+                showToast(opText('nameRequired'));
+                return;
+            }
+
+            if (!contact) {
+                showToast(opText('contactRequired'));
+                return;
+            }
+
+            document.getElementById('request-submit').disabled = true;
+
+            try {
+                const data = await requestJson('/api/wa/scan-requests', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, contact })
+                });
+                activeRequestId = data.request.id;
+                history.replaceState(null, '', `/whatspro?request=${encodeURIComponent(activeRequestId)}`);
+                showRequestWaiting(data.request);
+            } catch (error) {
+                showToast(opText('requestFailed'));
+            } finally {
+                document.getElementById('request-submit').disabled = false;
+            }
+        }
+
+        async function handleOperatorRequest(request) {
+            if (request.status === 'approved' && request.instanceId) {
+                activeScanInstance = request.instanceId;
+                document.getElementById('request-panel').hidden = true;
+                document.getElementById('scanner-panel').hidden = false;
+                document.getElementById('scanner-heading').textContent = `${request.label || request.requestedName || request.instanceId} QR`;
+                await loadScanner(true);
+                return;
+            }
+
+            if (request.status === 'rejected') {
+                showRequestRejected();
+                return;
+            }
+
+            showRequestWaiting(request);
+        }
+
+        async function openOperatorRequest() {
+            if (!activeRequestId) return;
+
+            try {
+                const data = await requestJson(`/api/wa/scan-requests/${encodeURIComponent(activeRequestId)}/open`, {
+                    method: 'POST',
+                    body: JSON.stringify({})
+                });
+                await handleOperatorRequest(data.request);
+            } catch (error) {
+                document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('missingRequest'))}</div>`;
+            }
+        }
+
+        async function loadOperatorRequest() {
+            if (!activeRequestId) return;
+
+            try {
+                const data = await requestJson(`/api/wa/scan-requests/${encodeURIComponent(activeRequestId)}`);
+                await handleOperatorRequest(data.request);
+            } catch (error) {
+                document.getElementById('request-state').innerHTML = `<div class="qr-empty">${escapeHtml(opText('missingRequest'))}</div>`;
+            }
+        }
+
+        function updateScannerView(data) {
+            const meta = statusMeta(data.status);
+            const detail = statusDetail(data);
+            document.getElementById('scanner-status').className = `badge ${meta.cls}`;
+            document.getElementById('scanner-status').textContent = operatorStatusLabel(data.status);
+
+            if (data.status === 'qr_ready' && data.qr) {
+                document.getElementById('scanner-qr').innerHTML = `<img src="${escapeHtml(data.qr)}" alt="${escapeHtml(activeScanInstance)} QR">`;
+                document.getElementById('scanner-copy').textContent = opText('qrScanCopy');
+            } else if (data.status === 'connected') {
+                document.getElementById('scanner-qr').innerHTML = `<div class="qr-empty">${escapeHtml(opText('connected'))}</div>`;
+                document.getElementById('scanner-copy').textContent = opText('connectedCopy');
+            } else {
+                const label = ['restarting', 'disconnected', 'auth_failure'].includes(data.status)
+                    ? operatorStatusLabel(data.status)
+                    : opText('qrLoading');
+                document.getElementById('scanner-qr').innerHTML = `<div class="qr-empty">${escapeHtml(label)}${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</div>`;
+                document.getElementById('scanner-copy').textContent = detail || opText('loadingCopy');
+            }
+        }
+
+        async function loadScanner(start = false) {
+            try {
+                if (start && !scannerStarted) {
+                    scannerStarted = true;
+                    await requestJson(`/api/wa/public/start/${encodeURIComponent(activeScanInstance)}`, { method: 'POST' });
+                }
+
+                const data = await requestJson(`/api/wa/status/${encodeURIComponent(activeScanInstance)}`);
+                updateScannerView(data);
+            } catch (error) {
+                document.getElementById('scanner-status').className = 'badge error';
+                document.getElementById('scanner-status').textContent = opText('error');
+                document.getElementById('scanner-qr').innerHTML = `<div class="qr-empty">${escapeHtml(opText('instanceMissing'))}</div>`;
+                document.getElementById('scanner-copy').textContent = opText('instanceMissingCopy');
+            }
+        }
+
+        document.getElementById('instance-form').addEventListener('submit', addInstance);
+        document.getElementById('reload-btn').addEventListener('click', () => loadInstances());
+        document.getElementById('requests-refresh-btn').addEventListener('click', () => loadScanRequests());
+        inviteForm.addEventListener('submit', createInviteLink);
+        loginForm.addEventListener('submit', submitLogin);
+        document.getElementById('request-form').addEventListener('submit', submitOperatorRequest);
+        languageToggle.addEventListener('click', () => {
+            setOperatorLanguage(operatorLang === 'kk' ? 'ru' : 'kk');
+            if (activeRequestId) loadOperatorRequest();
+            if (activeScanInstance) loadScanner(false);
+        });
+        document.getElementById('scanner-start').addEventListener('click', () => {
+            scannerStarted = false;
+            loadScanner(true);
+        });
+
+        requestList.addEventListener('input', event => {
+            if (!event.target.matches('[data-field]')) return;
+            storeRequestDrafts();
+        });
+
+        requestList.addEventListener('click', async event => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) return;
+
+            const card = event.target.closest('.request-card');
+            const action = button.dataset.action;
+            button.disabled = true;
+
+            try {
+                if (action === 'approve-request') await approveScanRequest(card);
+                if (action === 'reject-request') await rejectScanRequest(card);
+                if (action === 'copy-approved-link') {
+                    const instanceId = card.querySelector('[data-field="instanceId"]').value.trim();
+                    await copyText(scannerUrl(instanceId));
+                }
+            } catch (error) {
+                if (error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+                    showToast('NocoDB ішінде бұл instance табылмады');
+                } else {
+                    showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN'
+                        ? 'Логин немесе пароль қате'
+                        : 'Сұраныс орындалмады');
+                }
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        grid.addEventListener('click', async event => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) return;
+
+            const action = button.dataset.action;
+            const instanceId = button.dataset.instance;
+            const label = button.dataset.label || instanceId;
+
+            button.disabled = true;
+            try {
+                if (action === 'start') await startInstance(instanceId, label);
+                if (action === 'refresh') await refreshInstance(instanceId);
+                if (action === 'logout') await logoutInstance(instanceId);
+                if (action === 'delete') await deleteInstance(instanceId);
+            } catch (error) {
+                showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN'
+                    ? 'Логин немесе пароль қате'
+                    : 'Әрекет орындалмады');
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        if (scanInstance) {
+            document.body.classList.add('scan-mode');
+            languageToggle.hidden = false;
+            applyOperatorLanguage();
+            document.getElementById('scanner-panel').hidden = false;
+            loadScanner(true);
+            setInterval(() => loadScanner(false), 5000);
+        } else if (connectMode || activeRequestId) {
+            document.body.classList.add('scan-mode');
+            languageToggle.hidden = false;
+            applyOperatorLanguage();
+            document.getElementById('request-panel').hidden = false;
+
+            if (activeRequestId) {
+                document.getElementById('request-form').hidden = true;
+                showRequestWaiting({ requestedName: opText('waitingHeading') });
+                openOperatorRequest();
+                setInterval(() => loadOperatorRequest(), 5000);
+            } else {
+                showInvalidConnectLink();
+            }
+        } else {
+            checkAdminSession();
+        }
+    </script>
+</body>
+</html>
