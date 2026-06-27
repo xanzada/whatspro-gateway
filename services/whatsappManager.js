@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
-const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
+const { forwardIncomingWhatsAppMessage } = require('./webhookSender');
 
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
