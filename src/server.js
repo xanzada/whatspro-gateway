@@ -122,8 +122,20 @@ function parseHistoryEntry(raw) {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
-app.get(['/whatspro', '/'], (req, res) => {
+app.get('/whatspro', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'whatspro.html'));
+});
+
+app.get(['/chat', '/inbox'], (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'chat.html'));
+});
+
+app.get('/', (req, res) => {
+  if (req.query.instance) {
+    return res.sendFile(path.join(__dirname, '..', 'public', 'chat.html'));
+  }
+
+  return res.sendFile(path.join(__dirname, '..', 'public', 'whatspro.html'));
 });
 
 app.get('/api/whatspro/session', (req, res) => {
