@@ -12,6 +12,7 @@ const {
   sendMedia,
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
+const { normalizePhone } = require('../services/phoneUtils');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -97,6 +98,28 @@ async function listInstances() {
   }));
 }
 
+function chatHistoryKey(instanceId, phone) {
+  return `chatwoot:history:${instanceId}:${phone}`;
+}
+
+function chatInboxKey(instanceId) {
+  return `chatwoot:inbox:${instanceId}`;
+}
+
+function parseLimit(value, fallback = 100, max = 500) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function parseHistoryEntry(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
 app.get(['/whatspro', '/'], (req, res) => {
@@ -126,6 +149,35 @@ app.post('/api/whatspro/logout', (req, res) => {
 
 app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
   res.json({ success: true, instances: await listInstances() });
+});
+
+app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+
+  const limit = parseLimit(req.query.limit, 100, 500);
+  const rows = await redisClient.sendCommand(['ZREVRANGE', chatInboxKey(instanceId), '0', String(limit - 1), 'WITHSCORES']);
+  const items = [];
+  for (let i = 0; i < rows.length; i += 2) {
+    items.push({ phone: rows[i], updatedAt: Number(rows[i + 1]) || 0 });
+  }
+
+  res.json({ success: true, instanceId, phones: items.map(item => item.phone), items });
+});
+
+app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  const phone = normalizePhone(req.params.phone || '');
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+
+  const limit = parseLimit(req.query.limit, 200, 1000);
+  const rows = await redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, phone), String(-limit), '-1']);
+  const history = rows.map(parseHistoryEntry).filter(Boolean);
+
+  res.json({ success: true, instanceId, phone, history });
 });
 
 app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
