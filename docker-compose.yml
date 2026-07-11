@@ -6,6 +6,8 @@ services:
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
 
+      env_file:
+        - .env  
     environment:
       NODE_ENV: production
       PUPPETEER_SKIP_DOWNLOAD: "true"
