@@ -1,1 +1,17 @@
 
+services:
+  whatspro:
+    build: .
+    restart: unless-stopped
+
+    volumes:
+      - whatsapp_auth:/app/whatsapp_auth
+
+    environment:
+      NODE_ENV: production
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      WHATSAPP_AUTH_PATH: /app/whatsapp_auth
+
+volumes:
+  whatsapp_auth:
