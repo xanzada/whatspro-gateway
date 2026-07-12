@@ -72,7 +72,7 @@ function hasApiToken(req) {
 
 function requireApi(req, res, next) {
   if (hasApiToken(req)) return next();
-  return res.status(403).json({ error: 'FORBIDDEN' });
+  return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
 function requireUiOrApi(req, res, next) {
