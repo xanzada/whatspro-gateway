@@ -17,6 +17,7 @@ const { normalizePhone } = require('../services/phoneUtils');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const INSTANCE_STORE_KEY = 'whatspro:instances';
+const SCAN_REQUESTS_KEY = 'whatspro:scan-requests';
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
@@ -98,6 +99,35 @@ async function listInstances() {
   }));
 }
 
+async function listScanRequests() {
+  if (!redisClient.isOpen) return [];
+  const rows = await redisClient.hGetAll(SCAN_REQUESTS_KEY);
+  return Object.values(rows).map(raw => JSON.parse(raw));
+}
+
+async function getScanRequest(requestId) {
+  if (!redisClient.isOpen) return null;
+  const raw = await redisClient.hGet(SCAN_REQUESTS_KEY, requestId);
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function saveScanRequest(requestId, data) {
+  if (!redisClient.isOpen) return;
+  await redisClient.hSet(SCAN_REQUESTS_KEY, requestId, JSON.stringify({ ...data, id: requestId, createdAt: Date.now() }));
+}
+
+async function updateScanRequest(requestId, data) {
+  if (!redisClient.isOpen) return;
+  const existing = await getScanRequest(requestId);
+  if (!existing) return;
+  await redisClient.hSet(SCAN_REQUESTS_KEY, requestId, JSON.stringify({ ...existing, ...data }));
+}
+
+async function deleteScanRequest(requestId) {
+  if (!redisClient.isOpen) return;
+  await redisClient.hDel(SCAN_REQUESTS_KEY, requestId);
+}
+
 function chatHistoryKey(instanceId, phone) {
   return `chatwoot:history:${instanceId}:${phone}`;
 }
@@ -161,6 +191,53 @@ app.post('/api/whatspro/logout', (req, res) => {
 
 app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
   res.json({ success: true, instances: await listInstances() });
+});
+
+app.get('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
+  res.json({ success: true, requests: await listScanRequests() });
+});
+
+app.post('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
+  const { name, contact } = req.body || {};
+  if (!name || !contact) return res.status(400).json({ error: 'NAME_AND_CONTACT_REQUIRED' });
+  const requestId = `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  await saveScanRequest(requestId, { requestedName: name, contact, status: 'pending' });
+  res.status(201).json({ success: true, request: { id: requestId, requestedName: name, contact, status: 'pending', createdAt: Date.now() } });
+});
+
+app.post('/api/wa/scan-requests/:requestId/approve', requireUiOrApi, async (req, res) => {
+  const requestId = String(req.params.requestId || '').trim();
+  const { instanceId, label } = req.body || {};
+  if (!instanceId || !label) return res.status(400).json({ error: 'INSTANCE_ID_AND_LABEL_REQUIRED' });
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  await updateScanRequest(requestId, { instanceId, label, status: 'approved' });
+  res.json({ success: true });
+});
+
+app.post('/api/wa/scan-requests/:requestId/reject', requireUiOrApi, async (req, res) => {
+  const requestId = String(req.params.requestId || '').trim();
+  await updateScanRequest(requestId, { status: 'rejected' });
+  res.json({ success: true });
+});
+
+app.post('/api/wa/scan-requests/:requestId/open', requireUiOrApi, async (req, res) => {
+  const requestId = String(req.params.requestId || '').trim();
+  const request = await getScanRequest(requestId);
+  if (!request) return res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
+  res.json({ success: true, request });
+});
+
+app.get('/api/wa/scan-requests/:requestId', requireUiOrApi, async (req, res) => {
+  const requestId = String(req.params.requestId || '').trim();
+  const request = await getScanRequest(requestId);
+  if (!request) return res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
+  res.json({ success: true, request });
+});
+
+app.get('/api/wa/scan-invitations', requireUiOrApi, async (req, res) => {
+  const requestId = `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  await saveScanRequest(requestId, { status: 'pending' });
+  res.status(201).json({ success: true, request: { id: requestId } });
 });
 
 app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
