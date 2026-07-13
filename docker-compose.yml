@@ -14,9 +14,12 @@ services:
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
 
-  redis_local: # WhatsPro үшін жеке Redis
+redis_local:
     image: redis:7-alpine
     restart: always
+    volumes:
+      - whatspro_redis_data:/data  # Атын өзгерттік
 
 volumes:
   whatsapp_auth:
+  whatspro_redis_data: # Атын өзгерттік
