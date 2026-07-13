@@ -318,14 +318,29 @@ app.post('/api/wa/logout', requireUiOrApi, async (req, res) => {
 
 app.post('/api/send', requireApi, async (req, res) => {
   const { instanceId, phone, text, media } = req.body || {};
+  
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!phone) return res.status(400).json({ error: 'PHONE_REQUIRED' });
 
+  // 1-ӨЗГЕРІС: Міндетті түрде телефонды нормализациялау (RC-7 шешімі)
+  // Бұл 8707, +7707 форматтарының барлығын таза 7707... форматына әкеледі.
+  const cleanPhone = normalizePhone(phone);
+  if (!cleanPhone) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
+
   let ok = true;
-  if (media?.base64) {
-    ok = await sendMedia(instanceId, phone, media.base64, media.fileName || media.mimeType || 'file', media.caption || text || '');
+  
+  // 2-ӨЗГЕРІС: Медиа жіберу логикасын қауіпсіздендіру және cleanPhone қолдану
+  if (media) {
+    if (media.base64) {
+      ok = await sendMedia(instanceId, cleanPhone, media.base64, media.fileName || media.mimeType || 'file', media.caption || text || '');
+    } else {
+      console.warn(`[API:SEND] Warning: Media object received but missing 'base64' property for phone ${cleanPhone}`);
+      // Егер медиа қате болса, бірақ мәтін болса, құламай мәтінді жібереміз
+      if (text) ok = await sendWhatsAppText(instanceId, cleanPhone, text);
+      else return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
+    }
   } else if (text) {
-    ok = await sendWhatsAppText(instanceId, phone, text);
+    ok = await sendWhatsAppText(instanceId, cleanPhone, text);
   } else {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
