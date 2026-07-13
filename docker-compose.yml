@@ -1,19 +1,22 @@
+version: '3.8'
 services:
   whatspro:
     build: .
     restart: unless-stopped
-
+    depends_on:
+      - redis_local
     env_file:
       - .env
-
+    environment:
+      - REDIS_URL=redis://redis_local:6379  # Өз ішіндегі Redis-ке қосылады
+      - NODE_ENV=production
+      # ... қалғандары ...
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
 
-    environment:
-      NODE_ENV: production
-      PUPPETEER_SKIP_DOWNLOAD: "true"
-      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
-      WHATSAPP_AUTH_PATH: /app/whatsapp_auth
+  redis_local: # WhatsPro үшін жеке Redis
+    image: redis:7-alpine
+    restart: always
 
 volumes:
   whatsapp_auth:
