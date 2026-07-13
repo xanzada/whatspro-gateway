@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   whatspro:
     build: .
@@ -8,18 +9,17 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis_local:6379  # Өз ішіндегі Redis-ке қосылады
+      - REDIS_URL=redis://redis_local:6379
       - NODE_ENV=production
-      # ... қалғандары ...
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
 
-redis_local:
+  redis_local: # <--- МІНЕ! Осы сөздің алдында міндетті түрде 2 бос орын (пробел) болуы керек.
     image: redis:7-alpine
     restart: always
     volumes:
-      - whatspro_redis_data:/data  # Атын өзгерттік
+      - whatspro_redis_data:/data
 
 volumes:
   whatsapp_auth:
-  whatspro_redis_data: # Атын өзгерттік
+  whatspro_redis_data:
