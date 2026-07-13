@@ -417,7 +417,6 @@ async function startWhatsAppInstance(instanceId) {
 
         if (reasonText.includes('LOGOUT')) {
             console.log(`🚨 [WHATSAPP] ${instanceId} ТЕЛЕФОННАН ӨШІРІЛДІ! Ескі сессияны тазалаймыз...`);
-            removeSessionFolder(instanceId, 'logout');
             if (!intentionallyStopped.has(instanceId)) {
                 scheduleRestart(instanceId, 2000, 'logout');
             }
@@ -436,7 +435,7 @@ async function startWhatsAppInstance(instanceId) {
         setInstanceState(instanceId, 'auth_failure', { reason: String(msg || '') });
 
         await destroyClient(client);
-        removeSessionFolder(instanceId, 'auth_failure');
+       
 
         if (!intentionallyStopped.has(instanceId)) {
             scheduleRestart(instanceId, 2000, 'auth_failure');
@@ -598,7 +597,7 @@ async function stopWhatsAppInstance(instanceId) {
 
     // 🚀 ЕҢ БАСТЫСЫ: ПАПКАДАҒЫ КЭШ ФАЙЛДАРДЫ ТАМЫРЫМЕН ЖОЮ!
     try {
-        removeSessionFolder(instanceId, 'manual_stop');
+
         console.log(`🗑️ [WHATSAPP] ${instanceId} сессиясы админнің бұйрығымен ТҮБЕГЕЙЛІ ӨШІРІЛДІ!`);
     } catch (err) {
         console.error(`❌ [WHATSAPP] ${instanceId} папканы өшіру қатесі:`, err.message);
