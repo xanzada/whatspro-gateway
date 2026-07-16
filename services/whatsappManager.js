@@ -8,6 +8,7 @@ const path = require('path');
 
 const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
+const { markOperatorActive } = require('./operatorLock');
 
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
@@ -35,6 +36,17 @@ const OUTGOING_TEXT_QUEUE_MAX = Number(process.env.WHATSAPP_OUTGOING_QUEUE_MAX |
 
 function getSessionPath(instanceId) {
     return path.join(AUTH_DATA_PATH, `session-${instanceId}`);
+}
+
+function hasStoredSession(instanceId) {
+    const sessionPath = getSessionPath(instanceId);
+    if (!fs.existsSync(sessionPath)) return false;
+
+    try {
+        return fs.readdirSync(sessionPath).length > 0;
+    } catch (error) {
+        return false;
+    }
 }
 
 function setInstanceState(instanceId, status, extra = {}) {
@@ -239,6 +251,64 @@ async function getContactPhoneFromMessage(msg) {
     }
 }
 
+async function wasBotSending(instanceId, phone) {
+    if (!redisClient.isOpen || !phone) return false;
+
+    const key = `bot_sending:${instanceId}:${phone}`;
+    const value = await redisClient.get(key).catch(() => '');
+    if (!value) return false;
+
+    await redisClient.del(key).catch(() => {});
+    return true;
+}
+
+async function getOutgoingPhoneFromMessage(client, msg) {
+    const candidates = [
+        msg?.to,
+        msg?._data?.to,
+        msg?.id?.remote,
+        msg?._data?.id?.remote,
+        msg?._data?.from,
+        msg?.from
+    ];
+
+    let phone = normalizePhoneFromCandidates(candidates);
+    if (!phone && typeof getPhoneFromLid === 'function') {
+        phone = await getPhoneFromLid(client, candidates);
+    }
+    if (!phone) {
+        phone = await getContactPhoneFromMessage(msg);
+    }
+
+    return phone;
+}
+
+async function saveOperatorOutgoingHistory(instanceId, phone, text, source) {
+    if (!redisClient.isOpen || !phone || !text) return;
+
+    const createdAt = Date.now();
+    const entry = {
+        id: `${source}:${createdAt}:${phone}`,
+        instanceId,
+        phone,
+        direction: 'outgoing',
+        fromMe: true,
+        role: 'operator',
+        text,
+        body: text,
+        type: 'chat',
+        createdAt,
+        source
+    };
+
+    await Promise.all([
+        redisClient.sendCommand(['RPUSH', `chatwoot:history:${instanceId}:${phone}`, JSON.stringify(entry)]),
+        redisClient.sendCommand(['ZADD', `chatwoot:inbox:${instanceId}`, String(createdAt), phone])
+    ]).catch(error => {
+        console.warn(`[OPERATOR HISTORY] ${instanceId} -> ${phone} save failed:`, error.message);
+    });
+}
+
 async function getContactInfoFromMessage(msg) {
     if (typeof msg.getContact !== 'function') return {};
 
@@ -294,7 +364,7 @@ async function startWhatsAppInstance(instanceId) {
     }
 
     const currentState = instanceStates.get(instanceId);
-    if (currentState && ['starting', 'qr_ready', 'restarting'].includes(currentState.status)) {
+    if (currentState && ['starting', 'qr_ready', 'restoring_session', 'restarting'].includes(currentState.status)) {
         return {
             success: true,
             message: 'Instance is already starting.',
@@ -309,7 +379,11 @@ async function startWhatsAppInstance(instanceId) {
 
     clearRestartTimer(instanceId);
     intentionallyStopped.delete(instanceId);
-    setInstanceState(instanceId, 'starting');
+    const sessionExists = hasStoredSession(instanceId);
+    setInstanceState(instanceId, sessionExists ? 'restoring_session' : 'starting', { hasStoredSession: sessionExists });
+    if (sessionExists) {
+        console.log(`[WHATSAPP] ${instanceId} stored session found; restoring without QR.`);
+    }
     cleanupChromiumRuntimeLocks(instanceId);
     console.log(`🚀 [WHATSAPP] ${instanceId} үшін жаңа сессия іске қосылуда...`);
 
@@ -443,6 +517,27 @@ async function startWhatsAppInstance(instanceId) {
     });
 
     // 5. ЖАҢА ХАТ КЕЛГЕНДЕ
+    client.on('message_create', async (msg) => {
+        try {
+            if (!msg?.fromMe) return;
+            if (isGroupOrStatusJid(msg.to) || isGroupOrStatusJid(msg.from) || isGroupOrStatusJid(msg?._data?.id?.remote)) return;
+
+            const text = String(msg.body || '').trim();
+            const phone = await getOutgoingPhoneFromMessage(client, msg);
+            if (!phone || !text) return;
+            if (await wasBotSending(instanceId, phone)) return;
+
+            await markOperatorActive(instanceId, phone, 'whatsapp_app');
+            if (redisClient.isOpen) {
+                await redisClient.setEx(`mute:${instanceId}:${phone}`, 60, 'muted_by_agent').catch(() => {});
+            }
+            await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app');
+            console.log(`[OPERATOR LOCK] ${instanceId} -> ${phone}: direct WhatsApp reply activated handoff lock.`);
+        } catch (error) {
+            console.error(`[OPERATOR LOCK] ${instanceId} message_create failed:`, error.message);
+        }
+    });
+
     client.on('message', async (msg) => {
         if (isGroupOrStatusJid(msg.from)) return;
 
@@ -647,16 +742,18 @@ async function shutdownWhatsAppClients(reason = 'process_shutdown') {
 
 // 6. QR КОДТЫ НЕМЕСЕ СТАТУСТЫ КӨРУ ФУНКЦИЯСЫ
 async function getInstanceStatus(instanceId) {
+    const storedSession = hasStoredSession(instanceId);
+
     if (qrCodes.has(instanceId)) {
-        return { status: 'qr_ready', qr: qrCodes.get(instanceId) };
+        return { status: 'qr_ready', qr: qrCodes.get(instanceId), hasStoredSession: storedSession };
     }
 
     const client = clients.get(instanceId);
     if (!client) {
         if (initializingClients.has(instanceId)) {
-            return instanceStates.get(instanceId) || { status: 'starting' };
+            return { ...(instanceStates.get(instanceId) || { status: storedSession ? 'restoring_session' : 'starting' }), hasStoredSession: storedSession };
         }
-        return instanceStates.get(instanceId) || { status: 'not_running' };
+        return { ...(instanceStates.get(instanceId) || { status: 'not_running' }), hasStoredSession: storedSession };
     }
 
     if (isClientPageClosed(client)) {
@@ -670,7 +767,7 @@ async function getInstanceStatus(instanceId) {
         const state = await withTimeout(client.getState(), WA_STATE_TIMEOUT_MS, 'WA_STATE_TIMEOUT');
         if (isConnectedState(state) || client.info?.wid) {
             setInstanceState(instanceId, 'connected', { waState: state || 'CONNECTED' });
-            return { status: 'connected', waState: state || 'CONNECTED' };
+            return { status: 'connected', waState: state || 'CONNECTED', hasStoredSession: storedSession };
         }
 
         const status = state ? 'starting' : 'disconnected';
