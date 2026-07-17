@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const crypto = require('crypto');
 const express = require('express');
+const fs = require('fs/promises');
 const path = require('path');
 const { connectRedis, redisClient } = require('../config/redis');
 const {
@@ -14,12 +15,16 @@ const {
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
 const { markOperatorActive } = require('../services/operatorLock');
+const { getTenantChatConfig } = require('../services/nocodbConfig');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const INSTANCE_STORE_KEY = 'whatspro:instances';
 const SCAN_REQUESTS_KEY = 'whatspro:scan-requests';
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 
+app.set('trust proxy', true);
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
@@ -83,6 +88,39 @@ function requireUiOrApi(req, res, next) {
 
 function isValidInstanceId(value = '') {
   return /^[a-zA-Z0-9_-]{2,64}$/.test(String(value));
+}
+
+function safeJsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function publicApiBase(req) {
+  const configured = String(process.env.CHAT_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
+  if (configured) return configured;
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+async function renderChatHtml(req, res) {
+  const instance = String(req.query.instance || '').trim();
+  const tenant = await getTenantChatConfig(instance);
+  const config = {
+    ...tenant,
+    instance: tenant.instance || instance,
+    apiBase: publicApiBase(req),
+    endpoints: {
+      inbox: '/api/chat/inbox',
+      history: '/api/chat/history',
+      send: '/api/chat/send'
+    }
+  };
+  const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
+  const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
+  res.type('html').send(html.replace('<!--__CHAT_CONFIG__-->', script));
 }
 
 async function saveInstance(instanceId, label = '') {
@@ -180,21 +218,30 @@ async function saveChatHistoryEntry(instanceId, phone, entry) {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
-app.get('/whatspro', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'whatspro.html'));
+app.get('/chat.html', (req, res, next) => {
+  renderChatHtml(req, res).catch(next);
 });
 
-app.get(['/chat', '/inbox'], (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'chat.html'));
+app.get('/whatspro', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
+});
+
+app.get(['/chat', '/inbox'], (req, res, next) => {
+  renderChatHtml(req, res).catch(next);
 });
 
 app.get('/', (req, res) => {
   if (req.query.instance) {
-    return res.sendFile(path.join(__dirname, '..', 'public', 'chat.html'));
+    return renderChatHtml(req, res).catch(error => {
+      console.error('[CHAT] render failed:', error?.stack || error?.message || error);
+      res.status(500).send('Chat render failed');
+    });
   }
 
-  return res.sendFile(path.join(__dirname, '..', 'public', 'whatspro.html'));
+  return res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
 });
+
+app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get('/api/whatspro/session', (req, res) => {
   const session = readSession(req);

@@ -350,9 +350,13 @@
     </section>
   </main>
 
+  <!--__CHAT_CONFIG__-->
   <script>
+    const CHAT_CONFIG = window.__CHAT_CONFIG__ || {};
     const params = new URLSearchParams(window.location.search);
-    const instanceId = (params.get('instance') || '').trim();
+    const instanceId = String(CHAT_CONFIG.instance || params.get('instance') || '').trim();
+    const apiBase = String(CHAT_CONFIG.apiBase || window.location.origin).replace(/\/+$/, '');
+    const endpoints = CHAT_CONFIG.endpoints || {};
     const state = { inbox: [], history: [], selectedPhone: '', loading: false };
 
     const nodes = {
@@ -368,6 +372,17 @@
       messageInput: document.getElementById('messageInput'),
       sendButton: document.getElementById('sendButton')
     };
+
+    function applyTenantTheme() {
+      const branding = CHAT_CONFIG.branding || {};
+      if (branding.accentColor) document.documentElement.style.setProperty('--accent', branding.accentColor);
+      if (branding.secondaryColor) document.documentElement.style.setProperty('--accent-2', branding.secondaryColor);
+      if (branding.backgroundColor) document.documentElement.style.setProperty('--bg', branding.backgroundColor);
+      const title = String(branding.name || 'Inbox').trim();
+      document.title = title ? `${title} Inbox` : 'WhatsPro Inbox';
+      const h1 = document.querySelector('.brand h1');
+      if (h1) h1.textContent = title || 'Inbox';
+    }
 
     function escapeHtml(value) {
       return String(value || '').replace(/[&<>"']/g, char => ({
@@ -394,15 +409,19 @@
       nodes.statusText.textContent = text;
     }
 
+    function apiUrl(path) {
+      return `${apiBase}${String(path || '').startsWith('/') ? path : `/${path}`}`;
+    }
+
     async function fetchJson(url) {
-      const response = await fetch(url, { credentials: 'same-origin' });
+      const response = await fetch(apiUrl(url), { credentials: 'same-origin' });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       return data;
     }
 
     async function postJson(url, body) {
-      const response = await fetch(url, {
+      const response = await fetch(apiUrl(url), {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -491,7 +510,7 @@
       }
 
       setStatus('Loading');
-      const data = await fetchJson(`/api/chat/inbox/${encodeURIComponent(instanceId)}`);
+      const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
       state.inbox = Array.isArray(data.items) ? data.items : [];
       renderInbox();
       setStatus('Live');
@@ -500,14 +519,15 @@
     async function loadHistory(phone) {
       state.selectedPhone = phone;
       setStatus('Loading');
-      const data = await fetchJson(`/api/chat/history/${encodeURIComponent(instanceId)}/${encodeURIComponent(phone)}`);
+      const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(phone)}`);
       state.history = Array.isArray(data.history) ? data.history : [];
       renderInbox();
       renderHistory();
       setStatus('Live');
     }
 
-    nodes.instanceLabel.textContent = instanceId || 'Missing instance';
+    applyTenantTheme();
+    nodes.instanceLabel.textContent = (CHAT_CONFIG.branding && CHAT_CONFIG.branding.subtitle) || instanceId || 'Missing instance';
     nodes.refreshButton.addEventListener('click', () => {
       loadInbox().catch(error => {
         setStatus('Error');
@@ -531,7 +551,7 @@
       if (!instanceId || !state.selectedPhone || !text) return;
       nodes.sendButton.disabled = true;
       setStatus('Sending');
-      postJson(`/api/chat/send/${encodeURIComponent(instanceId)}/${encodeURIComponent(state.selectedPhone)}`, { text })
+      postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(state.selectedPhone)}`, { text })
         .then(() => {
           nodes.messageInput.value = '';
           return loadHistory(state.selectedPhone);

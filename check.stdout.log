@@ -1,0 +1,4 @@
+
+> whatspro-service@1.0.0 check
+> node --check src/server.js && node --check services/whatsappManager.js && node --check services/operatorLock.js && node --check services/phoneUtils.js && node --check services/nocodbConfig.js && node --check config/redis.js
+
