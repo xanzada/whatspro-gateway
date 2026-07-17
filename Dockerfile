@@ -2,7 +2,7 @@ FROM node:20-bullseye-slim
 
 ENV NODE_ENV=production \
     PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browsermium \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
     WHATSAPP_AUTH_PATH=/app/whatsapp_auth
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

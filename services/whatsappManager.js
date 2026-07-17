@@ -449,7 +449,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         }),
         puppeteer: {
             headless: true,
-            executablePath: '/usr/bin/chromium-browsermium-browser',
+            executablePath: '/usr/bin/chromium-browser',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
