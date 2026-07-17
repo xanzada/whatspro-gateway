@@ -32,6 +32,7 @@ const CHROME_LOCK_RESTART_DELAY_MS = Number(process.env.WHATSAPP_CHROME_LOCK_RES
 const WHATSAPP_RESTART_BASE_DELAY_MS = Number(process.env.WHATSAPP_RESTART_BASE_DELAY_MS || 5000);
 const WHATSAPP_RESTART_MAX_DELAY_MS = Number(process.env.WHATSAPP_RESTART_MAX_DELAY_MS || 300000);
 const WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS = Number(process.env.WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS || 30000);
+const WHATSAPP_INITIALIZE_MAX_RETRIES = Number(process.env.WHATSAPP_INITIALIZE_MAX_RETRIES || 1);
 const OUTGOING_TEXT_QUEUE_TTL_MS = Number(process.env.WHATSAPP_OUTGOING_QUEUE_TTL_MS || 5 * 60 * 1000);
 const OUTGOING_TEXT_QUEUE_MAX = Number(process.env.WHATSAPP_OUTGOING_QUEUE_MAX || 50);
 
@@ -83,6 +84,10 @@ function calculateRestartDelay(instanceId, requestedDelayMs = 3000, reason = 're
 
 function resetRestartAttempts(instanceId) {
     restartAttempts.delete(instanceId);
+}
+
+function getRestartAttempts(instanceId) {
+    return restartAttempts.get(instanceId) || 0;
 }
 
 function isAuthenticationFailureReason(reason) {
@@ -444,7 +449,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         }),
         puppeteer: {
             headless: true,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH || '/usr/bin/chromium-browser',
+            executablePath: '/usr/bin/chromium-browser',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -701,6 +706,11 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         const authFailure = isAuthenticationFailureReason(err?.message || err) || !locked && !resourceFailure;
         if (authFailure) {
             await resetInvalidSession(instanceId, client, `initialize_auth_failed: ${err.message}`, true);
+            return;
+        }
+
+        if (getRestartAttempts(instanceId) >= WHATSAPP_INITIALIZE_MAX_RETRIES) {
+            await resetInvalidSession(instanceId, client, `initialize_failed_retry_limit: ${err.message}`, true);
             return;
         }
 
