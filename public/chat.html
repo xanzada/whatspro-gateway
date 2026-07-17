@@ -1,587 +1,1273 @@
 <!doctype html>
-<html lang="en">
+<html lang="kk">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>WhatsPro Inbox</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f5f7fb;
-      --surface: #ffffff;
-      --surface-2: #eef3f8;
-      --line: #d9e2ec;
-      --line-strong: #c3ced9;
-      --text: #17212f;
-      --muted: #64748b;
-      --accent: #0f9f7a;
-      --accent-2: #2563eb;
-      --danger: #d92d20;
-      --shadow: 0 18px 45px rgba(15, 23, 42, .08);
-      --radius: 8px;
-    }
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Оператор чаты</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0b111d;
+            --panel: #101826;
+            --panel-2: #162234;
+            --panel-3: #1d2b3f;
+            --line: #27374e;
+            --muted: #8ca0ba;
+            --text: #f4f7fb;
+            --soft: #c9d5e6;
+            --green: #10b981;
+            --blue: #3b82f6;
+            --orange: #f59e0b;
+            --red: #ef4444;
+            --shadow: 0 20px 60px rgba(0, 0, 0, .28);
+            --radius: 8px;
+        }
 
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: 0;
-    }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            letter-spacing: 0;
+        }
 
-    button, input { font: inherit; }
-    button { cursor: pointer; }
+        button, input, textarea { font: inherit; }
+        button { border: 0; cursor: pointer; }
+        .app {
+            display: grid;
+            grid-template-columns: 390px minmax(0, 1fr);
+            height: 100dvh;
+            background:
+                linear-gradient(180deg, rgba(59, 130, 246, .08), transparent 260px),
+                var(--bg);
+        }
 
-    .app {
-      min-height: 100%;
-      display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    }
+        .sidebar {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--line);
+            background: rgba(16, 24, 38, .98);
+        }
 
-    .sidebar {
-      min-width: 0;
-      border-right: 1px solid var(--line);
-      background: var(--surface);
-      display: grid;
-      grid-template-rows: auto auto 1fr;
-    }
+        .side-head, .chat-head {
+            min-height: 68px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(16, 24, 38, .94);
+            backdrop-filter: blur(14px);
+        }
 
-    .header {
-      padding: 18px 18px 14px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
+        .brand {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
 
-    .brand { min-width: 0; }
-    .brand h1 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.2;
-      font-weight: 750;
-    }
+        .head-actions {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
 
-    .brand p {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+        .brand-icon, .avatar, .empty-icon {
+            width: 42px;
+            height: 42px;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            border-radius: var(--radius);
+            background: #0f766e;
+            color: white;
+            box-shadow: 0 12px 30px rgba(16, 185, 129, .2);
+        }
 
-    .icon-button {
-      width: 38px;
-      height: 38px;
-      flex: 0 0 auto;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--text);
-      display: grid;
-      place-items: center;
-    }
+        .brand-text, .chat-title { min-width: 0; }
+        .eyebrow {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin: 0 0 3px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
 
-    .icon-button:hover { border-color: var(--line-strong); background: var(--surface-2); }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--green);
+            box-shadow: 0 0 0 4px rgba(16, 185, 129, .12);
+        }
 
-    .search {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--line);
-    }
+        h1, h2, h3, p { margin: 0; }
+        h1, .chat-phone {
+            overflow: hidden;
+            color: var(--text);
+            font-size: 19px;
+            font-weight: 800;
+            line-height: 1.2;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
-    .search input {
-      width: 100%;
-      height: 40px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface-2);
-      color: var(--text);
-      padding: 0 12px;
-      outline: none;
-    }
+        .icon-btn {
+            width: 42px;
+            height: 42px;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            border-radius: var(--radius);
+            background: var(--panel-2);
+            color: var(--soft);
+            border: 1px solid var(--line);
+        }
 
-    .search input:focus { border-color: var(--accent-2); background: var(--surface); }
+        .icon-btn:hover { background: var(--panel-3); color: white; }
+        .icon-btn:disabled { cursor: not-allowed; opacity: .5; }
 
-    .conversation-list {
-      min-height: 0;
-      overflow: auto;
-      padding: 8px;
-    }
+        .lang-toggle {
+            min-width: 42px;
+            height: 42px;
+            padding: 0 10px;
+            border-radius: var(--radius);
+            border: 1px solid var(--line);
+            background: #0f1b2d;
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
 
-    .conversation {
-      width: 100%;
-      min-height: 64px;
-      border: 0;
-      border-radius: var(--radius);
-      background: transparent;
-      color: inherit;
-      text-align: left;
-      padding: 10px;
-      display: grid;
-      grid-template-columns: 42px minmax(0, 1fr);
-      gap: 10px;
-    }
+        .lang-toggle:hover { background: var(--panel-3); }
 
-    .conversation:hover,
-    .conversation.active { background: var(--surface-2); }
+        .filters {
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--line);
+            background: #111c2d;
+        }
 
-    .avatar {
-      width: 42px;
-      height: 42px;
-      border-radius: 50%;
-      background: #d7f5ed;
-      color: #067052;
-      display: grid;
-      place-items: center;
-      font-weight: 800;
-    }
+        .tabs {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 5px;
+            padding: 5px;
+            border: 1px solid #1f3048;
+            border-radius: var(--radius);
+            background: #0b1422;
+        }
 
-    .conversation-main { min-width: 0; }
-    .conversation-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
+        .tab {
+            min-height: 42px;
+            overflow: hidden;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
-    .phone {
-      font-size: 14px;
-      font-weight: 720;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+        .tab.active {
+            background: #31445d;
+            color: white;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04);
+        }
 
-    .time {
-      flex: 0 0 auto;
-      color: var(--muted);
-      font-size: 12px;
-    }
+        .search {
+            position: relative;
+            margin-top: 16px;
+        }
 
-    .preview {
-      margin-top: 5px;
-      color: var(--muted);
-      font-size: 13px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+        .search svg {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6f85a1;
+            pointer-events: none;
+        }
 
-    .main {
-      min-width: 0;
-      min-height: 0;
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-    }
+        .search input {
+            width: 100%;
+            height: 46px;
+            padding: 0 14px 0 44px;
+            border: 1px solid #2b3d55;
+            border-radius: var(--radius);
+            outline: none;
+            background: #142034;
+            color: var(--text);
+        }
 
-    .chat-header {
-      min-height: 73px;
-      padding: 16px 22px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, .86);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-    }
+        .search input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .14); }
+        .search input::placeholder { color: #71849c; }
 
-    .chat-title { min-width: 0; }
-    .chat-title h2 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.2;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+        .direct-chat {
+            width: 100%;
+            min-height: 38px;
+            margin-top: 8px;
+            padding: 0 12px;
+            border: 1px solid #2b3d55;
+            border-radius: var(--radius);
+            background: #19304c;
+            color: #dbeafe;
+            font-size: 13px;
+            font-weight: 850;
+            text-align: left;
+        }
 
-    .chat-title p {
-      margin: 5px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
+        .direct-chat:hover { background: #244766; }
+        .direct-chat[hidden] { display: none; }
 
-    .messages {
-      min-height: 0;
-      overflow: auto;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
+        .list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px;
+        }
 
-    .empty, .error {
-      margin: auto;
-      max-width: 360px;
-      text-align: center;
-      color: var(--muted);
-      line-height: 1.5;
-    }
+        .chat-item {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 46px minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+            margin: 0 0 6px;
+            padding: 12px 10px;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
+        }
 
-    .error { color: var(--danger); }
+        .chat-item:hover { background: #152238; }
+        .chat-item:focus-visible { outline: 2px solid rgba(59, 130, 246, .75); outline-offset: 2px; }
+        .chat-item.active { border-color: #365274; background: #1a2a42; }
 
-    .message {
-      max-width: min(680px, 78%);
-      padding: 10px 12px;
-      border-radius: var(--radius);
-      background: var(--surface);
-      box-shadow: 0 8px 18px rgba(15, 23, 42, .06);
-      align-self: flex-start;
-    }
+        .avatar {
+            width: 46px;
+            height: 46px;
+            background: #263a54;
+            box-shadow: none;
+            font-weight: 900;
+        }
 
-    .message.outgoing {
-      align-self: flex-end;
-      background: #dcf7ef;
-    }
+        .avatar.unread {
+            background: #0e7490;
+            box-shadow: 0 0 0 4px rgba(14, 116, 144, .18);
+        }
 
-    .message-text {
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      line-height: 1.42;
-      font-size: 14px;
-    }
+        .item-body { min-width: 0; }
 
-    .message-time {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 11px;
-      text-align: right;
-    }
+        .item-top, .badges {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
 
-    .status {
-      color: var(--muted);
-      font-size: 13px;
-      white-space: nowrap;
-    }
+        .item-top { justify-content: space-between; }
+        .phone {
+            min-width: 0;
+            overflow: hidden;
+            font-size: 15px;
+            font-weight: 850;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
-    .composer {
-      border-top: 1px solid var(--line);
-      background: var(--surface);
-      padding: 12px 16px;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-    }
+        .time {
+            flex: 0 0 auto;
+            color: #7890ab;
+            font-size: 12px;
+            font-weight: 700;
+        }
 
-    .composer textarea {
-      width: 100%;
-      min-height: 42px;
-      max-height: 140px;
-      resize: vertical;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 10px 12px;
-      outline: none;
-      color: var(--text);
-      background: var(--surface-2);
-      line-height: 1.35;
-    }
+        .preview {
+            overflow: hidden;
+            margin-top: 4px;
+            color: #9aacbf;
+            font-size: 13px;
+            line-height: 1.35;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
-    .composer textarea:focus {
-      border-color: var(--accent-2);
-      background: var(--surface);
-    }
+        .chat-item.unread .preview { color: #7dd3fc; font-weight: 700; }
+        .badges { margin-top: 8px; flex-wrap: wrap; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: rgba(59, 130, 246, .14);
+            color: #93c5fd;
+            font-size: 11px;
+            font-weight: 850;
+        }
 
-    .send-button {
-      min-width: 88px;
-      height: 42px;
-      border: 0;
-      border-radius: var(--radius);
-      background: var(--accent);
-      color: #fff;
-      font-weight: 750;
-      padding: 0 16px;
-    }
+        .badge.green { background: rgba(16, 185, 129, .13); color: #6ee7b7; }
+        .badge.orange { background: rgba(245, 158, 11, .14); color: #fcd34d; }
+        .badge.gray { background: rgba(148, 163, 184, .14); color: #cbd5e1; }
 
-    .send-button:disabled {
-      cursor: not-allowed;
-      opacity: .55;
-    }
+        .item-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+        }
 
-    @media (max-width: 820px) {
-      .app { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }
-      .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
-      .message { max-width: 92%; }
-    }
-  </style>
+        .chat-action {
+            width: 34px;
+            height: 34px;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            border-radius: var(--radius);
+            color: #d1fae5;
+            border: 1px solid rgba(16, 185, 129, .26);
+            background: rgba(16, 185, 129, .12);
+        }
+
+        .chat-action:hover { background: rgba(16, 185, 129, .2); color: white; }
+        .chat-action:disabled { cursor: not-allowed; opacity: .45; }
+        .chat-action svg { width: 18px; height: 18px; }
+
+        .chat-action.delete {
+            color: #fecaca;
+            border-color: rgba(239, 68, 68, .26);
+            background: rgba(239, 68, 68, .12);
+        }
+
+        .chat-action.delete:hover { background: rgba(239, 68, 68, .2); color: white; }
+
+        .chat {
+            min-width: 0;
+            min-height: 0;
+            height: 100%;
+            max-height: 100dvh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            background: #09101b;
+        }
+
+        .back-btn { display: none; }
+        .chat-meta { display: none; }
+
+        .messages {
+            flex: 1 1 0;
+            height: 0;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 22px clamp(14px, 3vw, 34px);
+            background:
+                radial-gradient(circle at 25% 10%, rgba(16, 185, 129, .08), transparent 28%),
+                radial-gradient(circle at 88% 18%, rgba(245, 158, 11, .06), transparent 24%),
+                #09101b;
+        }
+
+        .empty {
+            min-height: 100%;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .empty-box {
+            width: min(360px, 92vw);
+            display: grid;
+            justify-items: center;
+            gap: 12px;
+        }
+
+        .empty-icon { background: #172338; box-shadow: none; color: #8aa3bf; }
+        .empty h2 { color: var(--text); font-size: 20px; }
+        .empty p { line-height: 1.5; }
+
+        .row { display: flex; margin: 0 0 12px; }
+        .row.user, .row.model { justify-content: flex-start; }
+        .row.operator { justify-content: flex-end; }
+        .row.system { justify-content: center; }
+
+        .bubble {
+            max-width: min(680px, 78%);
+            padding: 11px 13px;
+            border-radius: var(--radius);
+            border: 1px solid var(--line);
+            color: #eaf1fb;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+        }
+
+        .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
+        .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
+        .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
+        .system .bubble {
+            max-width: min(560px, 90%);
+            padding: 8px 11px;
+            background: rgba(245, 158, 11, .12);
+            border-color: rgba(245, 158, 11, .28);
+            color: #fcd34d;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .bubble-label {
+            display: block;
+            margin-bottom: 5px;
+            color: #93c5fd;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+
+        /* АУДИО ОЙНАТҚЫШ СТИЛЬДЕРІ */
+        .audio-player {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            height: 38px;
+            margin-top: 0;
+            display: block;
+        }
+
+        .audio-wrap { display: grid; margin-top: 8px; }
+        .audio-bubble { width: min(360px, 86%); max-width: min(360px, 86%); }
+
+        .composer {
+            position: sticky;
+            bottom: 0;
+            z-index: 3;
+            flex: 0 0 auto;
+            padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+            border-top: 1px solid var(--line);
+            background: rgba(16, 24, 38, .96);
+        }
+
+        .composer-box {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 46px;
+            gap: 10px;
+            align-items: end;
+            max-width: 980px;
+            margin: 0 auto;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 46px;
+            max-height: 132px;
+            padding: 12px 14px;
+            resize: none;
+            border: 1px solid #2b3d55;
+            border-radius: var(--radius);
+            outline: none;
+            background: #0e1726;
+            color: var(--text);
+            line-height: 1.35;
+        }
+
+        textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(16, 185, 129, .14); }
+        textarea:disabled { opacity: .58; }
+
+        .send {
+            width: 46px;
+            height: 46px;
+            display: grid;
+            place-items: center;
+            border-radius: var(--radius);
+            background: var(--green);
+            color: white;
+            box-shadow: 0 14px 30px rgba(16, 185, 129, .2);
+        }
+
+        .send:disabled { background: #2a3c55; color: #7d91aa; box-shadow: none; cursor: not-allowed; }
+        .empty-action {
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: var(--radius);
+            background: #19304c;
+            color: #dbeafe;
+            font-size: 13px;
+            font-weight: 850;
+        }
+
+        .empty-action:hover { background: #244766; }
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 22px;
+            z-index: 50;
+            max-width: calc(100vw - 32px);
+            transform: translateX(-50%) translateY(90px);
+            padding: 10px 14px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: #111c2d;
+            color: white;
+            box-shadow: var(--shadow);
+            opacity: 0;
+            transition: .22s ease;
+        }
+
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        svg { width: 20px; height: 20px; }
+
+        @media (max-width: 840px) {
+            .app { display: block; position: relative; height: 100dvh; overflow: hidden; }
+            .sidebar, .chat { position: absolute; inset: 0; width: 100%; transition: transform .24s ease; }
+            .chat { transform: translateX(100%); }
+            .app.chat-open .sidebar { transform: translateX(-100%); }
+            .app.chat-open .chat { transform: translateX(0); }
+            .back-btn { display: grid; }
+            .side-head, .chat-head { min-height: 64px; padding-inline: 14px; }
+            .filters { padding: 14px; }
+            .list { padding: 6px; }
+            .messages { padding: 16px 12px; }
+            .bubble { max-width: 86%; }
+            .audio-bubble { width: min(360px, calc(100vw - 36px)); max-width: min(360px, calc(100vw - 36px)); }
+            .composer { padding-inline: 12px; }
+            h1, .chat-phone { font-size: 18px; }
+            .tab { font-size: 12px; }
+            .lang-toggle, .icon-btn { width: 40px; height: 40px; }
+            .composer-box { grid-template-columns: minmax(0, 1fr) 44px; }
+            .send { width: 44px; height: 44px; }
+        }
+
+        @media (max-width: 520px) {
+            .side-head, .chat-head { min-height: 58px; gap: 8px; padding: 10px; }
+            .brand { gap: 8px; }
+            .brand-icon, .avatar, .empty-icon { width: 38px; height: 38px; }
+            .avatar { width: 40px; height: 40px; }
+            h1, .chat-phone { font-size: 16px; }
+            .eyebrow { font-size: 10px; }
+            .filters { padding: 10px; }
+            .tabs { gap: 3px; padding: 4px; }
+            .tab { min-height: 34px; font-size: 11px; font-weight: 850; }
+            .search { margin-top: 12px; }
+            .search input { height: 40px; font-size: 14px; padding-left: 38px; }
+            .search svg { left: 11px; }
+            .chat-item { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; padding: 10px 8px; }
+            .item-actions { gap: 4px; }
+            .chat-action { width: 32px; height: 32px; }
+            .phone { font-size: 15px; }
+            .preview { font-size: 12px; }
+            .time { font-size: 11px; }
+            .badge { height: 18px; padding-inline: 6px; font-size: 10px; }
+            .head-actions { gap: 6px; }
+            .lang-toggle, .icon-btn { width: 36px; height: 36px; min-width: 36px; font-size: 11px; }
+            .messages { padding: 10px; font-size: 14px; }
+            .bubble { max-width: min(620px, 92%); padding: 9px 10px; font-size: 14px; line-height: 1.38; }
+            .audio-bubble { width: calc(100vw - 32px); max-width: calc(100vw - 32px); }
+            .audio-player { height: 42px; }
+            .audio-wrap { margin-top: 6px; }
+            .composer { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
+            textarea { min-height: 42px; padding: 10px 12px; font-size: 14px; }
+            .send { width: 42px; height: 42px; }
+            .composer-box { grid-template-columns: minmax(0, 1fr) 42px; gap: 8px; }
+        }
+    </style>
 </head>
 <body>
-  <main class="app">
-    <aside class="sidebar">
-      <header class="header">
-        <div class="brand">
-          <h1>Inbox</h1>
-          <p id="instanceLabel">Instance</p>
-        </div>
-        <button class="icon-button" id="refreshButton" type="button" title="Refresh" aria-label="Refresh">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
-            <path d="M3 21v-5h5"></path>
-            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-            <path d="M21 3v5h-5"></path>
-          </svg>
-        </button>
-      </header>
-      <div class="search">
-        <input id="searchInput" type="search" autocomplete="off" placeholder="Search phone">
-      </div>
-      <section class="conversation-list" id="conversationList" aria-label="Conversations"></section>
-    </aside>
+    <div class="app" id="app">
+        <aside class="sidebar">
+            <header class="side-head">
+                <div class="brand">
+                    <div class="brand-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8h-4.7L8 20v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+                    </div>
+                    <div class="brand-text">
+                        <p class="eyebrow"><span class="dot"></span><span id="operator-label">Оператор чаты</span></p>
+                        <h1 id="instance-title">Кабинет</h1>
+                    </div>
+                </div>
+                <div class="head-actions">
+                    <button class="lang-toggle" id="lang-toggle" type="button" data-lang-toggle title="Тілді ауыстыру" aria-label="Тілді ауыстыру">KZ</button>
+                    <button class="icon-btn" id="refresh-btn" type="button" title="Жаңарту" aria-label="Жаңарту">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+            </header>
 
-    <section class="main">
-      <header class="chat-header">
-        <div class="chat-title">
-          <h2 id="chatTitle">Select a chat</h2>
-          <p id="chatMeta">No conversation selected</p>
-        </div>
-        <div class="status" id="statusText">Idle</div>
-      </header>
-      <section class="messages" id="messages" aria-live="polite">
-        <div class="empty">No chat selected.</div>
-      </section>
-      <form class="composer" id="composer">
-        <textarea id="messageInput" autocomplete="off" placeholder="Reply as operator" rows="1"></textarea>
-        <button class="send-button" id="sendButton" type="submit" disabled>Send</button>
-      </form>
-    </section>
-  </main>
+            <section class="filters">
+                <div class="tabs" role="tablist" aria-label="Диалог сүзгісі">
+                    <button class="tab" id="tab-new" type="button" data-tab="new">Жаңа хаттар</button>
+                    <button class="tab active" id="tab-all" type="button" data-tab="all">Барлығы</button>
+                    <button class="tab" id="tab-operator" type="button" data-tab="operator">Оператор</button>
+                    <button class="tab" id="tab-archive" type="button" data-tab="archive">Архив</button>
+                </div>
+                <label class="search">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="m21 21-4.35-4.35M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    <input id="search-input" autocomplete="off" placeholder="Нөмір немесе мәтін бойынша іздеу">
+                </label>
+                <button class="direct-chat" id="direct-chat-btn" type="button" hidden></button>
+            </section>
 
-  <!--__CHAT_CONFIG__-->
-  <script>
-    const CHAT_CONFIG = window.__CHAT_CONFIG__ || {};
-    const params = new URLSearchParams(window.location.search);
-    const instanceId = String(CHAT_CONFIG.instance || params.get('instance') || '').trim();
-    const apiBase = String(CHAT_CONFIG.apiBase || window.location.origin).replace(/\/+$/, '');
-    const endpoints = CHAT_CONFIG.endpoints || {};
-    const state = { inbox: [], history: [], selectedPhone: '', loading: false };
+            <main class="list" id="contact-list"></main>
+        </aside>
 
-    const nodes = {
-      instanceLabel: document.getElementById('instanceLabel'),
-      refreshButton: document.getElementById('refreshButton'),
-      searchInput: document.getElementById('searchInput'),
-      conversationList: document.getElementById('conversationList'),
-      chatTitle: document.getElementById('chatTitle'),
-      chatMeta: document.getElementById('chatMeta'),
-      statusText: document.getElementById('statusText'),
-      messages: document.getElementById('messages'),
-      composer: document.getElementById('composer'),
-      messageInput: document.getElementById('messageInput'),
-      sendButton: document.getElementById('sendButton')
-    };
+        <section class="chat">
+            <header class="chat-head">
+                <div class="brand">
+                    <button class="icon-btn back-btn" id="back-btn" type="button" title="Артқа" aria-label="Артқа">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M15 19 8 12l7-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                    <div class="avatar" id="active-avatar">WA</div>
+                    <div class="chat-title">
+                        <div class="chat-phone" id="active-phone">Диалог</div>
+                        <div class="chat-meta" id="active-meta">WhatsApp оператор панелі</div>
+                    </div>
+                </div>
+            </header>
 
-    function applyTenantTheme() {
-      const branding = CHAT_CONFIG.branding || {};
-      if (branding.accentColor) document.documentElement.style.setProperty('--accent', branding.accentColor);
-      if (branding.secondaryColor) document.documentElement.style.setProperty('--accent-2', branding.secondaryColor);
-      if (branding.backgroundColor) document.documentElement.style.setProperty('--bg', branding.backgroundColor);
-      const title = String(branding.name || 'Inbox').trim();
-      document.title = title ? `${title} Inbox` : 'WhatsPro Inbox';
-      const h1 = document.querySelector('.brand h1');
-      if (h1) h1.textContent = title || 'Inbox';
-    }
+            <main class="messages" id="messages">
+                <div class="empty">
+                    <div class="empty-box">
+                        <div class="empty-icon">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h2 id="select-title">Диалогты таңдаңыз</h2>
+                        <p id="select-text">Клиент хатын ашқанда толық тарих осы жерде көрінеді.</p>
+                    </div>
+                </div>
+            </main>
 
-    function escapeHtml(value) {
-      return String(value || '').replace(/[&<>"']/g, char => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      }[char]));
-    }
+            <footer class="composer">
+                <div class="composer-box">
+                    <textarea id="message-input" rows="1" disabled placeholder="Клиентке WhatsApp арқылы жауап..."></textarea>
+                    <button class="send" id="send-btn" type="button" disabled title="Жіберу" aria-label="Жіберу">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="m22 2-7 20-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M22 2 11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    </button>
+                </div>
+            </footer>
+        </section>
+    </div>
 
-    function formatPhone(phone) {
-      const raw = String(phone || '');
-      if (raw.length !== 11) return raw || '-';
-      return `+${raw.slice(0, 1)} ${raw.slice(1, 4)} ${raw.slice(4, 7)} ${raw.slice(7, 9)} ${raw.slice(9)}`;
-    }
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    function formatTime(value) {
-      const date = new Date(Number(value) || Date.now());
-      return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date);
-    }
+    <!--__CHAT_CONFIG__-->
+    <script>
+        const CHAT_CONFIG = window.__CHAT_CONFIG__ || {};
+        const params = new URLSearchParams(window.location.search);
+        const instanceId = String(CHAT_CONFIG.instance || params.get('instance') || 'prestige').trim();
+        const apiBase = String(CHAT_CONFIG.apiBase || window.location.origin).replace(/\/+$/, '');
+        const endpoints = CHAT_CONFIG.endpoints || {
+            inbox: '/api/chat/inbox',
+            history: '/api/chat/history',
+            send: '/api/chat/send'
+        };
 
-    function setStatus(text) {
-      nodes.statusText.textContent = text;
-    }
+        const app = document.getElementById('app');
+        const listEl = document.getElementById('contact-list');
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const searchInput = document.getElementById('search-input');
+        const directChatBtn = document.getElementById('direct-chat-btn');
+        const toast = document.getElementById('toast');
+        const langToggles = Array.from(document.querySelectorAll('[data-lang-toggle]'));
+        const refreshBtn = document.getElementById('refresh-btn');
+        const backBtn = document.getElementById('back-btn');
 
-    function apiUrl(path) {
-      return `${apiBase}${String(path || '').startsWith('/') ? path : `/${path}`}`;
-    }
+        const copy = {
+            kk: {
+                title: 'Оператор чаты',
+                operatorLabel: 'Оператор чаты',
+                instanceTitle: value => `${value.toUpperCase()} операторлары`,
+                langTitle: 'Тілді ауыстыру',
+                refresh: 'Жаңарту',
+                back: 'Артқа',
+                tabs: { new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
+                tabList: 'Диалог сүзгісі',
+                search: 'Нөмір немесе мәтін бойынша іздеу',
+                dialog: 'Диалог',
+                defaultMeta: 'WhatsApp оператор панелі',
+                selectedMeta: 'WhatsApp арқылы жауап беріледі',
+                selectTitle: 'Диалогты таңдаңыз',
+                selectText: 'Клиент хатын ашқанда толық тарих осы жерде көрінеді.',
+                emptySearch: 'Нәтиже табылған жоқ',
+                emptyNew: 'Жаңа хат жоқ',
+                emptyArchive: 'Архив бос',
+                openAll: 'Барлық диалогтарды ашу',
+                noHistory: 'Тарих бос',
+                loading: 'Тарих оқылуда...',
+                noMessage: 'Хабар жоқ',
+                newBadge: 'жаңа',
+                operatorBadge: 'оператор',
+                botLabel: 'AI Bot',
+                systemDefault: 'Оператор қосылды',
+                placeholder: 'Клиентке WhatsApp арқылы жауап...',
+                resolve: 'Жаздым',
+                restore: 'Қайтару',
+                resolving: 'Белгіленуде...',
+                resolveTitle: 'Чатты аяқталды деп белгілеу',
+                restoreTitle: 'Чатты архивтен қайтару',
+                deleteTitle: 'Диалогты толық өшіру',
+                resolveDone: 'Чат аяқталды деп белгіленді',
+                restoreDone: 'Чат архивтен қайтарылды',
+                deleteDone: 'Диалог өшірілді',
+                archiveBadge: 'архив',
+                archiveMeta: 'Архивтегі диалог',
+                archivedPlaceholder: 'Алдымен чатты архивтен қайтарыңыз',
+                sendFailed: 'Хабар жіберілмеді',
+                directOpen: phone => `+${phone} нөміріне жазу`,
+                manualChat: 'Оператор ашқан диалог'
+            },
+            ru: {
+                title: 'Чат оператора',
+                operatorLabel: 'Чат оператора',
+                instanceTitle: value => `Операторы ${value.toUpperCase()}`,
+                langTitle: 'Сменить язык',
+                refresh: 'Обновить',
+                back: 'Назад',
+                tabs: { new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
+                tabList: 'Фильтр диалогов',
+                search: 'Поиск по номеру или тексту',
+                dialog: 'Диалог',
+                defaultMeta: 'Панель WhatsApp оператора',
+                selectedMeta: 'Ответ будет отправлен через WhatsApp',
+                selectTitle: 'Выберите диалог',
+                selectText: 'Когда вы откроете клиента, здесь появится полная история.',
+                emptySearch: 'Ничего не найдено',
+                emptyNew: 'Новых сообщений нет',
+                emptyArchive: 'Архив пуст',
+                openAll: 'Открыть все диалоги',
+                noHistory: 'История пуста',
+                loading: 'История загружается...',
+                noMessage: 'Сообщений нет',
+                newBadge: 'новое',
+                operatorBadge: 'оператор',
+                botLabel: 'AI Bot',
+                systemDefault: 'Оператор подключился',
+                placeholder: 'Ответ клиенту через WhatsApp...',
+                resolve: 'Готово',
+                restore: 'Вернуть',
+                resolving: 'Закрываем...',
+                resolveTitle: 'Отметить чат завершенным',
+                restoreTitle: 'Вернуть чат из архива',
+                deleteTitle: 'Полностью удалить диалог',
+                resolveDone: 'Чат отмечен завершенным',
+                restoreDone: 'Чат возвращен из архива',
+                deleteDone: 'Диалог удален',
+                archiveBadge: 'архив',
+                archiveMeta: 'Диалог в архиве',
+                archivedPlaceholder: 'Сначала верните чат из архива',
+                sendFailed: 'Сообщение не отправлено',
+                directOpen: phone => `Написать на +${phone}`,
+                manualChat: 'Диалог открыт оператором'
+            }
+        };
 
-    async function fetchJson(url) {
-      const response = await fetch(apiUrl(url), { credentials: 'same-origin' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      return data;
-    }
+        let lang = localStorage.getItem('operator_chat_lang') === 'ru' ? 'ru' : 'kk';
+        let chats = []; // Жергілікті массив (архив пен вкладкаларды ұстап тұру үшін)
+        let activeTab = 'all';
+        let activePhone = '';
+        let toastTimer = null;
+        let isSending = false;
+        let pendingText = '';
 
-    async function postJson(url, body) {
-      const response = await fetch(apiUrl(url), {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      return data;
-    }
+        function t(key) { return copy[lang][key] || copy.kk[key] || key; }
+        function isMobile() { return window.matchMedia('(max-width: 840px)').matches; }
 
-    function getLastMessage(phone) {
-      if (phone !== state.selectedPhone || !state.history.length) return '';
-      const last = state.history[state.history.length - 1];
-      return last.text || last.body || '';
-    }
+        function showToast(text) {
+            clearTimeout(toastTimer);
+            toast.textContent = text;
+            toast.classList.add('show');
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+        }
 
-    function renderInbox() {
-      const query = nodes.searchInput.value.trim().toLowerCase();
-      const items = state.inbox.filter(item => !query || String(item.phone).includes(query));
+        function escapeHtml(value) {
+            return String(value || '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[char]));
+        }
 
-      if (!instanceId) {
-        nodes.conversationList.innerHTML = '<div class="empty">Missing instance.</div>';
-        return;
-      }
+        function cleanText(value) {
+            return String(value || '')
+                .replace(/\[System:[^\]]*\]/gi, '')
+                .replace(/\[Оператор:\s*/gi, '')
+                .replace(/\[ESCALATE_ADMIN\]/gi, '')
+                .replace(/\[menu_link_sent\]/gi, '')
+                .replace(/\]$/g, '')
+                .trim();
+        }
 
-      if (!items.length) {
-        nodes.conversationList.innerHTML = '<div class="empty">No conversations.</div>';
-        return;
-      }
+        function formatTime(value) {
+            const time = Number(value || 0);
+            if (!time || time < 100000000000) return '';
+            const date = new Date(time);
+            return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' });
+        }
 
-      nodes.conversationList.innerHTML = items.map(item => {
-        const active = item.phone === state.selectedPhone ? ' active' : '';
-        const preview = getLastMessage(item.phone) || 'Open conversation';
-        return `
-          <button class="conversation${active}" type="button" data-phone="${escapeHtml(item.phone)}">
-            <div class="avatar">${escapeHtml(String(item.phone).slice(-2) || '?')}</div>
-            <div class="conversation-main">
-              <div class="conversation-top">
-                <div class="phone">${escapeHtml(formatPhone(item.phone))}</div>
-                <div class="time">${escapeHtml(formatTime(item.updatedAt))}</div>
-              </div>
-              <div class="preview">${escapeHtml(preview)}</div>
-            </div>
-          </button>
-        `;
-      }).join('');
-    }
+        function userIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.8 20a7.2 7.2 0 0 1 14.4 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'; }
+        function checkIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m20 6-11 11-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+        function xIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>'; }
 
-    function renderHistory() {
-      if (!state.selectedPhone) {
-        nodes.chatTitle.textContent = 'Select a chat';
-        nodes.chatMeta.textContent = 'No conversation selected';
-        nodes.messages.innerHTML = '<div class="empty">No chat selected.</div>';
-        nodes.sendButton.disabled = true;
-        return;
-      }
+        function normalizePhone(value) { return String(value || '').replace(/\D/g, ''); }
+        function searchPhoneCandidate() {
+            const digits = normalizePhone(searchInput.value);
+            return digits.length >= 10 ? digits : '';
+        }
 
-      nodes.chatTitle.textContent = formatPhone(state.selectedPhone);
-      nodes.chatMeta.textContent = `${state.history.length} messages`;
-      nodes.sendButton.disabled = !nodes.messageInput.value.trim();
+        function isChatArchived(chat) {
+            return Boolean(chat && chat.closed);
+        }
 
-      if (!state.history.length) {
-        nodes.messages.innerHTML = '<div class="empty">No messages.</div>';
-        return;
-      }
+        function counts() {
+            const active = chats.filter(chat => !isChatArchived(chat));
+            const archived = chats.filter(isChatArchived);
+            return {
+                new: active.filter(chat => chat.unread).length,
+                all: active.length,
+                operator: active.filter(chat => chat.hasOperator).length,
+                archive: archived.length
+            };
+        }
 
-      nodes.messages.innerHTML = state.history.map(message => {
-        const role = String(message.role || '').toLowerCase();
-        const outgoing = message.direction === 'outgoing' || message.fromMe === true || ['assistant', 'model', 'operator'].includes(role);
-        const text = message.text || message.body || '[media]';
-        return `
-          <article class="message${outgoing ? ' outgoing' : ''}">
-            <div class="message-text">${escapeHtml(text)}</div>
-            <div class="message-time">${escapeHtml(formatTime(message.createdAt))}</div>
-          </article>
-        `;
-      }).join('');
-      nodes.messages.scrollTop = nodes.messages.scrollHeight;
-    }
+        function updateDirectChatButton() {
+            const phone = searchPhoneCandidate();
+            const alreadyListed = phone && chats.some(chat => normalizePhone(chat.phone) === phone);
+            const shouldShow = Boolean(phone && !alreadyListed);
+            directChatBtn.hidden = !shouldShow;
+            if (shouldShow) directChatBtn.textContent = copy[lang].directOpen(phone);
+        }
 
-    async function loadInbox() {
-      if (!instanceId) {
-        nodes.instanceLabel.textContent = 'Missing instance query';
-        renderInbox();
-        return;
-      }
+        function openDirectChatFromSearch() {
+            const phone = searchPhoneCandidate();
+            if (!phone) return;
+            const existing = chats.find(chat => normalizePhone(chat.phone) === phone);
+            if (!existing) {
+                chats = [{ phone, lastAt: Date.now(), lastText: t('manualChat'), unread: false, hasOperator: true, closed: false }, ...chats];
+            }
+            activeTab = 'all';
+            searchInput.value = '';
+            renderList();
+            openChat(phone);
+        }
 
-      setStatus('Loading');
-      const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
-      state.inbox = Array.isArray(data.items) ? data.items : [];
-      renderInbox();
-      setStatus('Live');
-    }
+        function filteredChats() {
+            const query = searchInput.value.trim().toLowerCase();
+            return chats.filter(chat => {
+                const archived = isChatArchived(chat);
+                if (activeTab === 'archive' && !archived) return false;
+                if (activeTab !== 'archive' && archived) return false;
+                if (activeTab === 'new' && !chat.unread) return false;
+                if (activeTab === 'operator' && !chat.hasOperator) return false;
+                if (!query) return true;
+                return String(chat.phone).includes(query) || String(chat.lastText || '').toLowerCase().includes(query);
+            });
+        }
 
-    async function loadHistory(phone) {
-      state.selectedPhone = phone;
-      setStatus('Loading');
-      const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(phone)}`);
-      state.history = Array.isArray(data.history) ? data.history : [];
-      renderInbox();
-      renderHistory();
-      setStatus('Live');
-    }
+        function renderTabs() {
+            const total = counts();
+            for (const tab of document.querySelectorAll('.tab')) {
+                const key = tab.dataset.tab;
+                tab.classList.toggle('active', key === activeTab);
+                tab.textContent = `${copy[lang].tabs[key]} ${total[key] ? total[key] : ''}`.trim();
+            }
+        }
 
-    applyTenantTheme();
-    nodes.instanceLabel.textContent = (CHAT_CONFIG.branding && CHAT_CONFIG.branding.subtitle) || instanceId || 'Missing instance';
-    nodes.refreshButton.addEventListener('click', () => {
-      loadInbox().catch(error => {
-        setStatus('Error');
-        nodes.conversationList.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-      });
-      if (state.selectedPhone) {
-        loadHistory(state.selectedPhone).catch(error => {
-          setStatus('Error');
-          nodes.messages.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+        function emptyListMarkup() {
+            const total = counts();
+            const canOpenAll = !searchInput.value.trim() && activeTab === 'new' && total.all > 0;
+            const text = activeTab === 'archive'
+                ? t('emptyArchive')
+                : (canOpenAll ? t('emptyNew') : t('emptySearch'));
+            const action = canOpenAll
+                ? `<button class="empty-action" type="button" data-switch-tab="all">${escapeHtml(t('openAll'))}</button>`
+                : '';
+
+            return `
+                <div class="empty">
+                    <div class="empty-box">
+                        <div class="empty-icon">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="m21 21-4.35-4.35M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+                        </div>
+                        <p>${escapeHtml(text)}</p>
+                        ${action}
+                    </div>
+                </div>`;
+        }
+
+        function renderList() {
+            renderTabs();
+            updateDirectChatButton();
+            const items = filteredChats();
+
+            if (!items.length) {
+                listEl.innerHTML = emptyListMarkup();
+                return;
+            }
+
+            listEl.innerHTML = items.map(chat => {
+                const phone = normalizePhone(chat.phone);
+                const active = activePhone === phone ? 'active' : '';
+                const unread = chat.unread ? 'unread' : '';
+                const archived = isChatArchived(chat);
+                
+                const badges = [
+                    archived ? `<span class="badge gray">${escapeHtml(t('archiveBadge'))}</span>` : '',
+                    chat.unread ? `<span class="badge green">${escapeHtml(t('newBadge'))}</span>` : '',
+                    chat.hasOperator ? `<span class="badge orange">${escapeHtml(t('operatorBadge'))}</span>` : ''
+                ].join('');
+
+                const actions = archived
+                    ? `
+                        <div class="item-actions">
+                            <button class="chat-action restore" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('restoreTitle'))}" aria-label="${escapeHtml(t('restoreTitle'))}">${checkIconSvg()}</button>
+                            <button class="chat-action delete" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('deleteTitle'))}" aria-label="${escapeHtml(t('deleteTitle'))}">${xIconSvg()}</button>
+                        </div>`
+                    : `
+                        <div class="item-actions">
+                            <button class="chat-action done" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('resolveTitle'))}" aria-label="${escapeHtml(t('resolveTitle'))}">${checkIconSvg()}</button>
+                        </div>`;
+
+                return `
+                    <article class="chat-item ${active} ${unread}" role="button" tabindex="0" data-phone="${escapeHtml(phone)}">
+                        <div class="avatar ${unread}">${userIconSvg()}</div>
+                        <div class="item-body">
+                            <div class="item-top">
+                                <div class="phone">+${escapeHtml(chat.phone)}</div>
+                                <div class="time">${escapeHtml(formatTime(chat.lastAt))}</div>
+                            </div>
+                            <div class="preview">${escapeHtml(chat.lastText || t('noMessage'))}</div>
+                            <div class="badges">${badges}</div>
+                        </div>
+                        ${actions}
+                    </article>`;
+            }).join('');
+        }
+
+        function renderDefaultChatEmpty() {
+            messagesEl.innerHTML = `
+                <div class="empty">
+                    <div class="empty-box">
+                        <div class="empty-icon">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h2 id="select-title">${escapeHtml(t('selectTitle'))}</h2>
+                        <p id="select-text">${escapeHtml(t('selectText'))}</p>
+                    </div>
+                </div>`;
+        }
+
+        // АУДИО ЖӘНЕ МЕДИА ОЙНАТҚЫШ
+        function buildAudioHtml(item) {
+            // API-дан келетін type: 'media' немесе audioMessage бойынша тексеру
+            const isMedia = item.type === 'media' || String(item.mediaKind || '') === 'audio' || item.hasMedia;
+            if (!isMedia) return '';
+            
+            const rawData = String(item.mediaData || item.body || '');
+            if (!rawData.startsWith('data:audio') && !rawData.includes(';base64,')) return '';
+
+            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
+            const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData}`;
+            
+            return `
+                <div class="audio-wrap">
+                    <audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>
+                </div>`;
+        }
+
+        function renderHistory(history) {
+            if (!history || !history.length) {
+                messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
+                return;
+            }
+
+            messagesEl.innerHTML = history.map(item => {
+                const role = String(item.role || '').toLowerCase();
+                const rawText = String(item.text || item.body || '');
+                const text = cleanText(rawText);
+                const audioHtml = buildAudioHtml(item);
+                
+                if (!text && !audioHtml && !rawText.includes('[System:')) return '';
+
+                const outgoing = item.direction === 'outgoing' || item.fromMe === true || ['assistant', 'model', 'operator'].includes(role);
+
+                if (role === 'model') {
+                    return `<div class="row model"><div class="bubble"><span class="bubble-label">${escapeHtml(t('botLabel'))}</span>${escapeHtml(text)}</div></div>`;
+                }
+
+                if (outgoing || role === 'operator' || (role === 'system' && /\[Оператор:/i.test(rawText))) {
+                    return `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`;
+                }
+
+                if (role === 'system') {
+                    return `<div class="row system"><div class="bubble">${escapeHtml(text || t('systemDefault'))}</div></div>`;
+                }
+
+                const bubbleClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
+                return `<div class="row user"><div class="${bubbleClass}">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
+            }).join('');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function updateComposerState() {
+            const hasActive = Boolean(activePhone);
+            const archived = Boolean(activePhone) && isChatArchived(chats.find(c => c.phone === activePhone));
+            inputEl.disabled = !hasActive || isSending || archived;
+            sendBtn.disabled = !hasActive || isSending || archived || !inputEl.value.trim();
+            inputEl.placeholder = archived ? t('archivedPlaceholder') : t('placeholder');
+        }
+
+        function setActiveHeader(phone) {
+            const archived = phone ? isChatArchived(chats.find(c => c.phone === phone)) : false;
+            const phoneText = phone ? `+${phone}` : t('dialog');
+            document.getElementById('active-phone').textContent = phoneText;
+            document.getElementById('active-avatar').innerHTML = phone ? userIconSvg() : 'WA';
+            document.getElementById('active-meta').textContent = phone
+                ? (archived ? t('archiveMeta') : t('selectedMeta'))
+                : t('defaultMeta');
+        }
+
+        function applyLanguage() {
+            document.documentElement.lang = lang === 'ru' ? 'ru' : 'kk';
+            document.title = t('title');
+            document.getElementById('operator-label').textContent = t('operatorLabel');
+            document.getElementById('instance-title').textContent = copy[lang].instanceTitle(instanceId);
+            document.querySelector('.tabs').setAttribute('aria-label', t('tabList'));
+            searchInput.placeholder = t('search');
+            updateDirectChatButton();
+            inputEl.placeholder = t('placeholder');
+            for (const button of langToggles) {
+                button.textContent = lang === 'kk' ? 'KZ' : 'RU';
+                button.title = t('langTitle');
+            }
+            refreshBtn.title = t('refresh');
+            backBtn.title = t('back');
+            setActiveHeader(activePhone);
+            renderList();
+            if (!activePhone) renderDefaultChatEmpty();
+            updateComposerState();
+        }
+
+        // REST API Helpers
+        async function fetchJson(url) {
+            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            return data;
+        }
+
+        async function postJson(url, body) {
+            const response = await fetch(`${apiBase}${url}`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            return data;
+        }
+
+        async function loadInbox() {
+            if (!instanceId) return;
+            try {
+                const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
+                const items = data.items || [];
+                
+                // REST API-дан келген жаңа хаттарды жергілікті архив статусымен біріктіру
+                items.forEach(item => {
+                    const existing = chats.find(c => c.phone === item.phone);
+                    if (existing) {
+                        existing.lastAt = item.updatedAt;
+                    } else {
+                        chats.push({
+                            phone: item.phone,
+                            lastAt: item.updatedAt,
+                            lastText: 'Open conversation',
+                            unread: false,
+                            hasOperator: false,
+                            closed: false
+                        });
+                    }
+                });
+                chats.sort((a, b) => b.lastAt - a.lastAt);
+                renderList();
+            } catch (error) {
+                console.error('Inbox load error:', error);
+            }
+        }
+
+        async function loadHistory() {
+            if (!activePhone) return;
+            try {
+                const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
+                if (activePhone === data.phone) {
+                    renderHistory(data.history || []);
+                    updateComposerState();
+                }
+            } catch (error) {
+                console.error('History load error:', error);
+            }
+        }
+
+        function openChat(phone) {
+            activePhone = normalizePhone(phone);
+            if (!activePhone) return;
+
+            app.classList.add('chat-open');
+            setActiveHeader(activePhone);
+            inputEl.style.height = 'auto';
+            isSending = false;
+            updateComposerState();
+            messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
+            renderList();
+            loadHistory();
+            if (!isMobile()) inputEl.focus({ preventScroll: true });
+        }
+
+        function closeChat() { app.classList.remove('chat-open'); }
+
+        // АРХИВ ЖӘНЕ УДАЛИТЬ ЛОГИКАЛАРЫ (Жергілікті массивте)
+        function runChatAction(action, phone) {
+            const cleanPhone = normalizePhone(phone);
+            if (!cleanPhone) return;
+
+            if (action === 'close') {
+                const chat = chats.find(c => c.phone === cleanPhone);
+                if (chat) {
+                    chat.closed = true;
+                    showToast(t('resolveDone'));
+                }
+            } else if (action === 'restore') {
+                const chat = chats.find(c => c.phone === cleanPhone);
+                if (chat) {
+                    chat.closed = false;
+                    showToast(t('restoreDone'));
+                }
+            } else if (action === 'delete') {
+                chats = chats.filter(c => c.phone !== cleanPhone);
+                showToast(t('deleteDone'));
+            }
+
+            if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
+                activePhone = '';
+                closeChat();
+                renderDefaultChatEmpty();
+                setActiveHeader('');
+            }
+            renderList();
+            updateComposerState();
+        }
+
+        async function sendMessage() {
+            const text = inputEl.value.trim();
+            if (!text || !activePhone || isSending) return;
+
+            pendingText = text;
+            isSending = true;
+            messagesEl.insertAdjacentHTML('beforeend', `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            updateComposerState();
+
+            try {
+                await postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { text });
+                isSending = false;
+                pendingText = '';
+                loadInbox();
+                loadHistory();
+            } catch (error) {
+                isSending = false;
+                if (pendingText && !inputEl.value.trim()) {
+                    inputEl.value = pendingText;
+                }
+                pendingText = '';
+                showToast(t('sendFailed'));
+                updateComposerState();
+            }
+        }
+
+        document.querySelector('.tabs').addEventListener('click', event => {
+            const button = event.target.closest('.tab');
+            if (!button) return;
+            activeTab = button.dataset.tab;
+            renderList();
         });
-      }
-    });
 
-    nodes.searchInput.addEventListener('input', renderInbox);
-    nodes.messageInput.addEventListener('input', () => {
-      nodes.sendButton.disabled = !state.selectedPhone || !nodes.messageInput.value.trim();
-    });
-    nodes.composer.addEventListener('submit', event => {
-      event.preventDefault();
-      const text = nodes.messageInput.value.trim();
-      if (!instanceId || !state.selectedPhone || !text) return;
-      nodes.sendButton.disabled = true;
-      setStatus('Sending');
-      postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(state.selectedPhone)}`, { text })
-        .then(() => {
-          nodes.messageInput.value = '';
-          return loadHistory(state.selectedPhone);
-        })
-        .then(() => setStatus('Live'))
-        .catch(error => {
-          setStatus('Error');
-          nodes.messages.insertAdjacentHTML('beforeend', `<div class="error">${escapeHtml(error.message)}</div>`);
-        })
-        .finally(() => {
-          nodes.sendButton.disabled = !state.selectedPhone || !nodes.messageInput.value.trim();
+        listEl.addEventListener('click', event => {
+            const switchButton = event.target.closest('[data-switch-tab]');
+            if (switchButton) {
+                activeTab = switchButton.dataset.switchTab;
+                renderList();
+                return;
+            }
+
+            const actionButton = event.target.closest('[data-chat-action]');
+            if (actionButton) {
+                runChatAction(actionButton.dataset.chatAction, actionButton.dataset.phone);
+                return;
+            }
+
+            const item = event.target.closest('.chat-item');
+            if (item) openChat(item.dataset.phone);
         });
-    });
-    nodes.conversationList.addEventListener('click', event => {
-      const button = event.target.closest('[data-phone]');
-      if (!button) return;
-      loadHistory(button.dataset.phone).catch(error => {
-        setStatus('Error');
-        nodes.messages.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-      });
-    });
 
-    loadInbox().catch(error => {
-      setStatus('Error');
-      nodes.conversationList.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-    });
-    setInterval(() => {
-      loadInbox().catch(() => {});
-      if (state.selectedPhone) loadHistory(state.selectedPhone).catch(() => {});
-    }, 10000);
-  </script>
+        searchInput.addEventListener('input', () => renderList());
+        searchInput.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            if (!searchPhoneCandidate()) return;
+            event.preventDefault();
+            openDirectChatFromSearch();
+        });
+
+        directChatBtn.addEventListener('click', openDirectChatFromSearch);
+        refreshBtn.addEventListener('click', () => { loadInbox(); loadHistory(); });
+        backBtn.addEventListener('click', closeChat);
+        sendBtn.addEventListener('click', sendMessage);
+
+        for (const button of langToggles) button.addEventListener('click', () => {
+            lang = lang === 'kk' ? 'ru' : 'kk';
+            localStorage.setItem('operator_chat_lang', lang);
+            applyLanguage();
+        });
+
+        inputEl.addEventListener('input', () => {
+            inputEl.style.height = 'auto';
+            inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+            updateComposerState();
+        });
+
+        inputEl.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+
+        applyLanguage();
+        updateComposerState();
+        loadInbox();
+        
+        // Поллинг: Хабарларды автоматты түрде жаңартып тұру (REST API)
+        setInterval(() => {
+            loadInbox();
+            if (activePhone) loadHistory();
+        }, 5000);
+
+    </script>
 </body>
 </html>
