@@ -17,6 +17,7 @@ const qrCodes = new Map();
 const instanceStates = new Map();
 const restartTimers = new Map();
 const restartAttempts = new Map();
+const authResetting = new Set();
 const pendingTextQueues = new Map();
 const flushTimers = new Map();
 const intentionallyStopped = new Set();
@@ -84,6 +85,10 @@ function resetRestartAttempts(instanceId) {
     restartAttempts.delete(instanceId);
 }
 
+function isAuthenticationFailureReason(reason) {
+    return /DISCONNECTED|LOGOUT|UNPAIRED|UNPAIRED_IDLE|AUTH[_\s-]?FAIL|AUTHENTICATION|INVALID[_\s-]?(SESSION|CREDENTIAL|AUTH)|SESSION[_\s-]?CLOSED|NOT[_\s-]?LOGGED|401|403/i.test(String(reason || ''));
+}
+
 function queueOutgoingText(instanceId, phone, text, reason = 'client_not_ready', attempts = 0) {
     if (!text) return;
 
@@ -116,6 +121,7 @@ function scheduleFlush(instanceId, delayMs = 1000) {
 function scheduleRestart(instanceId, delayMs = 3000, reason = 'restart') {
     if (shutdownInProgress) return;
     if (intentionallyStopped.has(instanceId)) return;
+    if (instanceStates.get(instanceId)?.status === 'qr_required') return;
 
     clearRestartTimer(instanceId);
     const finalDelayMs = calculateRestartDelay(instanceId, delayMs, reason);
@@ -138,6 +144,48 @@ function removeSessionFolder(instanceId, reason = 'manual') {
 
     fs.rmSync(sessionPath, { recursive: true, force: true });
     console.log(`[WHATSAPP] ${instanceId} session folder cleared (${reason}).`);
+}
+
+async function resetInvalidSession(instanceId, client, reason = 'auth_invalid', startFreshQr = true) {
+    if (authResetting.has(instanceId)) {
+        setInstanceState(instanceId, 'qr_required', { reason, hasStoredSession: false });
+        return { success: true, status: 'qr_required', reason };
+    }
+
+    authResetting.add(instanceId);
+    clearRestartTimer(instanceId);
+    resetRestartAttempts(instanceId);
+    qrCodes.delete(instanceId);
+    clients.delete(instanceId);
+    initializingClients.delete(instanceId);
+    pendingTextQueues.delete(instanceId);
+
+    const flushTimer = flushTimers.get(instanceId);
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimers.delete(instanceId);
+
+    setInstanceState(instanceId, 'qr_required', { reason, hasStoredSession: false });
+
+    try {
+        if (client) await destroyClient(client);
+    } catch (error) {}
+
+    removeSessionFolder(instanceId, reason);
+    cleanupChromiumRuntimeLocks(instanceId);
+    console.warn(`[WHATSAPP] ${instanceId} invalid session reset; QR required (${reason}).`);
+
+    authResetting.delete(instanceId);
+
+    if (startFreshQr && !shutdownInProgress && !intentionallyStopped.has(instanceId)) {
+        setImmediate(() => {
+            startWhatsAppInstance(instanceId, { freshAfterAuthReset: true }).catch(error => {
+                console.error(`[WHATSAPP] ${instanceId} QR start after auth reset failed:`, error.message);
+                setInstanceState(instanceId, 'qr_required', { reason: `qr_start_failed: ${error.message}`, hasStoredSession: false });
+            });
+        });
+    }
+
+    return { success: true, status: 'qr_required', reason };
 }
 
 function isChromiumProfileLockError(error) {
@@ -350,7 +398,7 @@ async function getPhoneFromLid(client, values = []) {
 }
 
 // 1. ЖАҢА ИНСТАНС ҚОСУ НЕ ЖҮКТЕУ ФУНКЦИЯСЫ
-async function startWhatsAppInstance(instanceId) {
+async function startWhatsAppInstance(instanceId, options = {}) {
     if (shutdownInProgress) {
         return { success: false, message: 'Server is shutting down.', status: 'stopping' };
     }
@@ -380,9 +428,11 @@ async function startWhatsAppInstance(instanceId) {
     clearRestartTimer(instanceId);
     intentionallyStopped.delete(instanceId);
     const sessionExists = hasStoredSession(instanceId);
-    setInstanceState(instanceId, sessionExists ? 'restoring_session' : 'starting', { hasStoredSession: sessionExists });
+    setInstanceState(instanceId, sessionExists ? 'restoring_session' : 'qr_required', { hasStoredSession: sessionExists });
     if (sessionExists) {
-        console.log(`[WHATSAPP] ${instanceId} stored session found; restoring without QR.`);
+        console.log(`[WHATSAPP] ${instanceId} stored session found; single restore attempt without QR.`);
+    } else if (!options.freshAfterAuthReset) {
+        console.log(`[WHATSAPP] ${instanceId} no stored session; QR required.`);
     }
     cleanupChromiumRuntimeLocks(instanceId);
     console.log(`🚀 [WHATSAPP] ${instanceId} үшін жаңа сессия іске қосылуда...`);
@@ -421,13 +471,17 @@ async function startWhatsAppInstance(instanceId) {
     const watchdog = setTimeout(async () => {
         if (!isReady && !qrCodes.has(instanceId)) {
             if (shutdownInProgress || intentionallyStopped.has(instanceId)) return;
-            console.warn(`[WHATSAPP] ${instanceId} restore timed out; restarting browser without clearing auth data.`);
+            if (sessionExists) {
+                await resetInvalidSession(instanceId, client, 'restore_timeout', true);
+                return;
+            }
+            console.warn(`[WHATSAPP] ${instanceId} QR startup timed out; waiting for manual restart.`);
             await destroyClient(client);
             initializingClients.delete(instanceId);
             cleanupChromiumRuntimeLocks(instanceId);
             clients.delete(instanceId);
             qrCodes.delete(instanceId);
-            scheduleRestart(instanceId, CHROME_LOCK_RESTART_DELAY_MS, 'restore_timeout');
+            setInstanceState(instanceId, 'qr_required', { reason: 'qr_start_timeout', hasStoredSession: false });
             return;
         }
     }, SESSION_RESTORE_TIMEOUT_MS); // restore can be slow after deploy
@@ -484,18 +538,19 @@ async function startWhatsAppInstance(instanceId) {
         qrCodes.delete(instanceId);
         setInstanceState(instanceId, 'disconnected', { reason: String(reason || '') });
 
+        const reasonText = String(reason || '').toUpperCase();
+        const invalidAuth = isAuthenticationFailureReason(reasonText) || (reasonText === 'DISCONNECTED' && hasStoredSession(instanceId));
+
+        if (!intentionallyStopped.has(instanceId) && invalidAuth) {
+            clearTimeout(watchdog);
+            await resetInvalidSession(instanceId, client, reasonText || 'disconnected_auth_invalid', true);
+            return;
+        }
+
         await destroyClient(client);
         cleanupChromiumRuntimeLocks(instanceId);
 
-        const reasonText = String(reason || '').toUpperCase();
-
-        if (reasonText.includes('LOGOUT')) {
-            console.log(`🚨 [WHATSAPP] ${instanceId} ТЕЛЕФОННАН ӨШІРІЛДІ! Ескі сессияны тазалаймыз...`);
-            if (!intentionallyStopped.has(instanceId)) {
-                scheduleRestart(instanceId, 2000, 'logout');
-            }
-        } 
-        else if (!intentionallyStopped.has(instanceId)) {
+        if (!intentionallyStopped.has(instanceId)) {
             scheduleRestart(instanceId, reasonText.includes('NAVIGATION') ? 5000 : 10000, reasonText || 'disconnected');
         }
     });
@@ -506,13 +561,13 @@ async function startWhatsAppInstance(instanceId) {
         initializingClients.delete(instanceId);
         clients.delete(instanceId);
         qrCodes.delete(instanceId);
-        setInstanceState(instanceId, 'auth_failure', { reason: String(msg || '') });
-
-        await destroyClient(client);
-       
+        clearTimeout(watchdog);
+        setInstanceState(instanceId, 'qr_required', { reason: String(msg || 'auth_failure'), hasStoredSession: false });
 
         if (!intentionallyStopped.has(instanceId)) {
-            scheduleRestart(instanceId, 2000, 'auth_failure');
+            await resetInvalidSession(instanceId, client, `auth_failure: ${String(msg || '')}`, true);
+        } else {
+            await destroyClient(client);
         }
     });
 
@@ -643,6 +698,12 @@ async function startWhatsAppInstance(instanceId) {
         }
         const locked = isChromiumProfileLockError(err);
         const resourceFailure = isChromiumResourceError(err);
+        const authFailure = isAuthenticationFailureReason(err?.message || err) || !locked && !resourceFailure;
+        if (authFailure) {
+            await resetInvalidSession(instanceId, client, `initialize_auth_failed: ${err.message}`, true);
+            return;
+        }
+
         await destroyClient(client);
         if (locked || resourceFailure) cleanupChromiumRuntimeLocks(instanceId);
         setInstanceState(instanceId, 'disconnected', { reason: `initialize_failed: ${err.message}`, locked, resourceFailure });
@@ -768,6 +829,11 @@ async function getInstanceStatus(instanceId) {
         if (isConnectedState(state) || client.info?.wid) {
             setInstanceState(instanceId, 'connected', { waState: state || 'CONNECTED' });
             return { status: 'connected', waState: state || 'CONNECTED', hasStoredSession: storedSession };
+        }
+
+        if (storedSession && isAuthenticationFailureReason(state || 'DISCONNECTED')) {
+            await resetInvalidSession(instanceId, client, `state_${state || 'DISCONNECTED'}`, true);
+            return { ...(instanceStates.get(instanceId) || { status: 'qr_required' }), hasStoredSession: false };
         }
 
         const status = state ? 'starting' : 'disconnected';
