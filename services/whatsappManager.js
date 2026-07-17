@@ -449,7 +449,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         }),
         puppeteer: {
             headless: true,
-            executablePath: '/usr/bin/chromium-browser',
+            executablePath: '/usr/bin/chromium-browsermium-browser',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -701,27 +701,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             setInstanceState(instanceId, 'stopped', { reason: 'shutdown_during_initialize' });
             return;
         }
-        const locked = isChromiumProfileLockError(err);
-        const resourceFailure = isChromiumResourceError(err);
-        const authFailure = isAuthenticationFailureReason(err?.message || err) || !locked && !resourceFailure;
-        if (authFailure) {
-            await resetInvalidSession(instanceId, client, `initialize_auth_failed: ${err.message}`, true);
-            return;
-        }
-
-        if (getRestartAttempts(instanceId) >= WHATSAPP_INITIALIZE_MAX_RETRIES) {
-            await resetInvalidSession(instanceId, client, `initialize_failed_retry_limit: ${err.message}`, true);
-            return;
-        }
-
-        await destroyClient(client);
-        if (locked || resourceFailure) cleanupChromiumRuntimeLocks(instanceId);
-        setInstanceState(instanceId, 'disconnected', { reason: `initialize_failed: ${err.message}`, locked, resourceFailure });
-        scheduleRestart(
-            instanceId,
-            locked ? CHROME_LOCK_RESTART_DELAY_MS : (resourceFailure ? WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS : 5000),
-            locked ? 'chrome_profile_locked' : (resourceFailure ? `chromium_resource_error: ${err.message}` : 'initialize_failed')
-        );
+        await resetInvalidSession(instanceId, client, `initialize_failed: ${err.message}`, true);
     });
 
     return { success: true, message: 'Инстанс іске қосылуда. Күте тұрыңыз...' };
