@@ -1082,33 +1082,58 @@
         }
 
         async function loadInbox() {
-            if (!instanceId) return;
-            try {
-                const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
-                const items = data.items || [];
+    if (!instanceId) return;
+    try {
+        const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
+        const items = data.items || [];
+        
+        // Бұрыннан бар чаттардың архив/оператор статусқарын есте сақтау
+        const existingStatus = new Map();
+        chats.forEach(c => {
+            existingStatus.set(c.phone, { closed: c.closed, hasOperator: c.hasOperator, unread: c.unread });
+        });
+
+        const uniqueChatsMap = new Map();
+
+        items.forEach(item => {
+            const rawPhone = String(item.phone || '');
+            // 🚀 ҮТІРДІ ҚИЫП, ТАЗА НӨМІРДІ АЛАМЫЗ (Спамды жою)
+            const purePhone = normalizePhone(rawPhone.split(',')[0]);
+            if (!purePhone) return;
+
+            const timestamp = Number(rawPhone.split(',')[1]) || item.updatedAt || Date.now();
+            
+            if (!uniqueChatsMap.has(purePhone)) {
+                const old = existingStatus.get(purePhone);
+                // 🚀 ЕГЕР ОПЕРАТОР ЖАУАП БЕРМЕГЕН БОЛСА - "ЖАҢА" ВКЛАДКАСЫНА ЖІБЕРЕМІЗ
+                const isUnread = old ? old.unread : (!old?.hasOperator && !old?.closed);
                 
-                // REST API-дан келген жаңа хаттарды жергілікті архив статусымен біріктіру
-                items.forEach(item => {
-                    const existing = chats.find(c => c.phone === item.phone);
-                    if (existing) {
-                        existing.lastAt = item.updatedAt;
-                    } else {
-                        chats.push({
-                            phone: item.phone,
-                            lastAt: item.updatedAt,
-                            lastText: 'Open conversation',
-                            unread: false,
-                            hasOperator: false,
-                            closed: false
-                        });
-                    }
+                uniqueChatsMap.set(purePhone, {
+                    phone: purePhone,
+                    lastAt: timestamp,
+                    lastText: 'Open conversation',
+                    unread: isUnread,
+                    hasOperator: old ? old.hasOperator : false,
+                    closed: old ? old.closed : false
                 });
-                chats.sort((a, b) => b.lastAt - a.lastAt);
-                renderList();
-            } catch (error) {
-                console.error('Inbox load error:', error);
+            } else {
+                const current = uniqueChatsMap.get(purePhone);
+                if (timestamp > current.lastAt) {
+                    current.lastAt = timestamp;
+                    if (activePhone !== purePhone) {
+                        current.unread = true; // Белсенді емес чатқа жаңа хат келсе "Жаңа" қылады
+                    }
+                }
             }
-        }
+        });
+
+        // Сұрыптап массивке қайтару
+        chats = Array.from(uniqueChatsMap.values()).sort((a, b) => b.lastAt - a.lastAt);
+        renderList();
+    } catch (error) {
+        console.error('Inbox load error:', error);
+    }
+}
 
         async function loadHistory() {
             if (!activePhone) return;
@@ -1123,20 +1148,25 @@
             }
         }
 
-        function openChat(phone) {
-            activePhone = normalizePhone(phone);
-            if (!activePhone) return;
+      function openChat(phone) {
+    activePhone = normalizePhone(phone);
+    if (!activePhone) return;
 
-            app.classList.add('chat-open');
-            setActiveHeader(activePhone);
-            inputEl.style.height = 'auto';
-            isSending = false;
-            updateComposerState();
-            messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
-            renderList();
-            loadHistory();
-            if (!isMobile()) inputEl.focus({ preventScroll: true });
-        }
+    app.classList.add('chat-open');
+    setActiveHeader(activePhone);
+    inputEl.style.height = 'auto';
+    isSending = false;
+    
+    // 🚀 Чатты ашқан сәтте оны оқылды деп белгілейміз ("Жаңадан" кетеді)
+    const chat = chats.find(c => c.phone === activePhone);
+    if (chat) chat.unread = false;
+
+    updateComposerState();
+    messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
+    renderList();
+    loadHistory();
+    if (!isMobile()) inputEl.focus({ preventScroll: true });
+}
 
         function closeChat() { app.classList.remove('chat-open'); }
 
@@ -1188,9 +1218,18 @@
                 await postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { text });
                 isSending = false;
                 pendingText = '';
+                
+                // 🚀 Оператор жауап берген соң чат статусқарын реттейміз
+                const chat = chats.find(c => c.phone === activePhone);
+                if (chat) {
+                    chat.hasOperator = true;
+                    chat.unread = false;
+                }
+
                 loadInbox();
                 loadHistory();
             } catch (error) {
+              
                 isSending = false;
                 if (pendingText && !inputEl.value.trim()) {
                     inputEl.value = pendingText;
