@@ -181,13 +181,12 @@ async function resetInvalidSession(instanceId, client, reason = 'auth_invalid', 
 
     authResetting.delete(instanceId);
 
-    if (startFreshQr && !shutdownInProgress && !intentionallyStopped.has(instanceId)) {
-        setImmediate(() => {
+ if (startFreshQr && !shutdownInProgress && !intentionallyStopped.has(instanceId)) {
+        setTimeout(() => {
             startWhatsAppInstance(instanceId, { freshAfterAuthReset: true }).catch(error => {
-                console.error(`[WHATSAPP] ${instanceId} QR start after auth reset failed:`, error.message);
-                setInstanceState(instanceId, 'qr_required', { reason: `qr_start_failed: ${error.message}`, hasStoredSession: false });
+                console.error(`[WHATSAPP] ${instanceId} QR start failed:`, error.message);
             });
-        });
+        }, 5000); // 5 секунд күтіп барып жаңа QR сұрайды (шексіз циклді біржолата блоктайды)
     }
 
     return { success: true, status: 'qr_required', reason };
@@ -442,14 +441,14 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     cleanupChromiumRuntimeLocks(instanceId);
     console.log(`🚀 [WHATSAPP] ${instanceId} үшін жаңа сессия іске қосылуда...`);
 
-    const client = new Client({
+   const client = new Client({
         authStrategy: new LocalAuth({ 
             clientId: instanceId,
             dataPath: AUTH_DATA_PATH
         }),
         puppeteer: {
             headless: true,
-            executablePath: '/usr/bin/chromium-browser',
+            executablePath: fs.existsSync('/usr/bin/chromium-browser') ? '/usr/bin/chromium-browser' : (fs.existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : '/usr/bin/chromium'),
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -536,28 +535,28 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     });
 
     // 4. БАЙЛАНЫС ҮЗІЛГЕНДЕ
-    client.on('disconnected', async (reason) => {
-        console.log(`⚠️ [WHATSAPP] ${instanceId} байланыс үзілді! Себебі:`, reason);
+   client.on('disconnected', async (reason) => {
+        const reasonText = String(reason || '').toUpperCase();
+        console.log(`⚠️ [WHATSAPP] ${instanceId} байланыс үзілді! Себебі:`, reasonText);
+        
         initializingClients.delete(instanceId);
         clients.delete(instanceId);
         qrCodes.delete(instanceId);
-        setInstanceState(instanceId, 'disconnected', { reason: String(reason || '') });
-
-        const reasonText = String(reason || '').toUpperCase();
-        const invalidAuth = isAuthenticationFailureReason(reasonText) || (reasonText === 'DISCONNECTED' && hasStoredSession(instanceId));
-
-        if (!intentionallyStopped.has(instanceId) && invalidAuth) {
-            clearTimeout(watchdog);
-            await resetInvalidSession(instanceId, client, reasonText || 'disconnected_auth_invalid', true);
-            return;
-        }
-
+        clearTimeout(watchdog);
         await destroyClient(client);
         cleanupChromiumRuntimeLocks(instanceId);
 
-        if (!intentionallyStopped.has(instanceId)) {
-            scheduleRestart(instanceId, reasonText.includes('NAVIGATION') ? 5000 : 10000, reasonText || 'disconnected');
+        if (intentionallyStopped.has(instanceId)) return;
+
+        if (reasonText.includes('LOGOUT') || reasonText.includes('UNPAIRED')) {
+            console.log(`❌ [WHATSAPP] ${instanceId} ТЕЛЕФОННАН ШЫҒЫП КЕТТІ (LOGOUT).`);
+            removeSessionFolder(instanceId, 'logout_by_user');
+            setInstanceState(instanceId, 'qr_required', { reason: 'Телефоннан шығып кеттіңіз. Жаңа QR күтіңіз.', hasStoredSession: false });
+            return;
         }
+
+        setInstanceState(instanceId, 'disconnected', { reason: reasonText });
+        scheduleRestart(instanceId, 10000, reasonText || 'disconnected');
     });
 
     // 4.1. АВТОРИЗАЦИЯ ҚАТЕСІ БОЛҒАНДА
@@ -690,18 +689,18 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         } catch (err) {}
     });
 
-    client.initialize().catch(async err => {
-        console.error(`❌ [WHATSAPP] ${instanceId} инициализация қатесі:`, err.message);
+client.initialize().catch(async err => {
+        console.error(`❌ [WHATSAPP] ${instanceId} ИНИЦИАЛИЗАЦИЯ ҚАТЕСІ:`, err.message);
         clearTimeout(watchdog);
         initializingClients.delete(instanceId);
         clients.delete(instanceId);
         qrCodes.delete(instanceId);
-        if (shutdownInProgress || intentionallyStopped.has(instanceId)) {
-            await destroyClient(client);
-            setInstanceState(instanceId, 'stopped', { reason: 'shutdown_during_initialize' });
-            return;
-        }
-        await resetInvalidSession(instanceId, client, `initialize_failed: ${err.message}`, true);
+        await destroyClient(client);
+
+        if (shutdownInProgress || intentionallyStopped.has(instanceId)) return;
+
+        setInstanceState(instanceId, 'error', { reason: `Қате: ${err.message}` });
+        scheduleRestart(instanceId, 15000, `init_failed`); // Шексіз циклді тоқтатып, 15 сек үзіліс жасаймыз
     });
 
     return { success: true, message: 'Инстанс іске қосылуда. Күте тұрыңыз...' };

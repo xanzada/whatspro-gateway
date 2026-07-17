@@ -484,6 +484,22 @@ app.post('/api/send', requireApi, async (req, res) => {
 
 async function boot() {
   await connectRedis();
+  
+  console.log('[WhatsPro] Сервер қосылды. Барлық сақталған сессиялар автоматты түрде іске қосылады...');
+  try {
+    const instances = await listInstances();
+    for (const inst of instances) {
+       // Сессиясы болса да, болмаса да оятамыз. 
+       // Сессиясы жоқтар автоматты түрде QR код дайындап күтіп тұрады.
+       console.log(`[BOOT] Автоқосылу (QR немесе Сессия): ${inst.instanceId}`);
+       startWhatsAppInstance(inst.instanceId).catch(err => {
+           console.error(`[BOOT] ${inst.instanceId} қосылу қатесі:`, err.message);
+       });
+    }
+  } catch (err) {
+    console.error('[BOOT] Автоқосылу кезіндегі қате:', err);
+  }
+
   app.listen(PORT, () => console.log(`[WhatsPro] listening on :${PORT}`));
 }
 
