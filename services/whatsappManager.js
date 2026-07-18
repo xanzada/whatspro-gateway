@@ -21,6 +21,26 @@ function chatMediaKey(instanceId, messageId) {
     return `chatwoot:media:${instanceId}:${messageId}`;
 }
 
+async function persistMessageMedia(instanceId, msg) {
+    if (!msg?.hasMedia || !redisClient.isOpen) return null;
+    const media = await msg.downloadMedia();
+    if (!media?.data) return null;
+    const mediaUrl = `data:${media.mimetype || 'audio/ogg'};base64,${media.data}`;
+    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, msg.id.id), mediaUrl, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
+    return { media, mediaUrl };
+}
+
+function scheduleMediaPersist(instanceId, msg) {
+    if (!msg?.hasMedia || !(msg.type === 'audio' || msg.type === 'ptt')) return;
+    [1500, 5000, 12000, 25000].forEach(ms => {
+        setTimeout(() => {
+            persistMessageMedia(instanceId, msg).catch(error => {
+                console.warn(`[MEDIA RETRY] ${instanceId}: ${msg.id?.id || '-'} ${error.message}`);
+            });
+        }, ms);
+    });
+}
+
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
 const initializingClients = new Map();
@@ -657,15 +677,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             messageCache.set(msg.id.id, msg);
             setTimeout(() => messageCache.delete(msg.id.id), 10 * 60 * 1000); 
         }
+        scheduleMediaPersist(instanceId, msg);
 
         let downloadedMedia = null;
         if (msg.hasMedia && (msg.type === 'audio' || msg.type === 'ptt')) {
             try {
-                downloadedMedia = await msg.downloadMedia();
-                if (downloadedMedia?.data && redisClient.isOpen) {
-                    const mediaUrl = `data:${downloadedMedia.mimetype || 'audio/ogg'};base64,${downloadedMedia.data}`;
-                    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, msg.id.id), mediaUrl, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
-                }
+                downloadedMedia = (await persistMessageMedia(instanceId, msg))?.media || null;
             } catch (error) {
                 console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
             }
@@ -1041,9 +1058,7 @@ async function getBase64Media(instanceId, keyObj) {
         const msg = messageCache.get(actualMessageId);
         if (!msg || !msg.hasMedia) return null;
         
-        const media = await msg.downloadMedia();
-        if (!media?.data) return null;
-        return `data:${media.mimetype};base64,${media.data}`;
+        return (await persistMessageMedia(instanceId, msg))?.mediaUrl || null;
     } catch (error) {
         console.error(`❌ [DOWNLOAD MEDIA ERROR] ${instanceId}:`, error.message);
         return null;

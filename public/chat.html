@@ -508,6 +508,7 @@
             border-radius: 14px;
             background: #075e46;
         }
+        .wa-audio.loading { opacity: .72; }
         .audio-play, .audio-speed {
             height: 36px;
             border-radius: 999px;
@@ -517,6 +518,7 @@
             font-weight: 900;
         }
         .audio-play { width: 36px; font-size: 16px; }
+        .audio-play:disabled { cursor: default; opacity: .55; }
         .audio-wave {
             height: 30px;
             background:
@@ -1164,6 +1166,78 @@
                 } catch {
                     const status = wrapper.querySelector('[data-audio-status]');
                     if (status) status.textContent = 'Аудио жүктелмеді. Қайта ашып көріңіз.';
+                }
+            }
+        }
+
+        function audioMarkup(src = '') {
+            return `
+                <div class="wa-audio ${src ? '' : 'loading'}">
+                    <button class="audio-play" type="button" data-audio-play aria-label="Play" ${src ? '' : 'disabled'}>&#9658;</button>
+                    <div class="audio-wave" aria-hidden="true"></div>
+                    <span class="audio-time" data-audio-time>0:00</span>
+                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
+                    <audio class="audio-player" preload="metadata" src="${escapeHtml(src)}"></audio>
+                </div>`;
+        }
+
+        function buildAudioHtml(item) {
+            const mediaKind = String(item?.mediaKind || item.type || '').toLowerCase();
+            const mediaType = String(item.mediaType || '').split(';')[0].replace(/[^\w/+.-]/g, '');
+            const hasAudioPayload = Boolean(item.audioMessage || item.data?.message?.audioMessage);
+            const isAudio = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/') || hasAudioPayload;
+            if (!isAudio) return '';
+
+            const rawData = String(item.mediaData || '');
+            const hasInlineAudio = rawData.startsWith('data:audio') || rawData.includes(';base64,') || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+            const src = hasInlineAudio
+                ? (rawData.startsWith('data:') ? rawData : `data:${mediaType || 'audio/ogg'};base64,${rawData}`)
+                : '';
+
+            return `<div class="audio-wrap ${src ? '' : 'loading'}" data-audio-wrapper data-audio-id="${escapeHtml(item.id || '')}">${audioMarkup(src)}</div>`;
+        }
+
+        function syncAudioWidgets() {
+            for (const audio of messagesEl.querySelectorAll('audio.audio-player:not([data-bound])')) {
+                audio.dataset.bound = '1';
+                const widget = audio.closest('.wa-audio');
+                const play = widget?.querySelector('[data-audio-play]');
+                const time = widget?.querySelector('[data-audio-time]');
+                const update = () => {
+                    if (time) time.textContent = formatAudioTime(audio.currentTime || audio.duration || 0);
+                    if (play) play.innerHTML = audio.paused ? '&#9658;' : '&#10074;&#10074;';
+                };
+                audio.addEventListener('loadedmetadata', update);
+                audio.addEventListener('timeupdate', update);
+                audio.addEventListener('play', update);
+                audio.addEventListener('pause', update);
+                audio.addEventListener('ended', () => {
+                    audio.currentTime = 0;
+                    update();
+                });
+                update();
+            }
+        }
+
+        async function hydrateAudioPlayers() {
+            const wrappers = [...messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])')];
+            for (const wrapper of wrappers) {
+                if (wrapper.querySelector('audio')?.getAttribute('src')) {
+                    wrapper.dataset.audioLoaded = '1';
+                    continue;
+                }
+                const id = wrapper.dataset.audioId;
+                if (!id) continue;
+                wrapper.dataset.audioLoaded = '1';
+                try {
+                    const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
+                    if (!data.mediaData) throw new Error('MEDIA_EMPTY');
+                    wrapper.classList.remove('loading');
+                    wrapper.innerHTML = audioMarkup(data.mediaData);
+                    syncAudioWidgets();
+                } catch {
+                    delete wrapper.dataset.audioLoaded;
+                    setTimeout(hydrateAudioPlayers, 3000);
                 }
             }
         }
