@@ -13,7 +13,7 @@ async function markOperatorActive(instanceId, phone, source = 'operator') {
 
   if (!safeInstanceId || !safePhone || !redisClient.isOpen) return false;
 
-  await redisClient.setEx(operatorActiveKey(safeInstanceId, safePhone), OPERATOR_ACTIVE_SECONDS, source);
+  await redisClient.sendCommand(['SET', operatorActiveKey(safeInstanceId, safePhone), source, 'EX', String(OPERATOR_ACTIVE_SECONDS)]);
   return true;
 }
 

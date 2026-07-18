@@ -14,7 +14,7 @@ const {
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
-const { markOperatorActive } = require('../services/operatorLock');
+const { markOperatorActive, OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
 
 const app = express();
@@ -314,6 +314,7 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
   let latestCustomerAt = 0;
   let latestOperatorAt = 0;
   let hasOperator = false;
+  let hasCustomerMessage = false;
 
   for (const entry of history) {
     const createdAt = getEntryCreatedAt(entry);
@@ -321,7 +322,10 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
       hasOperator = true;
       latestOperatorAt = Math.max(latestOperatorAt, createdAt);
     } else if (!isOutgoingEntry(entry)) {
-      latestCustomerAt = Math.max(latestCustomerAt, createdAt);
+      if (entryPreview(entry)) {
+        hasCustomerMessage = true;
+        latestCustomerAt = Math.max(latestCustomerAt, createdAt);
+      }
     }
   }
 
@@ -335,6 +339,7 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
     unread,
     viewed: viewedAt > 0 && viewedAt >= latestCustomerAt && !hasOperator,
     hasOperator,
+    hasCustomerMessage,
     closed: archived
   };
 }
@@ -471,7 +476,12 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
       stalePhones.push(item.phone);
       return;
     }
-    items.push(summarizeChat(item, historyRows, Number(viewedScores[index]) || 0, archiveSet.has(item.phone)));
+    const summary = summarizeChat(item, historyRows, Number(viewedScores[index]) || 0, archiveSet.has(item.phone));
+    if (!summary.hasCustomerMessage) {
+      stalePhones.push(item.phone);
+      return;
+    }
+    items.push(summary);
   });
 
   await Promise.all(stalePhones.map(phone => Promise.all([
@@ -561,6 +571,17 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
   res.json({ success: true, instanceId, phone, history });
 });
 
+app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  const phone = normalizePhone(req.params.phone || '');
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+
+  const ttl = await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => -2);
+  res.json({ success: true, instanceId, phone, ttl: Math.max(0, Number(ttl) || 0), total: OPERATOR_ACTIVE_SECONDS });
+});
+
 app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = normalizePhone(req.params.phone || '');
@@ -623,6 +644,10 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
     const ok = await sendWhatsAppText(instanceId, phone, text);
     
     if (ok) {
+        await Promise.all([
+            markOperatorActive(instanceId, phone, 'operator_panel'),
+            redisClient.isOpen ? redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_operator_panel', 'EX', String(OPERATOR_ACTIVE_SECONDS)]).catch(() => null) : Promise.resolve(null)
+        ]);
         await saveChatHistoryEntry(instanceId, phone, {
             id: `operator:${Date.now()}:${phone}`,
             instanceId,

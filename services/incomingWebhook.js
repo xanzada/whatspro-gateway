@@ -30,6 +30,19 @@ function isValidChatPhone(phone) {
   return /^\d{10,15}$/.test(String(phone || ''));
 }
 
+function isGroupOrStatusPayload(payload = {}) {
+  const values = [
+    payload.sender,
+    payload.from,
+    payload.phone,
+    payload.data?.key?.remoteJid,
+    payload.data?.from,
+    payload.data?.chatId
+  ].map(value => String(value || '').toLowerCase());
+
+  return values.some(value => value.includes('@g.us') || value.includes('status@broadcast') || value.includes('@broadcast'));
+}
+
 function getPayloadPhone(payload = {}) {
   return normalizePhoneFromCandidates([
     payload.normalizedPhone,
@@ -58,6 +71,29 @@ function archiveKey(instanceId) {
   return `chatwoot:archive:${instanceId}`;
 }
 
+function operatorActiveKey(instanceId, phone) {
+  return `operator_active:${instanceId}:${phone}`;
+}
+
+function muteKey(instanceId, phone) {
+  return `mute:${instanceId}:${phone}`;
+}
+
+async function shouldSkipOpenBot(payload = {}) {
+  if (!redisClient.isOpen) return false;
+
+  const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
+  const phone = getPayloadPhone(payload);
+  if (!instanceId || !isValidChatPhone(phone)) return false;
+
+  const [operatorTtl, muteTtl] = await Promise.all([
+    redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => -2),
+    redisClient.sendCommand(['TTL', muteKey(instanceId, phone)]).catch(() => -2)
+  ]);
+
+  return Number(operatorTtl) > 0 || Number(muteTtl) > 0;
+}
+
 function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const body = String(payload.body || payload.text || payload.data?.message?.conversation || '').trim();
   return {
@@ -79,7 +115,7 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
 async function saveIncomingMessage(payload) {
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
-  if (!instanceId || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
+  if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
   if (!redisClient.isOpen) return { skipped: true, reason: 'redis_not_connected' };
 
   const timestamp = Date.now();
@@ -124,9 +160,10 @@ async function forwardToOpenBot(payload) {
 
 async function forwardIncomingWhatsAppMessage(payload) {
   const started = Date.now();
+  const skipOpenBot = await shouldSkipOpenBot(payload);
   const [redisResult, openBotResult] = await Promise.allSettled([
     saveIncomingMessage(payload),
-    forwardToOpenBot(payload)
+    skipOpenBot ? Promise.resolve({ skipped: true, reason: 'operator_active' }) : forwardToOpenBot(payload)
   ]);
 
   if (redisResult.status === 'rejected') {

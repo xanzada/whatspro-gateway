@@ -24,7 +24,7 @@
         }
 
         * { box-sizing: border-box; }
-        html, body { height: 100%; }
+        html, body { height: 100%; min-height: 0; }
         body {
             margin: 0;
             overflow: hidden;
@@ -39,7 +39,10 @@
         .app {
             display: grid;
             grid-template-columns: 390px minmax(0, 1fr);
-            height: 100dvh;
+            height: 100%;
+            min-height: 0;
+            max-height: 100%;
+            overflow: hidden;
             background:
                 linear-gradient(180deg, rgba(59, 130, 246, .08), transparent 260px),
                 var(--bg);
@@ -47,6 +50,8 @@
 
         .sidebar {
             min-width: 0;
+            min-height: 0;
+            max-height: 100%;
             display: flex;
             flex-direction: column;
             border-right: 1px solid var(--line);
@@ -235,6 +240,8 @@
             flex: 1;
             min-height: 0;
             overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
             padding: 8px;
         }
 
@@ -360,7 +367,7 @@
             min-width: 0;
             min-height: 0;
             height: 100%;
-            max-height: 100dvh;
+            max-height: 100%;
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -370,11 +377,31 @@
         .back-btn { display: none; }
         .chat-meta { display: none; }
 
+        .lock-pill {
+            display: none;
+            flex: 0 0 auto;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            padding: 6px 9px;
+            border: 1px solid rgba(45, 212, 191, .28);
+            border-radius: 999px;
+            background: rgba(15, 118, 110, .18);
+            color: #99f6e4;
+            font-size: 12px;
+            font-weight: 900;
+            line-height: 1;
+        }
+
+        .lock-pill.show { display: inline-flex; }
+
         .messages {
             flex: 1 1 0;
             height: 0;
             min-height: 0;
             overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
             padding: 22px clamp(14px, 3vw, 34px);
             background:
                 radial-gradient(circle at 25% 10%, rgba(16, 185, 129, .08), transparent 28%),
@@ -547,7 +574,7 @@
         svg { width: 20px; height: 20px; }
 
         @media (max-width: 840px) {
-            .app { display: block; position: relative; height: 100dvh; overflow: hidden; }
+            .app { display: block; position: relative; height: 100%; overflow: hidden; }
             .sidebar, .chat { position: absolute; inset: 0; width: 100%; transition: transform .24s ease; }
             .chat { transform: translateX(100%); }
             .app.chat-open .sidebar { transform: translateX(-100%); }
@@ -651,6 +678,7 @@
                         <div class="chat-meta" id="active-meta">WhatsApp оператор панелі</div>
                     </div>
                 </div>
+                <div class="lock-pill" id="operator-lock" aria-live="polite"></div>
             </header>
 
             <main class="messages" id="messages">
@@ -687,6 +715,7 @@
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
             send: '/api/chat/send',
+            lock: '/api/chat/operator-lock',
             action: '/api/chat/action',
             ...(chatConfig.endpoints || {})
         };
@@ -702,6 +731,7 @@
         const langToggles = Array.from(document.querySelectorAll('[data-lang-toggle]'));
         const refreshBtn = document.getElementById('refresh-btn');
         const backBtn = document.getElementById('back-btn');
+        const lockEl = document.getElementById('operator-lock');
 
         const copy = {
             kk: {
@@ -804,6 +834,9 @@
         let historySignature = '';
         let isInboxLoading = false;
         let isHistoryLoading = false;
+        let operatorLockUntil = 0;
+        let isLockLoading = false;
+        let lastViewSyncAt = 0;
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
         function isMobile() { return window.matchMedia('(max-width: 840px)').matches; }
@@ -1162,10 +1195,46 @@
                 if (activePhone === data.phone) {
                     renderHistory(data.history || []);
                     updateComposerState();
+                    syncViewedState();
                 }
             } catch (error) {
             } finally {
                 isHistoryLoading = false;
+            }
+        }
+
+        function syncViewedState() {
+            if (!activePhone || Date.now() - lastViewSyncAt < 5000) return;
+            lastViewSyncAt = Date.now();
+            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).catch(() => {});
+        }
+
+        function setOperatorLockTtl(ttl) {
+            const seconds = Math.max(0, Math.ceil(Number(ttl) || 0));
+            operatorLockUntil = seconds > 0 ? Date.now() + seconds * 1000 : 0;
+            renderOperatorLock();
+        }
+
+        function renderOperatorLock() {
+            if (!lockEl) return;
+            const remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
+            lockEl.classList.toggle('show', Boolean(activePhone && remaining > 0));
+            lockEl.textContent = remaining > 0 ? `Bot sleep ${remaining}s` : '';
+        }
+
+        async function loadOperatorLock() {
+            if (!activePhone || isLockLoading) {
+                renderOperatorLock();
+                return;
+            }
+            isLockLoading = true;
+            const requestedPhone = activePhone;
+            try {
+                const data = await fetchJson(`${endpoints.lock}/${encodeURIComponent(instanceId)}/${encodeURIComponent(requestedPhone)}`);
+                if (activePhone === data.phone) setOperatorLockTtl(data.ttl || 0);
+            } catch (error) {
+            } finally {
+                isLockLoading = false;
             }
         }
 
@@ -1191,16 +1260,18 @@
 
             updateComposerState();
             historySignature = '';
+            lastViewSyncAt = 0;
             messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
             renderList();
             postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' })
                 .then(loadInbox)
                 .catch(() => {});
             loadHistory();
+            loadOperatorLock();
             if (!isMobile()) inputEl.focus({ preventScroll: true });
         }
 
-        function closeChat() { app.classList.remove('chat-open'); activePhone = ''; setActiveHeader(''); renderList(); }
+        function closeChat() { app.classList.remove('chat-open'); activePhone = ''; operatorLockUntil = 0; renderOperatorLock(); setActiveHeader(''); renderList(); }
 
         // АРХИВ ЖӘНЕ ӨШІРУ ЛОГИКАСЫ
         async function runChatAction(action, phone) {
@@ -1255,10 +1326,12 @@
                     chat.hasOperator = true;
                     chat.unread = false;
                 }
+                setOperatorLockTtl(60);
                 activeTab = 'operator';
 
                 loadInbox();
                 loadHistory();
+                loadOperatorLock();
             } catch (error) {
                 isSending = false;
                 if (pendingText && !inputEl.value.trim()) inputEl.value = pendingText;
@@ -1362,7 +1435,10 @@
         setInterval(() => {
             loadInbox();
             if (activePhone) loadHistory();
+            if (activePhone) loadOperatorLock();
         }, 3000);
+
+        setInterval(renderOperatorLock, 1000);
 
     </script>
 </body>

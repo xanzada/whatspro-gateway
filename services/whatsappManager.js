@@ -13,6 +13,10 @@ const { markOperatorActive } = require('./operatorLock');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
 
+function isValidChatPhone(phone) {
+    return /^\d{10,15}$/.test(String(phone || ''));
+}
+
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
 const initializingClients = new Map();
@@ -339,7 +343,7 @@ async function getOutgoingPhoneFromMessage(client, msg) {
 }
 
 async function saveOperatorOutgoingHistory(instanceId, phone, text, source) {
-    if (!redisClient.isOpen || !phone || !text) return;
+    if (!redisClient.isOpen || !isValidChatPhone(phone) || !text) return;
 
     const createdAt = Date.now();
     const entry = {
@@ -594,12 +598,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
             const text = String(msg.body || '').trim();
             const phone = await getOutgoingPhoneFromMessage(client, msg);
-            if (!phone || !text) return;
+            if (!isValidChatPhone(phone) || !text) return;
             if (await wasBotSending(instanceId, phone)) return;
 
             await markOperatorActive(instanceId, phone, 'whatsapp_app');
             if (redisClient.isOpen) {
-                await redisClient.setEx(`mute:${instanceId}:${phone}`, 60, 'muted_by_agent').catch(() => {});
+                await redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_agent', 'EX', '60']).catch(() => {});
             }
             await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app');
             console.log(`[OPERATOR LOCK] ${instanceId} -> ${phone}: direct WhatsApp reply activated handoff lock.`);
@@ -635,6 +639,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     contactInfo.number, contactInfo.id
                 ]);
             }
+            if (!isValidChatPhone(cleanNumber)) return;
 
             if (cleanNumber) {
                 realSender = `${cleanNumber}@c.us`; 
