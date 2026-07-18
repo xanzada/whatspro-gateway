@@ -483,17 +483,21 @@
             text-transform: uppercase;
         }
 
-        .audio-wrap {
+ .audio-wrap {
     display: block;
-    width: min(280px, 100%);
+    flex: 0 0 280px;
+    width: 280px;
+    min-width: 250px;
     max-width: 100%;
     margin-top: 4px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .audio-player {
     display: block;
-    width: min(280px, 100%);
+    flex: 0 0 280px;
+    width: 280px;
+    min-width: 250px;
     max-width: 100%;
     height: 36px;
     margin: 0;
@@ -1107,56 +1111,7 @@
     `;
 }
 
-async function hydrateAudioPlayers() {
-    const wrappers = messagesEl.querySelectorAll(
-        '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
-    );
-
-    for (const wrapper of wrappers) {
-        const audio = wrapper.querySelector('audio');
-        const messageId = wrapper.dataset.audioId;
-
-        if (!messageId) continue;
-
-        if (audio?.getAttribute('src')) {
-            wrapper.dataset.audioLoaded = '1';
-            continue;
-        }
-
-        wrapper.dataset.audioLoaded = '1';
-
-        try {
-            const result = await fetchJson(
-                `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
-            );
-
-            if (!result?.mediaData) {
-                throw new Error('MEDIA_EMPTY');
-            }
-
-            const player = wrapper.querySelector('audio');
-
-            if (!player) {
-                throw new Error('AUDIO_ELEMENT_MISSING');
-            }
-
-            let mediaData = String(result.mediaData).trim();
-
-            if (!mediaData.startsWith('data:')) {
-                mediaData = `data:audio/ogg;base64,${mediaData}`;
-            } else if (!mediaData.includes(';base64,')) {
-                mediaData = `data:audio/ogg;base64,${mediaData.split(',').pop()}`;
-            }
-
-            player.src = mediaData;
-            player.load();
-            player.disabled = false;
-        } catch (error) {
-            delete wrapper.dataset.audioLoaded;
-            setTimeout(hydrateAudioPlayers, 3000);
-        }
-    }
-}
+hydrateAudioPlayers()
         function renderHistory(history) {
             if (!history || !history.length) {
                 messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
