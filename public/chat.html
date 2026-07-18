@@ -1111,38 +1111,60 @@
     `;
 }
 
-hydrateAudioPlayers()
-        function renderHistory(history) {
-            if (!history || !history.length) {
-                messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
-                return;
+async function hydrateAudioPlayers() {
+    var wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
+
+    for (var i = 0; i < wrappers.length; i++) {
+        var wrapper = wrappers[i];
+        var audio = wrapper.querySelector('audio');
+        var messageId = String(wrapper.getAttribute('data-audio-id') || '').trim();
+
+        if (!messageId) continue;
+
+        if (audio && audio.getAttribute('src')) {
+            wrapper.setAttribute('data-audio-loaded', '1');
+            continue;
+        }
+
+        wrapper.setAttribute('data-audio-loaded', '1');
+
+        try {
+            var result = await fetchJson(endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(messageId));
+
+            if (!result || !result.mediaData) {
+                throw new Error('MEDIA_EMPTY');
             }
 
-            messagesEl.innerHTML = history.map(item => {
-                const role = String(item.role || '').toLowerCase();
-                const rawText = String(item.text || '');
-                const text = cleanText(rawText);
-                const audioHtml = buildAudioHtml(item);
-                if (!text && !audioHtml && !rawText.includes('[System:')) return '';
+            var player = wrapper.querySelector('audio');
 
-                if (role === 'model' || role === 'assistant') {
-                    return `<div class="row model"><div class="bubble"><span class="bubble-label">${escapeHtml(t('botLabel'))}</span>${escapeHtml(text)}</div></div>`;
-                }
+            if (!player) {
+                throw new Error('AUDIO_ELEMENT_MISSING');
+            }
 
-                if (role === 'operator' || (role === 'system' && /\[Оператор:/i.test(rawText))) {
-                    return `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`;
-                }
+            var raw = String(result.mediaData).trim();
 
-                if (role === 'system') {
-                    return `<div class="row system"><div class="bubble">${escapeHtml(text || t('systemDefault'))}</div></div>`;
-                }
+            if (raw.indexOf('data:') === 0) {
+                var commaIndex = raw.indexOf(',');
+                raw = commaIndex >= 0 ? raw.substring(commaIndex + 1) : '';
+            }
 
-                return `<div class="row user"><div class="bubble">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
-            }).join('');
+            raw = raw.replace(/\s+/g, '');
 
-            scrollToBottomSafe(messagesEl);
-            hydrateAudioPlayers();
+            if (!raw) {
+                throw new Error('AUDIO_DATA_EMPTY');
+            }
+
+            var mediaData = 'data:audio/ogg;base64,' + raw;
+
+            player.removeAttribute('src');
+            player.setAttribute('src', mediaData);
+            player.load();
+        } catch (error) {
+            wrapper.removeAttribute('data-audio-loaded');
+            setTimeout(hydrateAudioPlayers, 3000);
         }
+    }
+}
 
         function updateComposerState() {
             const hasActive = Boolean(activePhone);
