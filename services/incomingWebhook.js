@@ -26,6 +26,10 @@ function normalizeInstanceId(value = '') {
   return /^[a-zA-Z0-9_-]{2,64}$/.test(instanceId) ? instanceId : '';
 }
 
+function isValidChatPhone(phone) {
+  return /^\d{10,15}$/.test(String(phone || ''));
+}
+
 function getPayloadPhone(payload = {}) {
   return normalizePhoneFromCandidates([
     payload.normalizedPhone,
@@ -75,7 +79,7 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
 async function saveIncomingMessage(payload) {
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
-  if (!instanceId || !phone) return { skipped: true, reason: 'missing_instance_or_phone' };
+  if (!instanceId || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
   if (!redisClient.isOpen) return { skipped: true, reason: 'redis_not_connected' };
 
   const timestamp = Date.now();

@@ -213,9 +213,8 @@ function getEntryCreatedAt(entry) {
 }
 
 function isOperatorEntry(entry) {
-  const role = String(entry?.role || '').toLowerCase();
   const source = String(entry?.source || '').toLowerCase();
-  return role === 'operator' || source === 'operator_panel' || source === 'whatsapp_app';
+  return source === 'operator_panel';
 }
 
 function isBotEntry(entry) {
@@ -233,6 +232,10 @@ function entryPreview(entry) {
   const text = String(entry.text || entry.body || '').trim();
   if (text) return text;
   return entry.hasMedia ? '[Media file]' : '';
+}
+
+function isValidChatPhone(phone) {
+  return /^\d{10,15}$/.test(String(phone || ''));
 }
 
 function normalizeChatEntry(entry) {
@@ -261,7 +264,7 @@ async function chatTtlSeconds(instanceId, phone) {
 }
 
 async function saveChatHistoryEntry(instanceId, phone, entry) {
-  if (!redisClient.isOpen) return;
+  if (!redisClient.isOpen || !isValidChatPhone(phone)) return;
 
   const createdAt = Number(entry.createdAt || Date.now());
   await Promise.all([
@@ -278,13 +281,13 @@ function parseInboxListEntry(raw) {
   const parsed = parseHistoryEntry(value);
   if (parsed && typeof parsed === 'object') {
     const phone = normalizePhone(parsed.phone || parsed.senderPhone || parsed.from || '');
-    if (!phone) return null;
+    if (!isValidChatPhone(phone)) return null;
     return { phone, updatedAt: getEntryCreatedAt(parsed) || Date.now() };
   }
 
   const [phonePart, scorePart] = value.split(/[,|]/);
   const phone = normalizePhone(phonePart);
-  if (!phone) return null;
+  if (!isValidChatPhone(phone)) return null;
   return { phone, updatedAt: Number(scorePart) || 0 };
 }
 
@@ -295,7 +298,7 @@ async function readInboxEntries(instanceId, limit) {
     const entries = [];
     for (let i = 0; i < rows.length; i += 2) {
       const phone = normalizePhone(String(rows[i] || '').split(',')[0]);
-      if (phone) entries.push({ phone, updatedAt: Number(rows[i + 1]) || 0 });
+      if (isValidChatPhone(phone)) entries.push({ phone, updatedAt: Number(rows[i + 1]) || 0 });
     }
     return entries;
   } catch (error) {
@@ -322,7 +325,7 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
     }
   }
 
-  const unread = !archived && !hasOperator && latestCustomerAt > Math.max(viewedAt, latestOperatorAt);
+  const unread = !archived && latestCustomerAt > Math.max(viewedAt, latestOperatorAt);
 
   return {
     phone: item.phone,
@@ -447,7 +450,7 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
 
   for (const row of inboxRows) {
     const phone = normalizePhone(row.phone);
-    if (!phone || seen.has(phone)) continue;
+    if (!isValidChatPhone(phone) || seen.has(phone)) continue;
     seen.add(phone);
     candidates.push({ phone, updatedAt: Number(row.updatedAt) || 0 });
     if (candidates.length >= limit) break;
@@ -534,7 +537,7 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
+  if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
 
   const limit = parseLimit(req.query.limit, 200, 1000);
@@ -564,7 +567,7 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
     const action = req.body?.action;
 
     if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-    if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
+    if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
 
     if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
 
@@ -594,16 +597,14 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
         ]);
         const allMembers = await redisClient.sendCommand(['ZRANGE', chatInboxKey(instanceId), '0', '-1']).catch(() => []);
         const membersToDelete = allMembers.filter(m => m.startsWith(phone));
-        await Promise.all([
-            membersToDelete.length
-                ? redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), ...membersToDelete])
-                : redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]).catch(() => 0),
-            redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]).catch(() => 0),
-            redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]).catch(() => 0),
-            redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]).catch(() => 0),
-            redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]),
-            redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]).catch(() => 0)
-        ]);
+        if (membersToDelete.length) {
+            await redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), ...membersToDelete]);
+        } else {
+            await redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]).catch(() => 0);
+        }
+        await redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]).catch(() => 0);
+        await redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]);
+        await redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]).catch(() => 0);
     } else {
         return res.status(400).json({ error: 'BAD_ACTION' });
     }
@@ -616,7 +617,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
     const { text } = req.body || {};
 
     if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-    if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
+    if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
     if (!text) return res.status(400).json({ error: 'TEXT_REQUIRED' });
 
     const ok = await sendWhatsAppText(instanceId, phone, text);
@@ -699,7 +700,7 @@ app.post('/api/send', requireApi, async (req, res) => {
   // 1-ӨЗГЕРІС: Міндетті түрде телефонды нормализациялау (RC-7 шешімі)
   // Бұл 8707, +7707 форматтарының барлығын таза 7707... форматына әкеледі.
   const cleanPhone = normalizePhone(phone);
-  if (!cleanPhone) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
+  if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
 
   let ok = true;
   

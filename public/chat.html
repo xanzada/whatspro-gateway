@@ -875,7 +875,7 @@
             const active = chats.filter(chat => !isChatArchived(chat));
             const archived = chats.filter(isChatArchived);
             return {
-                new: active.filter(chat => chat.unread && !chat.hasOperator).length,
+                new: active.filter(chat => chat.unread).length,
                 all: active.filter(chat => chat.viewed && !chat.hasOperator).length,
                 operator: active.filter(chat => chat.hasOperator).length,
                 archive: archived.length
@@ -888,7 +888,7 @@
                 const archived = isChatArchived(chat);
                 if (activeTab === 'archive' && !archived) return false;
                 if (activeTab !== 'archive' && archived) return false;
-                if (activeTab === 'new' && (!chat.unread || chat.hasOperator)) return false;
+                if (activeTab === 'new' && !chat.unread) return false;
                 if (activeTab === 'all' && (!chat.viewed || chat.hasOperator)) return false;
                 if (activeTab === 'operator' && !chat.hasOperator) return false;
                 if (!query) return true;
@@ -928,12 +928,14 @@
         }
 
         function renderList() {
+            const previousTop = listEl.scrollTop;
             renderTabs();
             updateDirectChatButton();
             const items = filteredChats();
 
             if (!items.length) {
                 listEl.innerHTML = emptyListMarkup();
+                listEl.scrollTop = previousTop;
                 return;
             }
 
@@ -975,6 +977,7 @@
                         ${actions}
                     </article>`;
             }).join('');
+            listEl.scrollTop = previousTop;
         }
 
         // АУДИО ОЙНАТҚЫШ
@@ -1032,14 +1035,15 @@
 
                 const outgoing = item.direction === 'outgoing' || item.fromMe === true || ['assistant', 'model', 'operator'].includes(role);
                 const source = String(item.source || '').toLowerCase();
-                const isBot = ['assistant', 'model', 'bot'].includes(role);
-                const isOperator = role === 'operator' || source === 'operator_panel' || source === 'whatsapp_app';
+                const isOperator = source === 'operator_panel';
+                const isBot = ['assistant', 'model', 'bot'].includes(role) || (outgoing && !isOperator && role !== 'system');
 
                 if (isBot) {
-                    return `<div class="row model"><div class="bubble"><span class="bubble-label">${escapeHtml(t('botLabel'))}</span>${escapeHtml(text)}</div></div>`;
+                    const bubbleClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
+                    return `<div class="row model"><div class="${bubbleClass}"><span class="bubble-label">Bot</span>${escapeHtml(text)}${audioHtml}</div></div>`;
                 }
 
-                if (outgoing || role === 'operator' || (role === 'system' && /\[Оператор:/i.test(rawText))) {
+                if (isOperator) {
                     return `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`;
                 }
 
