@@ -421,6 +421,38 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
     res.json({ success: true });
 });
 
+// 🚀 ЖАҢА ФУНКЦИЯ: ОПЕРАТОРДЫҢ ХАТ ЖІБЕРУ ЛОГИКАСЫ
+app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+    const instanceId = String(req.params.instanceId || '').trim();
+    const phone = String(req.params.phone || '').replace(/\D/g, '');
+    const { text } = req.body || {};
+
+    if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+    if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
+    if (!text) return res.status(400).json({ error: 'TEXT_REQUIRED' });
+
+    // WhatsApp-қа хатты жіберу
+    const ok = await sendWhatsAppText(instanceId, phone, text);
+    
+    // Сәтті кетсе, базаға (тарихқа) сақтау
+    if (ok) {
+        await saveChatHistoryEntry(instanceId, phone, {
+            id: `operator:${Date.now()}:${phone}`,
+            instanceId,
+            phone,
+            direction: 'outgoing',
+            fromMe: true,
+            role: 'operator',
+            text,
+            body: text,
+            type: 'chat',
+            source: 'operator_panel'
+        });
+    }
+
+    res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
+});
+
 app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   const label = String(req.body?.label || '').trim();
