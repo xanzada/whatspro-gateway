@@ -27,6 +27,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const CHAT_ACCESS_SECRET = process.env.CHAT_ACCESS_SECRET || process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSPRO_API_TOKEN || 'dev';
 
 app.set('trust proxy', true);
 app.use(express.json({ limit: '25mb' }));
@@ -80,13 +81,23 @@ function hasApiToken(req) {
   return expected && safeEqual(incoming, expected);
 }
 
+function signChatToken(instanceId) {
+  return crypto.createHmac('sha256', CHAT_ACCESS_SECRET).update(String(instanceId || '')).digest('hex');
+}
+
+function hasChatToken(req) {
+  const instanceId = String(req.params?.instanceId || req.body?.instanceId || req.query?.instance || req.headers['x-chat-instance'] || '').trim();
+  const token = String(req.headers['x-chat-token'] || req.query?.chatToken || '');
+  return Boolean(instanceId && token && safeEqual(token, signChatToken(instanceId)));
+}
+
 function requireApi(req, res, next) {
   if (hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
 function requireUiOrApi(req, res, next) {
-  if (hasApiToken(req) || readSession(req)) return next();
+  if (hasApiToken(req) || readSession(req) || hasChatToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
@@ -116,6 +127,7 @@ async function renderChatHtml(req, res) {
     ...tenant,
     instance: tenant.instance || instance,
     apiBase: publicApiBase(req),
+    chatToken: signChatToken(tenant.instance || instance),
     endpoints: {
       inbox: '/api/chat/inbox',
       history: '/api/chat/history',
@@ -191,6 +203,10 @@ function chatArchiveMarkerKey(instanceId, phone) {
 
 function chatViewedKey(instanceId) {
   return `chatwoot:viewed:${instanceId}`;
+}
+
+function chatMediaKey(instanceId, messageId) {
+  return `chatwoot:media:${instanceId}:${messageId}`;
 }
 
 function openbotHistoryKey(instanceId, phone) {
@@ -471,9 +487,10 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
     if (candidates.length >= limit) break;
   }
 
-  const [archiveRows, histories, viewedScores] = await Promise.all([
+  const [archiveRows, histories, openbotHistories, viewedScores] = await Promise.all([
     redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []),
     Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
+    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
     Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null)))
   ]);
   const archiveSet = new Set((archiveRows || []).map(normalizePhone).filter(Boolean));
@@ -481,7 +498,7 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
   const stalePhones = [];
 
   candidates.forEach((item, index) => {
-    const historyRows = histories[index] || [];
+    const historyRows = [...(histories[index] || []), ...(openbotHistories[index] || [])];
     if (!historyRows.length) {
       stalePhones.push(item.phone);
       return;
@@ -587,9 +604,14 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!messageId || messageId.length > 200 || /[\s/\\]/.test(messageId)) return res.status(400).json({ error: 'BAD_MESSAGE_ID' });
 
-  const mediaData = await getBase64Media(instanceId, messageId);
-  if (!mediaData) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
-  res.json({ success: true, instanceId, messageId, mediaData });
+  const persisted = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '');
+  const mediaData = persisted ? '' : await getBase64Media(instanceId, messageId);
+  const result = persisted || mediaData;
+  if (result && !persisted) {
+    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, messageId), result, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
+  }
+  if (!result) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
+  res.json({ success: true, instanceId, messageId, mediaData: result });
 });
 
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {

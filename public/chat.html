@@ -484,22 +484,11 @@
         }
 
         /* АУДИО ОЙНАТҚЫШ СТИЛЬДЕРІ */
-        .audio-player {
-            width: 100%;
-            max-width: 100%;
-            min-width: 0;
-            height: 38px;
-            margin-top: 0;
-            display: block;
-        }
-
         .audio-wrap {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 52px;
-            gap: 8px;
-            align-items: center;
+            display: block;
             margin-top: 8px;
         }
+        .audio-player { display: none; }
         .audio-status {
             min-height: 34px;
             display: flex;
@@ -508,18 +497,43 @@
             font-size: 12px;
             font-weight: 800;
         }
-        .audio-wrap.loading {
-            grid-template-columns: minmax(0, 1fr);
+        .wa-audio {
+            min-width: 280px;
+            max-width: 100%;
+            display: grid;
+            grid-template-columns: 42px minmax(120px, 1fr) 44px 52px;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: #075e46;
         }
-        .audio-speed {
-            height: 34px;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, .12);
-            color: #eaf1fb;
-            font-size: 12px;
+        .audio-play, .audio-speed {
+            height: 36px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, .18);
+            color: #f1fff8;
+            font-size: 13px;
             font-weight: 900;
         }
-        .audio-bubble { width: min(360px, 86%); max-width: min(360px, 86%); }
+        .audio-play { width: 36px; font-size: 16px; }
+        .audio-wave {
+            height: 30px;
+            background:
+                repeating-linear-gradient(90deg, rgba(226, 255, 244, .34) 0 3px, transparent 3px 9px);
+            mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+            border-radius: 999px;
+        }
+        .audio-time {
+            color: rgba(241, 255, 248, .76);
+            font-size: 13px;
+            font-weight: 850;
+            text-align: right;
+        }
+        .audio-speed {
+            min-width: 48px;
+        }
+        .audio-bubble { width: min(430px, 90%); max-width: min(430px, 90%); }
 
         .composer {
             position: sticky;
@@ -747,6 +761,14 @@
         }
 
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
+        const chatToken = String(chatConfig.chatToken || '');
+
+        function apiHeaders(extra = {}) {
+            return {
+                ...(chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}),
+                ...extra
+            };
+        }
         const endpoints = {
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
@@ -958,6 +980,8 @@
                 const archived = isChatArchived(chat);
                 if (activeTab === 'archive' && !archived) return false;
                 if (activeTab !== 'archive' && archived) return false;
+                const isActiveChat = normalizePhone(chat.phone) === activePhone;
+                if (isActiveChat && !query) return true;
                 if (activeTab === 'new' && !chat.unread) return false;
                 if (activeTab === 'all' && (!chat.viewed || chat.hasOperator)) return false;
                 if (activeTab === 'operator' && !chat.hasOperator) return false;
@@ -1074,14 +1098,46 @@
                 ? (rawData.startsWith('data:') ? rawData : `data:${safeMediaType};base64,${rawData}`)
                 : '';
             const messageId = String(item.id || '').replace(/"/g, '&quot;');
+            const player = (source) => `
+                <div class="wa-audio">
+                    <button class="audio-play" type="button" data-audio-play aria-label="Play">▶</button>
+                    <div class="audio-wave" aria-hidden="true"></div>
+                    <span class="audio-time" data-audio-time>0:00</span>
+                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
+                    <audio class="audio-player" preload="metadata" src="${escapeHtml(source)}"></audio>
+                </div>`;
             
             return `
                 <div class="audio-wrap ${src ? '' : 'loading'}" data-audio-wrapper data-audio-id="${escapeHtml(messageId)}">
-                    ${src
-                        ? `<audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>`
-                        : `<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>`}
-                    ${src ? `<button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>` : ''}
+                    ${src ? player(src) : `<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>`}
                 </div>`;
+        }
+
+        function formatAudioTime(value) {
+            const seconds = Math.max(0, Math.floor(Number(value) || 0));
+            return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+        }
+
+        function syncAudioWidgets() {
+            for (const audio of messagesEl.querySelectorAll('audio.audio-player:not([data-bound])')) {
+                audio.dataset.bound = '1';
+                const widget = audio.closest('.wa-audio');
+                const play = widget?.querySelector('[data-audio-play]');
+                const time = widget?.querySelector('[data-audio-time]');
+                const update = () => {
+                    if (time) time.textContent = formatAudioTime(audio.currentTime || audio.duration || 0);
+                    if (play) play.textContent = audio.paused ? '▶' : 'Ⅱ';
+                };
+                audio.addEventListener('loadedmetadata', update);
+                audio.addEventListener('timeupdate', update);
+                audio.addEventListener('play', update);
+                audio.addEventListener('pause', update);
+                audio.addEventListener('ended', () => {
+                    audio.currentTime = 0;
+                    update();
+                });
+                update();
+            }
         }
 
         async function hydrateAudioPlayers() {
@@ -1097,11 +1153,17 @@
                     if (!data.mediaData) throw new Error('MEDIA_EMPTY');
                     wrapper.classList.remove('loading');
                     wrapper.innerHTML = `
-                        <audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>
-                        <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>`;
+                        <div class="wa-audio">
+                            <button class="audio-play" type="button" data-audio-play aria-label="Play">▶</button>
+                            <div class="audio-wave" aria-hidden="true"></div>
+                            <span class="audio-time" data-audio-time>0:00</span>
+                            <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
+                            <audio class="audio-player" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>
+                        </div>`;
+                    syncAudioWidgets();
                 } catch {
                     const status = wrapper.querySelector('[data-audio-status]');
-                    if (status) status.textContent = 'Аудио қолжетімсіз';
+                    if (status) status.textContent = 'Аудио жүктелмеді. Қайта ашып көріңіз.';
                 }
             }
         }
@@ -1168,6 +1230,7 @@
             } else {
                 messagesEl.scrollTop = previousTop + (messagesEl.scrollHeight - previousHeight);
             }
+            syncAudioWidgets();
             hydrateAudioPlayers();
         }
 
@@ -1214,7 +1277,7 @@
 
         // REST API
         async function fetchJson(url) {
-            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin', cache: 'no-store' });
+            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin', cache: 'no-store', headers: apiHeaders() });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
             return data;
@@ -1225,7 +1288,7 @@
                 method: 'POST',
                 credentials: 'same-origin',
                 cache: 'no-store',
-                headers: { 'content-type': 'application/json' },
+                headers: apiHeaders({ 'content-type': 'application/json' }),
                 body: JSON.stringify(body)
             });
             const data = await response.json().catch(() => ({}));
@@ -1465,17 +1528,29 @@
         });
 
         messagesEl.addEventListener('click', event => {
+            const playButton = event.target.closest('[data-audio-play]');
+            if (playButton) {
+                const audio = playButton.closest('.wa-audio')?.querySelector('audio');
+                if (!audio) return;
+                for (const other of messagesEl.querySelectorAll('audio.audio-player')) {
+                    if (other !== audio) other.pause();
+                }
+                if (audio.paused) audio.play().catch(() => {});
+                else audio.pause();
+                return;
+            }
+
             const speedButton = event.target.closest('[data-audio-speed]');
             if (!speedButton) return;
 
             const speeds = [1, 1.5, 2];
             const current = Number(speedButton.dataset.speed || 1);
             const next = speeds[(speeds.indexOf(current) + 1) % speeds.length] || 1;
-            const wrapper = speedButton.closest('[data-audio-wrapper]');
+            const wrapper = speedButton.closest('.wa-audio') || speedButton.closest('[data-audio-wrapper]');
             const audio = wrapper?.querySelector('audio');
             if (audio) audio.playbackRate = next;
             speedButton.dataset.speed = String(next);
-            speedButton.textContent = `${next}x`;
+            speedButton.textContent = `${String(next).replace('.', ',')}x`;
         });
 
         searchInput.addEventListener('input', () => renderList());

@@ -17,6 +17,10 @@ function isValidChatPhone(phone) {
     return /^\d{10,15}$/.test(String(phone || ''));
 }
 
+function chatMediaKey(instanceId, messageId) {
+    return `chatwoot:media:${instanceId}:${messageId}`;
+}
+
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
 const initializingClients = new Map();
@@ -658,6 +662,10 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         if (msg.hasMedia && (msg.type === 'audio' || msg.type === 'ptt')) {
             try {
                 downloadedMedia = await msg.downloadMedia();
+                if (downloadedMedia?.data && redisClient.isOpen) {
+                    const mediaUrl = `data:${downloadedMedia.mimetype || 'audio/ogg'};base64,${downloadedMedia.data}`;
+                    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, msg.id.id), mediaUrl, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
+                }
             } catch (error) {
                 console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
             }
