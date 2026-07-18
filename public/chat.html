@@ -1008,6 +1008,8 @@
                 return;
             }
 
+
+
             listEl.innerHTML = items.map(chat => {
                 const phone = normalizePhone(chat.phone);
                 const active = activePhone === phone ? 'active' : '';
@@ -1054,6 +1056,28 @@
             }).join('');
             listEl.scrollTop = previousTop;
         }
+
+        async function renderHistory(history) {
+    if (!messagesEl) return;
+
+    // Барлық ескі хаттарды тазалау
+    messagesEl.innerHTML = '';
+
+    // Әрбір хабарламаны экранға шығару
+    if (Array.isArray(history)) {
+        history.forEach(function(item) {
+            // buildMessageHtml функциясы хаттың түріне қарай HTML құрастырады
+            var messageHtml = buildMessageHtml(item);
+            if (messageHtml) {
+                messagesEl.insertAdjacentHTML('beforeend', messageHtml);
+            }
+        });
+    }
+
+    // Бұрынғы қателерді түзету үшін шақырылатын функциялар
+    scrollToBottomSafe(messagesEl);
+    hydrateAudioPlayers();
+}
 
         function buildAudioHtml(item) {
     if (!item) return '';
