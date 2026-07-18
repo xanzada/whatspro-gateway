@@ -647,6 +647,10 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
         await redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]).catch(() => 0);
         await redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]);
         await redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]).catch(() => 0);
+        await Promise.all([
+            redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]).catch(() => 0),
+            redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]).catch(() => 0)
+        ]);
     } else {
         return res.status(400).json({ error: 'BAD_ACTION' });
     }

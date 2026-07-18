@@ -508,6 +508,9 @@
             font-size: 12px;
             font-weight: 800;
         }
+        .audio-wrap.loading {
+            grid-template-columns: minmax(0, 1fr);
+        }
         .audio-speed {
             height: 34px;
             border-radius: 8px;
@@ -734,7 +737,16 @@
         const params = new URLSearchParams(window.location.search);
         const chatConfig = window.__CHAT_CONFIG__ || {};
         const instanceId = (params.get('instance') || chatConfig.instance || 'prestige').trim();
-        const apiBase = String(chatConfig.apiBase || window.location.origin).replace(/\/+$/, '');
+        function sameOriginApiBase(value) {
+            try {
+                const raw = String(value || '').replace(/\/+$/, '');
+                return raw && new URL(raw, window.location.href).origin === window.location.origin ? raw : '';
+            } catch {
+                return '';
+            }
+        }
+
+        const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const endpoints = {
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
@@ -1049,24 +1061,26 @@
         // АУДИО ОЙНАТҚЫШ
         function buildAudioHtml(item) {
             const mediaKind = String(item?.mediaKind || item.type || '').toLowerCase();
-            const mediaTypeRaw = String(item.mediaType || 'audio/ogg').trim();
-            const mediaType = (mediaTypeRaw.split(';')[0] || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
-            const isMedia = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/');
+            const mediaTypeRaw = String(item.mediaType || '').trim();
+            const mediaType = (mediaTypeRaw.split(';')[0] || '').replace(/[^\w/+.-]/g, '');
+            const hasAudioPayload = Boolean(item.audioMessage || item.data?.message?.audioMessage);
+            const isMedia = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/') || hasAudioPayload;
             if (!isMedia) return '';
             
             const rawData = String(item.mediaData || item.body || '');
             const hasInlineAudio = rawData.startsWith('data:audio') || rawData.includes(';base64,') || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+            const safeMediaType = mediaType || 'audio/ogg';
             const src = hasInlineAudio
-                ? (rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData}`)
+                ? (rawData.startsWith('data:') ? rawData : `data:${safeMediaType};base64,${rawData}`)
                 : '';
             const messageId = String(item.id || '').replace(/"/g, '&quot;');
             
             return `
-                <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(messageId)}">
+                <div class="audio-wrap ${src ? '' : 'loading'}" data-audio-wrapper data-audio-id="${escapeHtml(messageId)}">
                     ${src
                         ? `<audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>`
                         : `<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>`}
-                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
+                    ${src ? `<button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>` : ''}
                 </div>`;
         }
 
@@ -1081,10 +1095,10 @@
                 try {
                     const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(wrapper.dataset.audioId)}`);
                     if (!data.mediaData) throw new Error('MEDIA_EMPTY');
-                    const status = wrapper.querySelector('[data-audio-status]');
-                    if (status) {
-                        status.outerHTML = `<audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>`;
-                    }
+                    wrapper.classList.remove('loading');
+                    wrapper.innerHTML = `
+                        <audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>
+                        <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>`;
                 } catch {
                     const status = wrapper.querySelector('[data-audio-status]');
                     if (status) status.textContent = 'Аудио қолжетімсіз';
@@ -1200,7 +1214,7 @@
 
         // REST API
         async function fetchJson(url) {
-            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin' });
+            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin', cache: 'no-store' });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
             return data;
@@ -1210,6 +1224,7 @@
             const response = await fetch(`${apiBase}${url}`, {
                 method: 'POST',
                 credentials: 'same-origin',
+                cache: 'no-store',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify(body)
             });
@@ -1343,7 +1358,6 @@
             if (!cleanPhone || isResolving) return;
 
             isResolving = true;
-            renderList();
             updateComposerState();
 
             try {
@@ -1353,12 +1367,21 @@
                 if (action === 'restore') showToast(t('restoreDone'));
                 if (action === 'delete') showToast(t('deleteDone'));
 
+                if (action === 'delete') {
+                    chats = chats.filter(chat => normalizePhone(chat.phone) !== cleanPhone);
+                } else {
+                    const chat = chats.find(item => normalizePhone(item.phone) === cleanPhone);
+                    if (chat) chat.closed = action === 'close' ? true : action === 'restore' ? false : chat.closed;
+                }
+                inboxSignature = '';
+
                 if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
                     activePhone = '';
                     app.classList.remove('chat-open');
                     setActiveHeader('');
                     messagesEl.innerHTML = '';
                 }
+                renderList();
             } catch (err) {
                 showToast(t('resolveFailed'));
             } finally {
