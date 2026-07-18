@@ -793,7 +793,7 @@ app.post('/api/send', requireApi, async (req, res) => {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
 
-  if (ok && text) {
+  if (ok && (text || media)) {
     await saveChatHistoryEntry(instanceId, cleanPhone, {
       id: `api:${Date.now()}:${cleanPhone}`,
       instanceId,
@@ -801,9 +801,12 @@ app.post('/api/send', requireApi, async (req, res) => {
       direction: 'outgoing',
       fromMe: true,
       role: 'assistant',
-      text,
-      body: text,
-      type: media ? 'media' : 'chat',
+      text: text || '',
+      body: text || '',
+      type: media ? 'audio' : 'chat',
+      hasMedia: Boolean(media),
+      mediaData: (media && media.base64) ? media.base64 : '',
+      mediaType: (media && media.mimeType) ? media.mimeType : 'audio/ogg',
       source: 'api_send'
     });
   }

@@ -1106,85 +1106,110 @@
         }
 
         // --- АУДИО ОЙНАТҚЫШ (WHATSAPP STYLE) ---
+// --- АУДИО ОЙНАТҚЫШ (WHATSAPP STYLE) ---
         function formatAudioTime(value) {
-            const seconds = Math.max(0, Math.floor(Number(value) || 0));
-            return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+            var seconds = Math.max(0, Math.floor(Number(value) || 0));
+            var m = Math.floor(seconds / 60);
+            var s = String(seconds % 60);
+            if (s.length < 2) s = '0' + s;
+            return m + ':' + s;
         }
 
-        function audioMarkup(src = '') {
+        function audioMarkup(src) {
+            var isLoaded = src ? true : false;
+            var safeSrc = src ? escapeHtml(src) : '';
+            var timeText = isLoaded ? '0:00' : 'Күтілуде..';
             return `
-                <div class="wa-audio ${src ? '' : 'loading'}">
-                    <button class="audio-play" type="button" data-audio-play aria-label="Play" ${src ? '' : 'disabled'}>&#9658;</button>
+                <div class="wa-audio ${isLoaded ? '' : 'loading'}">
+                    <button class="audio-play" type="button" data-audio-play aria-label="Play" ${isLoaded ? '' : 'disabled'}>&#9658;</button>
                     <div class="audio-wave-col">
                         <div class="audio-wave" aria-hidden="true"></div>
                         <div class="audio-meta">
-                            <span class="audio-time" data-audio-time>0:00</span>
+                            <span class="audio-time" data-audio-time>${timeText}</span>
                             <button class="audio-speed" type="button" data-audio-speed data-speed="1">1x</button>
                         </div>
                     </div>
-                    <audio class="audio-player" preload="metadata" src="${escapeHtml(src)}"></audio>
+                    <audio class="audio-player" preload="metadata" src="${safeSrc}"></audio>
                 </div>`;
         }
 
         function buildAudioHtml(item) {
-            const mediaKind = String(item?.mediaKind || item.type || '').toLowerCase();
-            const mediaType = String(item.mediaType || '').split(';')[0].replace(/[^\w/+.-]/g, '');
-            const hasAudioPayload = Boolean(item.audioMessage || item.data?.message?.audioMessage);
-            const isAudio = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/') || hasAudioPayload;
+            if (!item) return '';
+            var mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
+            var mediaType = String(item.mediaType || '').split(';')[0].replace(/[^\w/+.-]/g, '');
+            var hasAudioMsg = false;
+            if (item.audioMessage) hasAudioMsg = true;
+            if (item.data && item.data.message && item.data.message.audioMessage) hasAudioMsg = true;
+            
+            var isAudio = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.indexOf('audio/') === 0 || hasAudioMsg;
             if (!isAudio) return '';
 
-            const rawData = String(item.mediaData || '');
-            const hasInlineAudio = rawData.startsWith('data:audio') || rawData.includes(';base64,') || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
-            const src = hasInlineAudio
-                ? (rawData.startsWith('data:') ? rawData : `data:${mediaType || 'audio/ogg'};base64,${rawData}`)
-                : '';
+            var rawData = String(item.mediaData || '');
+            var hasInlineAudio = rawData.indexOf('data:audio') === 0 || rawData.indexOf(';base64,') > -1 || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+            
+            var src = '';
+            if (hasInlineAudio) {
+                src = rawData.indexOf('data:') === 0 ? rawData : 'data:' + (mediaType || 'audio/ogg') + ';base64,' + rawData;
+            }
 
-            return `<div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(item.id || '')}">${src ? audioMarkup(src) : '<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>'}</div>`;
+            var itemId = item.id || '';
+            // Мұнда біз әрқашан audioMarkup шақырамыз, бос болса да рамкасы тұрады
+            return '<div class="audio-wrap" data-audio-wrapper data-audio-id="' + escapeHtml(itemId) + '">' + audioMarkup(src) + '</div>';
         }
 
         function syncAudioWidgets() {
-            for (const audio of messagesEl.querySelectorAll('audio.audio-player:not([data-bound])')) {
+            var audios = messagesEl.querySelectorAll('audio.audio-player:not([data-bound])');
+            for (var i = 0; i < audios.length; i++) {
+                var audio = audios[i];
                 audio.dataset.bound = '1';
-                const widget = audio.closest('.wa-audio');
-                const play = widget?.querySelector('[data-audio-play]');
-                const time = widget?.querySelector('[data-audio-time]');
-                const update = () => {
-                    if (time) time.textContent = formatAudioTime(audio.currentTime || audio.duration || 0);
-                    if (play) play.innerHTML = audio.paused ? '&#9658;' : '&#10074;&#10074;';
-                };
-                audio.addEventListener('loadedmetadata', update);
-                audio.addEventListener('timeupdate', update);
-                audio.addEventListener('play', update);
-                audio.addEventListener('pause', update);
-                audio.addEventListener('ended', () => { audio.currentTime = 0; update(); });
-                update();
+                
+                audio.addEventListener('loadedmetadata', function(e) {
+                    var t = e.target.closest('.wa-audio').querySelector('[data-audio-time]');
+                    if (t) t.textContent = formatAudioTime(e.target.currentTime || e.target.duration || 0);
+                });
+                audio.addEventListener('timeupdate', function(e) {
+                    var t = e.target.closest('.wa-audio').querySelector('[data-audio-time]');
+                    if (t) t.textContent = formatAudioTime(e.target.currentTime || e.target.duration || 0);
+                });
+                audio.addEventListener('play', function(e) {
+                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
+                    if (p) p.innerHTML = '&#10074;&#10074;';
+                });
+                audio.addEventListener('pause', function(e) {
+                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
+                    if (p) p.innerHTML = '&#9658;';
+                });
+                audio.addEventListener('ended', function(e) {
+                    e.target.currentTime = 0;
+                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
+                    if (p) p.innerHTML = '&#9658;';
+                });
             }
         }
 
-       async function hydrateAudioPlayers() {
-            const wrappers = [...messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])')];
-            for (const wrapper of wrappers) {
-                if (wrapper.querySelector('audio')?.getAttribute('src')) {
+        async function hydrateAudioPlayers() {
+            var wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
+            for (var i = 0; i < wrappers.length; i++) {
+                var wrapper = wrappers[i];
+                var audioEl = wrapper.querySelector('audio');
+                if (audioEl && audioEl.getAttribute('src')) {
                     wrapper.dataset.audioLoaded = '1';
                     continue;
                 }
-                const id = wrapper.dataset.audioId;
+                var id = wrapper.dataset.audioId;
                 if (!id) continue;
 
                 wrapper.dataset.audioLoaded = '1';
                 try {
-                    const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
-                    if (!data.mediaData) throw new Error('MEDIA_EMPTY');
+                    var data = await fetchJson(endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
+                    if (!data || !data.mediaData) throw new Error('MEDIA_EMPTY');
                     wrapper.innerHTML = audioMarkup(data.mediaData);
                     syncAudioWidgets();
                 } catch (e) {
-                    const status = wrapper.querySelector('[data-audio-status]');
-                    // Егер қате болса, бірден тоқтатпай, 3 секундтан соң қайта сұраймыз
-                    if (status && status.textContent !== 'Аудио жүктелмеді') {
-                        status.textContent = 'Аудио жүктелуде... (күтіңіз)';
-                    }
-                    delete wrapper.dataset.audioLoaded; // Келесі циклде қайта жүктеу үшін өшіреміз
-                    setTimeout(hydrateAudioPlayers, 3000); 
+                    var status = wrapper.querySelector('[data-audio-time]');
+                    if (status) status.textContent = 'Қате!';
+                    delete wrapper.dataset.audioLoaded;
+                    setTimeout(hydrateAudioPlayers, 3000);
                 }
             }
         }
