@@ -329,26 +329,22 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
 
   for (let i = 0; i < rows.length; i += 2) {
     const rawPhone = rows[i];
-    // 🚀 СПАМДЫ ТАЗАЛАУ: үтірді қиып, тек таза нөмірді аламыз (190 спам жоғалады)
+    // Спамды тазалау
     const purePhone = rawPhone.split(',')[0].replace(/\D/g, '');
     if (!purePhone || seen.has(purePhone)) continue;
 
     seen.add(purePhone);
     phones.push(purePhone);
-    items.push({
-        phone: purePhone,
-        updatedAt: Number(rows[i + 1]) || 0
-    });
+    items.push({ phone: purePhone, updatedAt: Number(rows[i + 1]) || 0 });
   }
 
-  // 🚀 АРХИВ ЖӘНЕ ОПЕРАТОР СТАТУСТАРЫН БАЗАДАН ОҚУ
   if (phones.length > 0) {
-      const archivedKeys = await redisClient.sMembers(`chatwoot:archive:${instanceId}`);
+      const archivedKeys = await redisClient.sendCommand(['SMEMBERS', `chatwoot:archive:${instanceId}`]).catch(() => []);
       const archiveSet = new Set(archivedKeys || []);
 
-      const pipeline = redisClient.multi();
-      phones.forEach(p => pipeline.lRange(`chatwoot:history:${instanceId}:${p}`, -1, -1));
-      const lastMessages = await pipeline.exec();
+      const lastMessages = await Promise.all(
+          phones.map(p => redisClient.sendCommand(['LRANGE', `chatwoot:history:${instanceId}:${p}`, '-1', '-1']).catch(() => []))
+      );
 
       items.forEach((item, idx) => {
           item.closed = archiveSet.has(item.phone);
@@ -375,7 +371,6 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
 
   const limit = parseLimit(req.query.limit, 200, 1000);
   
-  // 🚀 ОСЫ ЖЕР ҚАЛЫП ҚОЙМАУЫ ҮШІН ТОЛЫҚТАЙ ҚАЙТАРЫЛДЫ (AI БОТТЫҢ ХАТТАРЫ)
   const [chatRows, openbotRows] = await Promise.all([
     redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, phone), String(-limit), '-1']),
     redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, phone), String(-limit), '-1']).catch(() => [])
@@ -395,7 +390,6 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
   res.json({ success: true, instanceId, phone, history });
 });
 
-// 🚀 ЖАҢА ФУНКЦИЯ: АРХИВ ЖӘНЕ УДАЛИТЬ ЕТУ ЛОГИКАСЫ
 app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = String(req.params.phone || '').replace(/\D/g, '');
@@ -405,23 +399,21 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
     if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
 
     if (action === 'close') {
-        await redisClient.sAdd(`chatwoot:archive:${instanceId}`, phone);
+        await redisClient.sendCommand(['SADD', `chatwoot:archive:${instanceId}`, phone]);
     } else if (action === 'restore') {
-        await redisClient.sRem(`chatwoot:archive:${instanceId}`, phone);
+        await redisClient.sendCommand(['SREM', `chatwoot:archive:${instanceId}`, phone]);
     } else if (action === 'delete') {
-        await redisClient.sRem(`chatwoot:archive:${instanceId}`, phone);
-        // Бұрынғы спам болған (үтірлі) нөмірлерді де тауып өшіру
-        const allMembers = await redisClient.zRange(chatInboxKey(instanceId), 0, -1);
+        await redisClient.sendCommand(['SREM', `chatwoot:archive:${instanceId}`, phone]);
+        const allMembers = await redisClient.sendCommand(['ZRANGE', chatInboxKey(instanceId), '0', '-1']);
         const membersToDelete = allMembers.filter(m => m.startsWith(phone));
         if (membersToDelete.length > 0) {
-            await redisClient.zRem(chatInboxKey(instanceId), membersToDelete);
+            await redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), ...membersToDelete]);
         }
-        await redisClient.del(`chatwoot:history:${instanceId}:${phone}`);
+        await redisClient.sendCommand(['DEL', `chatwoot:history:${instanceId}:${phone}`]);
     }
     res.json({ success: true });
 });
 
-// 🚀 ЖАҢА ФУНКЦИЯ: ОПЕРАТОРДЫҢ ХАТ ЖІБЕРУ ЛОГИКАСЫ
 app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = String(req.params.phone || '').replace(/\D/g, '');
@@ -431,10 +423,8 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
     if (!phone) return res.status(400).json({ error: 'BAD_PHONE' });
     if (!text) return res.status(400).json({ error: 'TEXT_REQUIRED' });
 
-    // WhatsApp-қа хатты жіберу
     const ok = await sendWhatsAppText(instanceId, phone, text);
     
-    // Сәтті кетсе, базаға (тарихқа) сақтау
     if (ok) {
         await saveChatHistoryEntry(instanceId, phone, {
             id: `operator:${Date.now()}:${phone}`,
@@ -452,7 +442,6 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
 
     res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
 });
-
 app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   const label = String(req.body?.label || '').trim();
