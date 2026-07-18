@@ -483,7 +483,6 @@
             text-transform: uppercase;
         }
 
-        /* Ескі стандартты аудио дизайны */
         .audio-wrap { display: block; margin-top: 4px; }
         .audio-player { max-width: 100%; height: 40px; outline: none; }
 
@@ -710,6 +709,14 @@
 
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const chatToken = String(chatConfig.chatToken || '');
+
+        function scrollToBottomSafe(messagesEl) {
+            const threshold = 50;
+            const isScrolledToBottom = messagesEl.scrollHeight - messagesEl.clientHeight <= messagesEl.scrollTop + threshold;
+            if (isScrolledToBottom) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+        }
 
         function apiHeaders(extra = {}) {
             return {
@@ -1034,7 +1041,6 @@
             listEl.scrollTop = previousTop;
         }
 
-        // Ескі стильдегі стандартты аудио компоненті
         function buildAudioHtml(item) {
             if (!item) return '';
             var mediaKind = String((item && item.mediaKind) || item.type || '').toLowerCase();
@@ -1085,7 +1091,7 @@
                 return `<div class="row user"><div class="bubble">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
             }).join('');
 
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+            scrollToBottomSafe(messagesEl);
         }
 
         function updateComposerState() {
@@ -1204,7 +1210,6 @@
             postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).catch(() => {});
         }
 
-        // Таймер логикасы (60 секунд)
         function setOperatorLockTtl(ttl) {
             const seconds = Math.max(0, Math.ceil(Number(ttl) || 0));
             operatorLockUntil = seconds > 0 ? Date.now() + seconds * 1000 : 0;
@@ -1234,7 +1239,7 @@
             }
         }
 
-       function openChat(phone) {
+        function openChat(phone) {
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
 
@@ -1266,7 +1271,14 @@
             if (!isMobile()) inputEl.focus({ preventScroll: true });
         }
 
-        function closeChat() { app.classList.remove('chat-open'); activePhone = ''; operatorLockUntil = 0; renderOperatorLock(); setActiveHeader(''); renderList(); }
+        function closeChat() { 
+            app.classList.remove('chat-open'); 
+            activePhone = ''; 
+            operatorLockUntil = 0; 
+            renderOperatorLock(); 
+            setActiveHeader(''); 
+            renderList(); 
+        }
 
         async function runChatAction(action, phone) {
             const cleanPhone = normalizePhone(phone);
@@ -1312,7 +1324,7 @@
             pendingText = text;
             isSending = true;
             messagesEl.insertAdjacentHTML('beforeend', `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`);
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+            scrollToBottomSafe(messagesEl);
             inputEl.value = '';
             inputEl.style.height = 'auto';
             updateComposerState();
@@ -1328,7 +1340,6 @@
                     chat.unread = false;
                 }
                 
-                // Хабарлама жібергенде 60 секундтық таймер қосу
                 setOperatorLockTtl(60);
                 activeTab = 'operator';
 
@@ -1395,6 +1406,7 @@
             loadInbox();
             loadHistory();
         });
+        
         backBtn.addEventListener('click', closeChat);
         sendBtn.addEventListener('click', sendMessage);
 
@@ -1427,7 +1439,6 @@
             if (activePhone) loadOperatorLock();
         }, 3000);
 
-        // Таймерді әр секунд сайын жаңарту
         setInterval(renderOperatorLock, 1000);
 
     </script>
