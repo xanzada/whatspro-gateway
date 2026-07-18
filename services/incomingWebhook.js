@@ -2,6 +2,9 @@ const axios = require('axios');
 const { redisClient } = require('../config/redis');
 const { normalizePhoneFromCandidates } = require('./phoneUtils');
 
+const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
+const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+
 function stripUndefined(value) {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
 }
@@ -39,8 +42,16 @@ function historyKey(instanceId, phone) {
   return `chatwoot:history:${instanceId}:${phone}`;
 }
 
+function openbotHistoryKey(instanceId, phone) {
+  return `history:${instanceId}:${phone}`;
+}
+
 function inboxKey(instanceId) {
   return `chatwoot:inbox:${instanceId}`;
+}
+
+function archiveKey(instanceId) {
+  return `chatwoot:archive:${instanceId}`;
 }
 
 function buildHistoryEntry(payload, instanceId, phone, timestamp) {
@@ -73,6 +84,12 @@ async function saveIncomingMessage(payload) {
   await Promise.all([
     redisClient.sendCommand(['RPUSH', historyKey(instanceId, phone), JSON.stringify(entry)]),
     redisClient.sendCommand(['ZADD', inboxKey(instanceId), String(timestamp), phone])
+  ]);
+  const archived = await redisClient.sendCommand(['SISMEMBER', archiveKey(instanceId), phone]).catch(() => 0);
+  const ttlSeconds = Number(archived) === 1 ? CHAT_ARCHIVE_TTL_SECONDS : CHAT_STANDARD_TTL_SECONDS;
+  await Promise.all([
+    redisClient.sendCommand(['EXPIRE', historyKey(instanceId, phone), String(ttlSeconds)]),
+    redisClient.sendCommand(['EXPIRE', openbotHistoryKey(instanceId, phone), String(ttlSeconds)]).catch(() => 0)
   ]);
 
   return { saved: true, instanceId, phone, timestamp };

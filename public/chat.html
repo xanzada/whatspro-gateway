@@ -402,8 +402,8 @@
         .empty p { line-height: 1.5; }
 
         .row { display: flex; margin: 0 0 12px; }
-        .row.user, .row.model { justify-content: flex-start; }
-        .row.operator { justify-content: flex-end; }
+        .row.user { justify-content: flex-start; }
+        .row.model, .row.operator { justify-content: flex-end; }
         .row.system { justify-content: center; }
 
         .bubble {
@@ -450,7 +450,21 @@
             display: block;
         }
 
-        .audio-wrap { display: grid; margin-top: 8px; }
+        .audio-wrap {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 52px;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+        }
+        .audio-speed {
+            height: 34px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, .12);
+            color: #eaf1fb;
+            font-size: 12px;
+            font-weight: 900;
+        }
         .audio-bubble { width: min(360px, 86%); max-width: min(360px, 86%); }
 
         .composer {
@@ -666,13 +680,15 @@
 
     <script>
         const params = new URLSearchParams(window.location.search);
-        const instanceId = (params.get('instance') || 'prestige').trim();
-        const apiBase = window.location.origin.replace(/\/+$/, '');
+        const chatConfig = window.__CHAT_CONFIG__ || {};
+        const instanceId = (params.get('instance') || chatConfig.instance || 'prestige').trim();
+        const apiBase = String(chatConfig.apiBase || window.location.origin).replace(/\/+$/, '');
         const endpoints = {
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
             send: '/api/chat/send',
-            action: '/api/chat/action'
+            action: '/api/chat/action',
+            ...(chatConfig.endpoints || {})
         };
 
         const app = document.getElementById('app');
@@ -784,6 +800,10 @@
         let isSending = false;
         let isResolving = false;
         let pendingText = '';
+        let inboxSignature = '';
+        let historySignature = '';
+        let isInboxLoading = false;
+        let isHistoryLoading = false;
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
         function isMobile() { return window.matchMedia('(max-width: 840px)').matches; }
@@ -841,7 +861,7 @@
             if (!phone) return;
             const existing = chats.find(chat => normalizePhone(chat.phone) === phone);
             if (!existing) {
-                chats = [{ phone, lastAt: Date.now(), lastText: t('manualChat'), unread: false, hasOperator: true, closed: false }, ...chats];
+                chats = [{ phone, lastAt: Date.now(), lastText: t('manualChat'), unread: false, viewed: true, hasOperator: false, closed: false }, ...chats];
             }
             activeTab = 'all';
             searchInput.value = '';
@@ -855,8 +875,8 @@
             const active = chats.filter(chat => !isChatArchived(chat));
             const archived = chats.filter(isChatArchived);
             return {
-                new: active.filter(chat => chat.unread).length,
-                all: active.length,
+                new: active.filter(chat => chat.unread && !chat.hasOperator).length,
+                all: active.filter(chat => chat.viewed && !chat.hasOperator).length,
                 operator: active.filter(chat => chat.hasOperator).length,
                 archive: archived.length
             };
@@ -868,7 +888,8 @@
                 const archived = isChatArchived(chat);
                 if (activeTab === 'archive' && !archived) return false;
                 if (activeTab !== 'archive' && archived) return false;
-                if (activeTab === 'new' && !chat.unread) return false;
+                if (activeTab === 'new' && (!chat.unread || chat.hasOperator)) return false;
+                if (activeTab === 'all' && (!chat.viewed || chat.hasOperator)) return false;
                 if (activeTab === 'operator' && !chat.hasOperator) return false;
                 if (!query) return true;
                 return String(chat.phone).includes(query) || String(chat.lastText || '').toLowerCase().includes(query);
@@ -968,12 +989,34 @@
             const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData}`;
             
             return `
-                <div class="audio-wrap">
+                <div class="audio-wrap" data-audio-wrapper>
                     <audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>
+                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
                 </div>`;
         }
 
-        function renderHistory(history) {
+        function getHistorySignature(history) {
+            if (!history || !history.length) return '__empty__';
+            return (history || []).map(item => [
+                item.id || '',
+                item.createdAt || item.timestamp || '',
+                item.role || '',
+                item.direction || '',
+                item.fromMe === true ? '1' : '0',
+                String(item.text || item.body || '').length,
+                item.hasMedia ? 'media' : ''
+            ].join(':')).join('|');
+        }
+
+        function renderHistory(history, options = {}) {
+            const nextSignature = getHistorySignature(history);
+            if (!options.force && nextSignature && nextSignature === historySignature) return;
+            historySignature = nextSignature;
+
+            const wasNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 90;
+            const previousTop = messagesEl.scrollTop;
+            const previousHeight = messagesEl.scrollHeight;
+
             if (!history || !history.length) {
                 messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
                 return;
@@ -988,13 +1031,16 @@
                 if (!text && !audioHtml && !rawText.includes('[System:')) return '';
 
                 const outgoing = item.direction === 'outgoing' || item.fromMe === true || ['assistant', 'model', 'operator'].includes(role);
+                const source = String(item.source || '').toLowerCase();
+                const isBot = ['assistant', 'model', 'bot'].includes(role);
+                const isOperator = role === 'operator' || source === 'operator_panel' || source === 'whatsapp_app';
 
-                if (role === 'model') {
+                if (isBot) {
                     return `<div class="row model"><div class="bubble"><span class="bubble-label">${escapeHtml(t('botLabel'))}</span>${escapeHtml(text)}</div></div>`;
                 }
 
                 if (outgoing || role === 'operator' || (role === 'system' && /\[Оператор:/i.test(rawText))) {
-                    return `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`;
+                    return `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`;
                 }
 
                 if (role === 'system') {
@@ -1004,7 +1050,11 @@
                 const bubbleClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
                 return `<div class="row user"><div class="${bubbleClass}">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
             }).join('');
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+            if (wasNearBottom || options.force) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            } else {
+                messagesEl.scrollTop = previousTop + (messagesEl.scrollHeight - previousHeight);
+            }
         }
 
         function updateComposerState() {
@@ -1069,28 +1119,50 @@
         }
 
         async function loadInbox() {
-            if (!instanceId) return;
+            if (!instanceId || isInboxLoading) return;
+            isInboxLoading = true;
             try {
                 const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
-                chats = data.items || [];
+                const nextChats = data.items || [];
+                const nextSignature = JSON.stringify(nextChats.map(chat => [
+                    normalizePhone(chat.phone),
+                    chat.lastAt || chat.updatedAt || 0,
+                    chat.lastText || '',
+                    chat.unread ? 1 : 0,
+                    chat.viewed ? 1 : 0,
+                    chat.hasOperator ? 1 : 0,
+                    chat.closed ? 1 : 0
+                ]));
+                if (nextSignature === inboxSignature) return;
+                inboxSignature = nextSignature;
+                chats = nextChats;
                 
                 chats.forEach(chat => {
                     if (chat.phone === activePhone) chat.unread = false; 
                 });
                 
                 renderList();
-            } catch (error) {}
+                updateComposerState();
+            } catch (error) {
+            } finally {
+                isInboxLoading = false;
+            }
         }
 
         async function loadHistory() {
-            if (!activePhone) return;
+            if (!activePhone || isHistoryLoading) return;
+            isHistoryLoading = true;
+            const requestedPhone = activePhone;
             try {
-                const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
+                const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(requestedPhone)}`);
                 if (activePhone === data.phone) {
                     renderHistory(data.history || []);
                     updateComposerState();
                 }
-            } catch (error) {}
+            } catch (error) {
+            } finally {
+                isHistoryLoading = false;
+            }
         }
 
        function openChat(phone) {
@@ -1108,11 +1180,18 @@
             isSending = false;
             
             const chat = chats.find(c => c.phone === activePhone);
-            if (chat) chat.unread = false;
+            if (chat) {
+                chat.unread = false;
+                chat.viewed = true;
+            }
 
             updateComposerState();
+            historySignature = '';
             messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
             renderList();
+            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' })
+                .then(loadInbox)
+                .catch(() => {});
             loadHistory();
             if (!isMobile()) inputEl.focus({ preventScroll: true });
         }
@@ -1155,7 +1234,7 @@
 
             pendingText = text;
             isSending = true;
-            messagesEl.insertAdjacentHTML('beforeend', `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`);
+            messagesEl.insertAdjacentHTML('beforeend', `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`);
             messagesEl.scrollTop = messagesEl.scrollHeight;
             inputEl.value = '';
             inputEl.style.height = 'auto';
@@ -1221,6 +1300,20 @@
             if (item) openChat(item.dataset.phone);
         });
 
+        messagesEl.addEventListener('click', event => {
+            const speedButton = event.target.closest('[data-audio-speed]');
+            if (!speedButton) return;
+
+            const speeds = [1, 1.5, 2];
+            const current = Number(speedButton.dataset.speed || 1);
+            const next = speeds[(speeds.indexOf(current) + 1) % speeds.length] || 1;
+            const wrapper = speedButton.closest('[data-audio-wrapper]');
+            const audio = wrapper?.querySelector('audio');
+            if (audio) audio.playbackRate = next;
+            speedButton.dataset.speed = String(next);
+            speedButton.textContent = `${next}x`;
+        });
+
         searchInput.addEventListener('input', () => renderList());
         searchInput.addEventListener('keydown', event => {
             if (event.key !== 'Enter') return;
@@ -1230,7 +1323,12 @@
         });
 
         directChatBtn.addEventListener('click', openDirectChatFromSearch);
-        refreshBtn.addEventListener('click', () => { loadInbox(); loadHistory(); });
+        refreshBtn.addEventListener('click', () => {
+            inboxSignature = '';
+            historySignature = '';
+            loadInbox();
+            loadHistory();
+        });
         backBtn.addEventListener('click', closeChat);
         sendBtn.addEventListener('click', sendMessage);
 
@@ -1260,7 +1358,7 @@
         setInterval(() => {
             loadInbox();
             if (activePhone) loadHistory();
-        }, 4000);
+        }, 3000);
 
     </script>
 </body>

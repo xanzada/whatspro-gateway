@@ -10,6 +10,9 @@ const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = r
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive } = require('./operatorLock');
 
+const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
+const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
 const clients = new Map();
 const initializingClients = new Map();
@@ -358,6 +361,14 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source) {
         redisClient.sendCommand(['ZADD', `chatwoot:inbox:${instanceId}`, String(createdAt), phone])
     ]).catch(error => {
         console.warn(`[OPERATOR HISTORY] ${instanceId} -> ${phone} save failed:`, error.message);
+    });
+    const archived = await redisClient.sendCommand(['SISMEMBER', `chatwoot:archive:${instanceId}`, phone]).catch(() => 0);
+    const ttlSeconds = Number(archived) === 1 ? CHAT_ARCHIVE_TTL_SECONDS : CHAT_STANDARD_TTL_SECONDS;
+    await Promise.all([
+        redisClient.sendCommand(['EXPIRE', `chatwoot:history:${instanceId}:${phone}`, String(ttlSeconds)]),
+        redisClient.sendCommand(['EXPIRE', `history:${instanceId}:${phone}`, String(ttlSeconds)]).catch(() => 0)
+    ]).catch(error => {
+        console.warn(`[OPERATOR HISTORY] ${instanceId} -> ${phone} expire failed:`, error.message);
     });
 }
 
