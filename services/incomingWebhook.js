@@ -96,6 +96,10 @@ async function shouldSkipOpenBot(payload = {}) {
 
 function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const body = String(payload.body || payload.text || payload.data?.message?.conversation || '').trim();
+  const mediaData = String(payload.mediaData || payload.data?.mediaData || '').trim();
+  const mediaType = String(payload.mediaType || payload.data?.mediaType || '').trim();
+  const mediaKind = String(payload.mediaKind || payload.type || '').trim();
+  const contactName = String(payload.contactName || payload.data?.contactName || payload.contact?.name || payload.data?.contact?.name || '').trim();
   return {
     id: String(payload.messageId || payload.data?.key?.id || `${timestamp}:${phone}`),
     instanceId,
@@ -106,7 +110,11 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
     text: body,
     type: payload.type || 'chat',
     hasMedia: Boolean(payload.hasMedia),
+    mediaData,
+    mediaType,
+    mediaKind,
     pushName: payload.pushName || payload.data?.pushName || '',
+    contactName,
     createdAt: timestamp,
     source: payload.source || 'whatspro'
   };

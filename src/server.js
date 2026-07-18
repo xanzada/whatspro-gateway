@@ -11,6 +11,7 @@ const {
   getInstanceStatus,
   sendWhatsAppText,
   sendMedia,
+  sendPresence,
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
@@ -313,14 +314,20 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
   const lastAt = getEntryCreatedAt(last) || item.updatedAt || 0;
   let latestCustomerAt = 0;
   let latestOperatorAt = 0;
+  let latestBotAt = 0;
   let hasOperator = false;
   let hasCustomerMessage = false;
+  let displayName = '';
 
   for (const entry of history) {
     const createdAt = getEntryCreatedAt(entry);
+    const contactName = String(entry.contactName || entry.displayName || entry.pushName || entry.contact?.name || entry.contact?.shortName || '').trim();
+    if (contactName && !/^client$/i.test(contactName)) displayName = contactName;
     if (isOperatorEntry(entry)) {
       hasOperator = true;
       latestOperatorAt = Math.max(latestOperatorAt, createdAt);
+    } else if (isBotEntry(entry) || isOutgoingEntry(entry)) {
+      latestBotAt = Math.max(latestBotAt, createdAt);
     } else if (!isOutgoingEntry(entry)) {
       if (entryPreview(entry)) {
         hasCustomerMessage = true;
@@ -329,10 +336,11 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
     }
   }
 
-  const unread = !archived && latestCustomerAt > Math.max(viewedAt, latestOperatorAt);
+  const unread = !archived && latestCustomerAt > Math.max(viewedAt, latestOperatorAt, latestBotAt);
 
   return {
     phone: item.phone,
+    displayName,
     updatedAt: item.updatedAt,
     lastAt,
     lastText: entryPreview(last) || 'Open conversation',
@@ -760,6 +768,17 @@ app.post('/api/send', requireApi, async (req, res) => {
     });
   }
 
+  res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
+});
+
+app.post('/api/presence', requireApi, async (req, res) => {
+  const { instanceId, instance, phone } = req.body || {};
+  const cleanInstanceId = String(instanceId || instance || '').trim();
+  const cleanPhone = normalizePhone(phone);
+  if (!isValidInstanceId(cleanInstanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
+
+  const ok = await sendPresence(cleanInstanceId, cleanPhone);
   res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
 });
 

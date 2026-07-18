@@ -288,11 +288,27 @@
         }
 
         .item-top { justify-content: space-between; }
+
+        .phone-wrap {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+
         .phone {
             min-width: 0;
             overflow: hidden;
             font-size: 15px;
             font-weight: 850;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .contact-phone {
+            margin-top: 2px;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 750;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
@@ -925,7 +941,9 @@
                 if (activeTab === 'all' && (!chat.viewed || chat.hasOperator)) return false;
                 if (activeTab === 'operator' && !chat.hasOperator) return false;
                 if (!query) return true;
-                return String(chat.phone).includes(query) || String(chat.lastText || '').toLowerCase().includes(query);
+                return String(chat.phone).includes(query)
+                    || String(chat.displayName || '').toLowerCase().includes(query)
+                    || String(chat.lastText || '').toLowerCase().includes(query);
             });
         }
 
@@ -978,6 +996,9 @@
                 const unread = chat.unread ? 'unread' : '';
                 const archived = isChatArchived(chat);
                 const actionDisabled = isResolving ? 'disabled' : '';
+                const displayName = String(chat.displayName || '').trim();
+                const title = displayName || `+${phone}`;
+                const phoneLine = displayName ? `<div class="contact-phone">+${escapeHtml(phone)}</div>` : '';
                 
                 const badges = [
                     archived ? `<span class="badge gray">${escapeHtml(t('archiveBadge'))}</span>` : '',
@@ -1001,7 +1022,10 @@
                         <div class="avatar ${unread}">${userIconSvg()}</div>
                         <div class="item-body">
                             <div class="item-top">
-                                <div class="phone">+${escapeHtml(chat.phone)}</div>
+                                <div class="phone-wrap">
+                                    <div class="phone">${escapeHtml(title)}</div>
+                                    ${phoneLine}
+                                </div>
                                 <div class="time">${escapeHtml(formatTime(chat.lastAt))}</div>
                             </div>
                             <div class="preview">${escapeHtml(chat.lastText || t('noMessage'))}</div>
@@ -1165,6 +1189,7 @@
                     normalizePhone(chat.phone),
                     chat.lastAt || chat.updatedAt || 0,
                     chat.lastText || '',
+                    chat.displayName || '',
                     chat.unread ? 1 : 0,
                     chat.viewed ? 1 : 0,
                     chat.hasOperator ? 1 : 0,

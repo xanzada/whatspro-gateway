@@ -654,10 +654,19 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             setTimeout(() => messageCache.delete(msg.id.id), 60000); 
         }
 
+        let downloadedMedia = null;
+        if (msg.hasMedia && (msg.type === 'audio' || msg.type === 'ptt')) {
+            try {
+                downloadedMedia = await msg.downloadMedia();
+            } catch (error) {
+                console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
+            }
+        }
+
         const messagePayload = { conversation: msg.body };
         if (msg.hasMedia) {
             if (msg.type === 'image') messagePayload.imageMessage = { caption: msg.body };
-            else if (msg.type === 'audio' || msg.type === 'ptt') messagePayload.audioMessage = {};
+            else if (msg.type === 'audio' || msg.type === 'ptt') messagePayload.audioMessage = { mimetype: downloadedMedia?.mimetype || 'audio/ogg' };
             else if (msg.type === 'video') messagePayload.videoMessage = {};
             else if (msg.type === 'document') messagePayload.documentMessage = { mimetype: 'application/pdf', caption: msg.body };
         }
@@ -675,12 +684,19 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 fromMe: msg.fromMe,
                 type: msg.type,
                 hasMedia: msg.hasMedia,
+                mediaData: downloadedMedia?.data || '',
+                mediaType: downloadedMedia?.mimetype || '',
+                mediaKind: msg.type,
                 body: msg.body || '',
                 pushName: msg._data?.notifyName || contactInfo.pushName || contactInfo.name || 'Client',
+                contactName: contactInfo.name || contactInfo.shortName || contactInfo.pushName || '',
                 contact: contactInfo,
                 data: {
                     normalizedPhone: cleanNumber,
                     senderPhone: cleanNumber,
+                    mediaData: downloadedMedia?.data || '',
+                    mediaType: downloadedMedia?.mimetype || '',
+                    mediaKind: msg.type,
                     key: {
                         remoteJid: realSender,
                         fromMe: msg.fromMe,
