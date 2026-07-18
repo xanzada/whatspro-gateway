@@ -461,6 +461,18 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
         }
 
+        /* Аудио хабарламаның айналасындағы артық бос орынды алып тастау */
+        .bubble.audio-bubble {
+            padding: 4px 6px !important; /* Стандартты үлкен бос орынды кішірейту */
+            background: transparent !important; /* Артық фонды алып тастау */
+            border: none !important;
+            box-shadow: none !important;
+        }
+        
+        .row.user .bubble.audio-bubble {
+            background: transparent !important;
+        }
+
         .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
         .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
         .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
@@ -760,7 +772,7 @@
             try {
                 const raw = String(value || '').replace(/\/+$/, '');
                 return raw && new URL(raw, window.location.href).origin === window.location.origin ? raw : '';
-            } catch {
+            } catch (e) {
                 return '';
             }
         }
@@ -1149,7 +1161,7 @@
             }
         }
 
-        async function hydrateAudioPlayers() {
+       async function hydrateAudioPlayers() {
             const wrappers = [...messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])')];
             for (const wrapper of wrappers) {
                 if (wrapper.querySelector('audio')?.getAttribute('src')) {
@@ -1158,17 +1170,21 @@
                 }
                 const id = wrapper.dataset.audioId;
                 if (!id) continue;
-                
-                wrapper.dataset.audioLoaded = '1'; // Қайта-қайта сұрай бермес үшін бұғаттаймыз
+
+                wrapper.dataset.audioLoaded = '1';
                 try {
                     const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
                     if (!data.mediaData) throw new Error('MEDIA_EMPTY');
                     wrapper.innerHTML = audioMarkup(data.mediaData);
                     syncAudioWidgets();
-                } catch {
+                } catch (e) {
                     const status = wrapper.querySelector('[data-audio-status]');
-                    if (status) status.textContent = 'Аудио жүктелмеді';
-                    delete wrapper.dataset.audioLoaded; // Қате болса кейін қайта көреді
+                    // Егер қате болса, бірден тоқтатпай, 3 секундтан соң қайта сұраймыз
+                    if (status && status.textContent !== 'Аудио жүктелмеді') {
+                        status.textContent = 'Аудио жүктелуде... (күтіңіз)';
+                    }
+                    delete wrapper.dataset.audioLoaded; // Келесі циклде қайта жүктеу үшін өшіреміз
+                    setTimeout(hydrateAudioPlayers, 3000); 
                 }
             }
         }
