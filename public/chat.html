@@ -1056,8 +1056,28 @@
             }).join('');
             listEl.scrollTop = previousTop;
         }
+        function buildMessageHtml(item) {
+    var isOperator = item.direction === 'outgoing' || item.fromMe === true;
+    var bubbleClass = isOperator ? 'operator' : 'user';
+    var text = escapeHtml(cleanText(item.text || item.body || ''));
+    
+    // Аудионы тексеру
+    var audioHtml = buildAudioHtml(item);
+    
+    // Егер аудио болса, мәтінді оның астына қосамыз, әйтпесе жай мәтін
+    var content = audioHtml ? (audioHtml + (text ? '<br>' + text : '')) : text;
 
-        async function renderHistory(history) {
+    return `
+        <div class="row ${bubbleClass}">
+            <div class="bubble">
+                ${isOperator ? '<span class="bubble-label">Operator</span>' : ''}
+                ${content}
+            </div>
+        </div>
+    `;
+}
+
+ async function renderHistory(history) {
     if (!messagesEl) return;
 
     // Барлық ескі хаттарды тазалау
@@ -1066,19 +1086,23 @@
     // Әрбір хабарламаны экранға шығару
     if (Array.isArray(history)) {
         history.forEach(function(item) {
-            // buildMessageHtml функциясы хаттың түріне қарай HTML құрастырады
-            var messageHtml = buildMessageHtml(item);
-            if (messageHtml) {
-                messagesEl.insertAdjacentHTML('beforeend', messageHtml);
+            try {
+                // buildMessageHtml болмаса, қате шықпас үшін тексеру
+                if (typeof buildMessageHtml === 'function') {
+                    var messageHtml = buildMessageHtml(item);
+                    if (messageHtml) {
+                        messagesEl.insertAdjacentHTML('beforeend', messageHtml);
+                    }
+                }
+            } catch (e) {
+                console.error("Message render error:", e);
             }
         });
     }
 
-    // Бұрынғы қателерді түзету үшін шақырылатын функциялар
     scrollToBottomSafe(messagesEl);
     hydrateAudioPlayers();
 }
-
         function buildAudioHtml(item) {
     if (!item) return '';
 
