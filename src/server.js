@@ -139,7 +139,11 @@ async function renderChatHtml(req, res) {
   const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
   res.set('Cache-Control', 'no-store, max-age=0');
-  res.type('html').send(html.replace('<!--__CHAT_CONFIG__-->', script));
+  const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
+  ? html.replace('<!--__CHAT_CONFIG__-->', script)
+  : html.replace('</head>', `${script}</head>`);
+
+res.type('html').send(renderedHtml);
 }
 
 async function saveInstance(instanceId, label = '') {

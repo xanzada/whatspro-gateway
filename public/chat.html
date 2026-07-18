@@ -1042,27 +1042,102 @@
         }
 
         function buildAudioHtml(item) {
-            if (!item) return '';
-            var mediaKind = String((item && item.mediaKind) || item.type || '').toLowerCase();
-            var mediaType = String(item.mediaType || '').split(';')[0].replace(/[^\w/+.-]/g, '');
-            
-            var hasAudioMsg = false;
-            if (item.audioMessage) hasAudioMsg = true;
-            if (item.data && item.data.message && item.data.message.audioMessage) hasAudioMsg = true;
+    if (!item) return '';
 
-            var isAudio = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.indexOf('audio/') === 0 || hasAudioMsg;
-            if (!isAudio) return '';
+    const mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
+    const mediaType = String(item.mediaType || '')
+        .split(';')[0]
+        .replace(/[^\w/+.-]/g, '');
 
-            var rawData = String(item.mediaData || '');
-            var src = '';
-            if (rawData.indexOf('data:audio') === 0 || rawData.indexOf(';base64,') > -1 || /^[A-Za-z0-9+/=]{80,}$/.test(rawData)) {
-                src = rawData.indexOf('data:') === 0 ? rawData : 'data:' + (mediaType || 'audio/ogg') + ';base64,' + rawData;
-            }
+    const hasAudioPayload = Boolean(
+        item.audioMessage ||
+        item.data?.message?.audioMessage
+    );
 
-            var safeSrc = src ? escapeHtml(src) : '';
-            return '<div class="audio-wrap"><audio controls class="audio-player" preload="metadata" src="' + safeSrc + '"></audio></div>';
+    const isAudio =
+        mediaKind === 'audio' ||
+        mediaKind === 'ptt' ||
+        mediaType.startsWith('audio/') ||
+        hasAudioPayload;
+
+    if (!isAudio) return '';
+
+    const rawData = String(item.mediaData || '');
+    const isInlineAudio =
+        rawData.startsWith('data:audio') ||
+        rawData.includes(';base64,') ||
+        /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+
+    const src = isInlineAudio
+        ? rawData.startsWith('data:')
+            ? rawData
+            : `data:${mediaType || 'audio/ogg'};base64,${rawData}`
+        : '';
+
+    if (src) {
+        return `
+            <div class="audio-wrap">
+                <audio
+                    class="audio-player"
+                    controls
+                    preload="metadata"
+                    src="${escapeHtml(src)}">
+                </audio>
+            </div>
+        `;
+    }
+
+    return `
+        <div
+            class="audio-wrap"
+            data-audio-wrapper
+            data-audio-id="${escapeHtml(String(item.id || ''))}">
+            <audio class="audio-player" controls preload="none"></audio>
+        </div>
+    `;
+}
+
+async function hydrateAudioPlayers() {
+    const wrappers = messagesEl.querySelectorAll(
+        '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
+    );
+
+    for (const wrapper of wrappers) {
+        const audio = wrapper.querySelector('audio');
+        const messageId = wrapper.dataset.audioId;
+
+        if (!messageId) continue;
+
+        if (audio?.getAttribute('src')) {
+            wrapper.dataset.audioLoaded = '1';
+            continue;
         }
 
+        wrapper.dataset.audioLoaded = '1';
+
+        try {
+            const result = await fetchJson(
+                `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
+            );
+
+            if (!result?.mediaData) {
+                throw new Error('MEDIA_EMPTY');
+            }
+
+            const player = wrapper.querySelector('audio');
+
+            if (!player) {
+                throw new Error('AUDIO_ELEMENT_MISSING');
+            }
+
+            player.src = result.mediaData;
+            player.load();
+        } catch (error) {
+            delete wrapper.dataset.audioLoaded;
+            setTimeout(hydrateAudioPlayers, 3000);
+        }
+    }
+}
         function renderHistory(history) {
             if (!history || !history.length) {
                 messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
@@ -1092,6 +1167,7 @@
             }).join('');
 
             scrollToBottomSafe(messagesEl);
+            hydrateAudioPlayers();
         }
 
         function updateComposerState() {
@@ -1135,12 +1211,23 @@
             updateComposerState();
         }
 
-        async function fetchJson(url) {
-            const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin', cache: 'no-store', headers: apiHeaders() });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-            return data;
-        }
+       async function fetchJson(url) {
+    const response = await fetch(`${apiBase}${url}`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: apiHeaders({
+            Accept: 'application/json'
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data.error || `HTTP_${response.status}`);
+    }
+
+    return data;
+}
 
         async function postJson(url, body) {
             const response = await fetch(`${apiBase}${url}`, {
@@ -1155,55 +1242,89 @@
             return data;
         }
 
-        async function loadInbox() {
-            if (!instanceId || isInboxLoading) return;
-            isInboxLoading = true;
-            try {
-                const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
-                const nextChats = data.items || [];
-                const nextSignature = JSON.stringify(nextChats.map(chat => [
-                    normalizePhone(chat.phone),
-                    chat.lastAt || chat.updatedAt || 0,
-                    chat.lastText || '',
-                    chat.displayName || '',
-                    chat.unread ? 1 : 0,
-                    chat.viewed ? 1 : 0,
-                    chat.hasOperator ? 1 : 0,
-                    chat.closed ? 1 : 0
-                ]));
-                if (nextSignature === inboxSignature) return;
-                inboxSignature = nextSignature;
-                chats = nextChats;
-                
-                chats.forEach(chat => {
-                    if (chat.phone === activePhone) chat.unread = false; 
-                });
-                
-                renderList();
-                updateComposerState();
-            } catch (error) {
-            } finally {
-                isInboxLoading = false;
-            }
+        async function loadInbox(force = false) {
+    if (isInboxLoading && !force) return;
+
+    isInboxLoading = true;
+
+    try {
+        const result = await fetchJson(
+            `${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`
+        );
+
+        const nextChats = Array.isArray(result?.items)
+            ? result.items
+            : Array.isArray(result?.chats)
+                ? result.chats
+                : [];
+
+        const nextSignature = JSON.stringify(
+            nextChats.map(chat => [
+                chat.phone,
+                chat.updatedAt,
+                chat.lastAt,
+                chat.unread,
+                chat.closed,
+                chat.lastText
+            ])
+        );
+
+        chats = nextChats;
+
+        if (nextSignature !== inboxSignature || force) {
+            inboxSignature = nextSignature;
+            renderList();
         }
 
-        async function loadHistory() {
-            if (!activePhone || isHistoryLoading) return;
-            isHistoryLoading = true;
-            const requestedPhone = activePhone;
-            try {
-                const data = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(requestedPhone)}`);
-                if (activePhone === data.phone) {
-                    renderHistory(data.history || []);
-                    updateComposerState();
-                    syncViewedState();
-                }
-            } catch (error) {
-            } finally {
-                isHistoryLoading = false;
-            }
+        if (
+            activePhone &&
+            chats.some(chat => normalizePhone(chat.phone) === activePhone)
+        ) {
+            await loadHistory(false);
         }
+    } finally {
+        isInboxLoading = false;
+    }
+}
 
+       async function loadHistory(force = false) {
+    if (!activePhone || (isHistoryLoading && !force)) return;
+
+    isHistoryLoading = true;
+
+    try {
+        const result = await fetchJson(
+            `${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`
+        );
+
+        const history = Array.isArray(result?.history)
+            ? result.history
+            : Array.isArray(result?.items)
+                ? result.items
+                : [];
+
+        const nextSignature = JSON.stringify(
+            history.map(item => [
+                item.id,
+                item.createdAt,
+                item.timestamp,
+                item.direction,
+                item.fromMe,
+                item.text,
+                item.body,
+                item.type,
+                item.mediaData
+            ])
+        );
+
+        if (force || nextSignature !== historySignature) {
+            historySignature = nextSignature;
+            renderHistory(history);
+        }
+    } finally {
+        isHistoryLoading = false;
+    }
+}
         function syncViewedState() {
             if (!activePhone || Date.now() - lastViewSyncAt < 5000) return;
             lastViewSyncAt = Date.now();
@@ -1434,10 +1555,13 @@
         loadInbox();
         
         setInterval(() => {
-            loadInbox();
-            if (activePhone) loadHistory();
-            if (activePhone) loadOperatorLock();
-        }, 3000);
+    loadInbox();
+
+    if (activePhone) {
+        loadHistory();
+        loadOperatorLock();
+    }
+}, 3000);
 
         setInterval(renderOperatorLock, 1000);
 
