@@ -651,7 +651,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
         if (msg.hasMedia) {
             messageCache.set(msg.id.id, msg);
-            setTimeout(() => messageCache.delete(msg.id.id), 60000); 
+            setTimeout(() => messageCache.delete(msg.id.id), 10 * 60 * 1000); 
         }
 
         let downloadedMedia = null;
@@ -1034,6 +1034,7 @@ async function getBase64Media(instanceId, keyObj) {
         if (!msg || !msg.hasMedia) return null;
         
         const media = await msg.downloadMedia();
+        if (!media?.data) return null;
         return `data:${media.mimetype};base64,${media.data}`;
     } catch (error) {
         console.error(`❌ [DOWNLOAD MEDIA ERROR] ${instanceId}:`, error.message);

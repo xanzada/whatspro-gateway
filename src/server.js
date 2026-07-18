@@ -12,6 +12,7 @@ const {
   sendWhatsAppText,
   sendMedia,
   sendPresence,
+  getBase64Media,
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
@@ -119,6 +120,7 @@ async function renderChatHtml(req, res) {
       inbox: '/api/chat/inbox',
       history: '/api/chat/history',
       send: '/api/chat/send',
+      media: '/api/chat/media',
       action: '/api/chat/action'
     }
   };
@@ -577,6 +579,17 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
     .slice(-limit);
 
   res.json({ success: true, instanceId, phone, history });
+});
+
+app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  const messageId = String(req.params.messageId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!messageId || messageId.length > 200 || /[\s/\\]/.test(messageId)) return res.status(400).json({ error: 'BAD_MESSAGE_ID' });
+
+  const mediaData = await getBase64Media(instanceId, messageId);
+  if (!mediaData) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
+  res.json({ success: true, instanceId, messageId, mediaData });
 });
 
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {

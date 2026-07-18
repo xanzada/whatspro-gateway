@@ -500,6 +500,14 @@
             align-items: center;
             margin-top: 8px;
         }
+        .audio-status {
+            min-height: 34px;
+            display: flex;
+            align-items: center;
+            color: #a9bad2;
+            font-size: 12px;
+            font-weight: 800;
+        }
         .audio-speed {
             height: 34px;
             border-radius: 8px;
@@ -731,6 +739,7 @@
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
             send: '/api/chat/send',
+            media: '/api/chat/media',
             lock: '/api/chat/operator-lock',
             action: '/api/chat/action',
             ...(chatConfig.endpoints || {})
@@ -1039,20 +1048,48 @@
 
         // АУДИО ОЙНАТҚЫШ
         function buildAudioHtml(item) {
-            const isMedia = item.type === 'audio' || item.type === 'ptt' || String(item?.mediaKind || '') === 'audio' || item.hasMedia;
+            const mediaKind = String(item?.mediaKind || item.type || '').toLowerCase();
+            const mediaTypeRaw = String(item.mediaType || 'audio/ogg').trim();
+            const mediaType = (mediaTypeRaw.split(';')[0] || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
+            const isMedia = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/');
             if (!isMedia) return '';
             
             const rawData = String(item.mediaData || item.body || '');
-            if (!rawData.startsWith('data:audio') && !rawData.includes(';base64,')) return '';
-
-            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
-            const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData}`;
+            const hasInlineAudio = rawData.startsWith('data:audio') || rawData.includes(';base64,') || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+            const src = hasInlineAudio
+                ? (rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData}`)
+                : '';
+            const messageId = String(item.id || '').replace(/"/g, '&quot;');
             
             return `
-                <div class="audio-wrap" data-audio-wrapper>
-                    <audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>
+                <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(messageId)}">
+                    ${src
+                        ? `<audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio>`
+                        : `<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>`}
                     <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
                 </div>`;
+        }
+
+        async function hydrateAudioPlayers() {
+            const wrappers = [...messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])')];
+            for (const wrapper of wrappers) {
+                if (wrapper.querySelector('audio') || !wrapper.dataset.audioId) {
+                    wrapper.dataset.audioLoaded = '1';
+                    continue;
+                }
+                wrapper.dataset.audioLoaded = '1';
+                try {
+                    const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(wrapper.dataset.audioId)}`);
+                    if (!data.mediaData) throw new Error('MEDIA_EMPTY');
+                    const status = wrapper.querySelector('[data-audio-status]');
+                    if (status) {
+                        status.outerHTML = `<audio class="audio-player" controls controlsList="nodownload" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>`;
+                    }
+                } catch {
+                    const status = wrapper.querySelector('[data-audio-status]');
+                    if (status) status.textContent = 'Аудио қолжетімсіз';
+                }
+            }
         }
 
         function getHistorySignature(history) {
@@ -1064,7 +1101,8 @@
                 item.direction || '',
                 item.fromMe === true ? '1' : '0',
                 String(item.text || item.body || '').length,
-                item.hasMedia ? 'media' : ''
+                item.hasMedia ? 'media' : '',
+                String(item.mediaData || '').length
             ].join(':')).join('|');
         }
 
@@ -1116,6 +1154,7 @@
             } else {
                 messagesEl.scrollTop = previousTop + (messagesEl.scrollHeight - previousHeight);
             }
+            hydrateAudioPlayers();
         }
 
         function updateComposerState() {
