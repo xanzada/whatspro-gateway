@@ -1093,9 +1093,14 @@
             } catch (error) {}
         }
 
-        function openChat(phone) {
+       function openChat(phone) {
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
+
+            // 🚀 1-ЛОГИКА: "Жаңа" ішінен чатқа кіргенде, автоматты түрде "Бәрі" (all) вкладкасына ауыстыру
+            if (activeTab === 'new') {
+                activeTab = 'all';
+            }
 
             app.classList.add('chat-open');
             setActiveHeader(activePhone);
@@ -1160,6 +1165,15 @@
                 await postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { text });
                 isSending = false;
                 pendingText = '';
+                
+                // 🚀 2-ЛОГИКА: Оператор жауап берген сәтте автоматты түрде "Оператор" вкладкасына секіру
+                const chat = chats.find(c => c.phone === activePhone);
+                if (chat) {
+                    chat.hasOperator = true;
+                    chat.unread = false;
+                }
+                activeTab = 'operator';
+
                 loadInbox();
                 loadHistory();
             } catch (error) {
