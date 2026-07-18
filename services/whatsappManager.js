@@ -794,9 +794,10 @@ async function stopWhatsAppInstance(instanceId) {
         }
     }
 
+
     // 🚀 ЕҢ БАСТЫСЫ: ПАПКАДАҒЫ КЭШ ФАЙЛДАРДЫ ТАМЫРЫМЕН ЖОЮ!
     try {
-
+        removeSessionFolder(instanceId, 'stopped_by_admin');
         console.log(`🗑️ [WHATSAPP] ${instanceId} сессиясы админнің бұйрығымен ТҮБЕГЕЙЛІ ӨШІРІЛДІ!`);
     } catch (err) {
         console.error(`❌ [WHATSAPP] ${instanceId} папканы өшіру қатесі:`, err.message);

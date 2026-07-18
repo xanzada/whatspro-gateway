@@ -461,18 +461,6 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
         }
 
-        /* Аудио хабарламаның айналасындағы артық бос орынды алып тастау */
-        .bubble.audio-bubble {
-            padding: 4px 6px !important; /* Стандартты үлкен бос орынды кішірейту */
-            background: transparent !important; /* Артық фонды алып тастау */
-            border: none !important;
-            box-shadow: none !important;
-        }
-        
-        .row.user .bubble.audio-bubble {
-            background: transparent !important;
-        }
-
         .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
         .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
         .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
@@ -495,62 +483,9 @@
             text-transform: uppercase;
         }
 
-       
-        /* АУДИО ОЙНАТҚЫШ СТИЛЬДЕРІ (WhatsApp стиль) */
+        /* Ескі стандартты аудио дизайны */
         .audio-wrap { display: block; margin-top: 4px; }
-        .audio-player { display: none; }
-        .audio-status { color: inherit; font-size: 12px; font-style: italic; opacity: 0.7; padding: 4px; }
-        .wa-audio {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-width: 220px;
-            max-width: 280px;
-            padding: 4px 6px;
-        }
-        .wa-audio.loading { opacity: 0.6; }
-        .audio-play {
-            width: 36px;
-            height: 36px;
-            flex: 0 0 auto;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            color: #fff;
-            display: grid;
-            place-items: center;
-            font-size: 16px;
-            padding-left: 2px;
-        }
-        .user .audio-play { background: rgba(255, 255, 255, 0.1); }
-        .audio-play:disabled { cursor: not-allowed; opacity: 0.5; }
-        .audio-wave-col {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            min-width: 0;
-        }
-        .audio-wave {
-            height: 16px;
-            background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.4) 0 2px, transparent 2px 5px);
-            border-radius: 8px;
-            width: 100%;
-        }
-        .user .audio-wave { background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0 2px, transparent 2px 5px); }
-        .audio-meta {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.7);
-            font-weight: 600;
-        }
-        .audio-speed {
-            background: rgba(255, 255, 255, 0.15);
-            padding: 2px 6px;
-            border-radius: 8px;
-            font-size: 10px;
-        }
+        .audio-player { max-width: 100%; height: 40px; outline: none; }
 
         .composer {
             position: sticky;
@@ -632,7 +567,7 @@
         svg { width: 20px; height: 20px; }
 
         @media (max-width: 840px) {
-            .app { display: block; position: relative; height: 100%; overflow: hidden; }
+            .app { display: block; position: relative; height: 100dvh; overflow: hidden; }
             .sidebar, .chat { position: absolute; inset: 0; width: 100%; transition: transform .24s ease; }
             .chat { transform: translateX(100%); }
             .app.chat-open .sidebar { transform: translateX(-100%); }
@@ -643,7 +578,6 @@
             .list { padding: 6px; }
             .messages { padding: 16px 12px; }
             .bubble { max-width: 86%; }
-            .audio-bubble { width: min(360px, calc(100vw - 36px)); max-width: min(360px, calc(100vw - 36px)); }
             .composer { padding-inline: 12px; }
             h1, .chat-phone { font-size: 18px; }
             .tab { font-size: 12px; }
@@ -676,9 +610,6 @@
             .lang-toggle, .icon-btn { width: 36px; height: 36px; min-width: 36px; font-size: 11px; }
             .messages { padding: 10px; font-size: 14px; }
             .bubble { max-width: min(620px, 92%); padding: 9px 10px; font-size: 14px; line-height: 1.38; }
-            .audio-bubble { width: calc(100vw - 32px); max-width: calc(100vw - 32px); }
-            .audio-player { height: 42px; }
-            .audio-wrap { margin-top: 6px; }
             .composer { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             textarea { min-height: 42px; padding: 10px 12px; font-size: 14px; }
             .send { width: 42px; height: 42px; }
@@ -945,10 +876,8 @@
             if (!time || time < 100000000000) return '';
             const date = new Date(time);
             try {
-                // Қазақ немесе Орыс тілінде уақытты шығару
                 return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' });
             } catch (error) {
-                // Егер браузер kk-KZ локалін қолдамаса, қате бермей стандартты уақытты шығарады
                 return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             }
         }
@@ -1105,138 +1034,30 @@
             listEl.scrollTop = previousTop;
         }
 
-        // --- АУДИО ОЙНАТҚЫШ (WHATSAPP STYLE) ---
-// --- АУДИО ОЙНАТҚЫШ (WHATSAPP STYLE) ---
-        function formatAudioTime(value) {
-            var seconds = Math.max(0, Math.floor(Number(value) || 0));
-            var m = Math.floor(seconds / 60);
-            var s = String(seconds % 60);
-            if (s.length < 2) s = '0' + s;
-            return m + ':' + s;
-        }
-
-        function audioMarkup(src) {
-            var isLoaded = src ? true : false;
-            var safeSrc = src ? escapeHtml(src) : '';
-            var timeText = isLoaded ? '0:00' : 'Күтілуде..';
-            return `
-                <div class="wa-audio ${isLoaded ? '' : 'loading'}">
-                    <button class="audio-play" type="button" data-audio-play aria-label="Play" ${isLoaded ? '' : 'disabled'}>&#9658;</button>
-                    <div class="audio-wave-col">
-                        <div class="audio-wave" aria-hidden="true"></div>
-                        <div class="audio-meta">
-                            <span class="audio-time" data-audio-time>${timeText}</span>
-                            <button class="audio-speed" type="button" data-audio-speed data-speed="1">1x</button>
-                        </div>
-                    </div>
-                    <audio class="audio-player" preload="metadata" src="${safeSrc}"></audio>
-                </div>`;
-        }
-
+        // Ескі стильдегі стандартты аудио компоненті
         function buildAudioHtml(item) {
             if (!item) return '';
-            var mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
+            var mediaKind = String((item && item.mediaKind) || item.type || '').toLowerCase();
             var mediaType = String(item.mediaType || '').split(';')[0].replace(/[^\w/+.-]/g, '');
+            
             var hasAudioMsg = false;
             if (item.audioMessage) hasAudioMsg = true;
             if (item.data && item.data.message && item.data.message.audioMessage) hasAudioMsg = true;
-            
+
             var isAudio = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.indexOf('audio/') === 0 || hasAudioMsg;
             if (!isAudio) return '';
 
             var rawData = String(item.mediaData || '');
-            var hasInlineAudio = rawData.indexOf('data:audio') === 0 || rawData.indexOf(';base64,') > -1 || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
-            
             var src = '';
-            if (hasInlineAudio) {
+            if (rawData.indexOf('data:audio') === 0 || rawData.indexOf(';base64,') > -1 || /^[A-Za-z0-9+/=]{80,}$/.test(rawData)) {
                 src = rawData.indexOf('data:') === 0 ? rawData : 'data:' + (mediaType || 'audio/ogg') + ';base64,' + rawData;
             }
 
-            var itemId = item.id || '';
-            // Мұнда біз әрқашан audioMarkup шақырамыз, бос болса да рамкасы тұрады
-            return '<div class="audio-wrap" data-audio-wrapper data-audio-id="' + escapeHtml(itemId) + '">' + audioMarkup(src) + '</div>';
+            var safeSrc = src ? escapeHtml(src) : '';
+            return '<div class="audio-wrap"><audio controls class="audio-player" preload="metadata" src="' + safeSrc + '"></audio></div>';
         }
 
-        function syncAudioWidgets() {
-            var audios = messagesEl.querySelectorAll('audio.audio-player:not([data-bound])');
-            for (var i = 0; i < audios.length; i++) {
-                var audio = audios[i];
-                audio.dataset.bound = '1';
-                
-                audio.addEventListener('loadedmetadata', function(e) {
-                    var t = e.target.closest('.wa-audio').querySelector('[data-audio-time]');
-                    if (t) t.textContent = formatAudioTime(e.target.currentTime || e.target.duration || 0);
-                });
-                audio.addEventListener('timeupdate', function(e) {
-                    var t = e.target.closest('.wa-audio').querySelector('[data-audio-time]');
-                    if (t) t.textContent = formatAudioTime(e.target.currentTime || e.target.duration || 0);
-                });
-                audio.addEventListener('play', function(e) {
-                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
-                    if (p) p.innerHTML = '&#10074;&#10074;';
-                });
-                audio.addEventListener('pause', function(e) {
-                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
-                    if (p) p.innerHTML = '&#9658;';
-                });
-                audio.addEventListener('ended', function(e) {
-                    e.target.currentTime = 0;
-                    var p = e.target.closest('.wa-audio').querySelector('[data-audio-play]');
-                    if (p) p.innerHTML = '&#9658;';
-                });
-            }
-        }
-
-        async function hydrateAudioPlayers() {
-            var wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
-            for (var i = 0; i < wrappers.length; i++) {
-                var wrapper = wrappers[i];
-                var audioEl = wrapper.querySelector('audio');
-                if (audioEl && audioEl.getAttribute('src')) {
-                    wrapper.dataset.audioLoaded = '1';
-                    continue;
-                }
-                var id = wrapper.dataset.audioId;
-                if (!id) continue;
-
-                wrapper.dataset.audioLoaded = '1';
-                try {
-                    var data = await fetchJson(endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
-                    if (!data || !data.mediaData) throw new Error('MEDIA_EMPTY');
-                    wrapper.innerHTML = audioMarkup(data.mediaData);
-                    syncAudioWidgets();
-                } catch (e) {
-                    var status = wrapper.querySelector('[data-audio-time]');
-                    if (status) status.textContent = 'Қате!';
-                    delete wrapper.dataset.audioLoaded;
-                    setTimeout(hydrateAudioPlayers, 3000);
-                }
-            }
-        }
-        // ----------------------------------------
-        function getHistorySignature(history) {
-            if (!history || !history.length) return '__empty__';
-            return (history || []).map(item => [
-                item.id || '',
-                item.createdAt || item.timestamp || '',
-                item.role || '',
-                item.direction || '',
-                item.fromMe === true ? '1' : '0',
-                String(item.text || item.body || '').length,
-                item.hasMedia ? 'media' : '',
-                String(item.mediaData || '').length
-            ].join(':')).join('|');
-        }
-
-        function renderHistory(history, options = {}) {
-            const nextSignature = getHistorySignature(history);
-            if (!options.force && nextSignature && nextSignature === historySignature) return;
-            historySignature = nextSignature;
-
-            const wasNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 90;
-            const previousTop = messagesEl.scrollTop;
-            const previousHeight = messagesEl.scrollHeight;
-
+        function renderHistory(history) {
             if (!history || !history.length) {
                 messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('noHistory'))}</p></div>`;
                 return;
@@ -1244,40 +1065,27 @@
 
             messagesEl.innerHTML = history.map(item => {
                 const role = String(item.role || '').toLowerCase();
-                const rawText = String(item.text || item.body || '');
+                const rawText = String(item.text || '');
                 const text = cleanText(rawText);
                 const audioHtml = buildAudioHtml(item);
-                
                 if (!text && !audioHtml && !rawText.includes('[System:')) return '';
 
-                const outgoing = item.direction === 'outgoing' || item.fromMe === true || ['assistant', 'model', 'operator'].includes(role);
-                const source = String(item.source || '').toLowerCase();
-                const isOperator = source === 'operator_panel';
-                const isBot = ['assistant', 'model', 'bot'].includes(role) || (outgoing && !isOperator && role !== 'system');
-
-                if (isBot) {
-                    const bubbleClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
-                    return `<div class="row model"><div class="${bubbleClass}"><span class="bubble-label">Bot</span>${escapeHtml(text)}${audioHtml}</div></div>`;
+                if (role === 'model' || role === 'assistant') {
+                    return `<div class="row model"><div class="bubble"><span class="bubble-label">${escapeHtml(t('botLabel'))}</span>${escapeHtml(text)}</div></div>`;
                 }
 
-                if (isOperator) {
-                    return `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`;
+                if (role === 'operator' || (role === 'system' && /\[Оператор:/i.test(rawText))) {
+                    return `<div class="row operator"><div class="bubble">${escapeHtml(text)}</div></div>`;
                 }
 
                 if (role === 'system') {
                     return `<div class="row system"><div class="bubble">${escapeHtml(text || t('systemDefault'))}</div></div>`;
                 }
 
-                const bubbleClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
-                return `<div class="row user"><div class="${bubbleClass}">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
+                return `<div class="row user"><div class="bubble">${text ? escapeHtml(text) : ''}${audioHtml}</div></div>`;
             }).join('');
-            if (wasNearBottom || options.force) {
-                messagesEl.scrollTop = messagesEl.scrollHeight;
-            } else {
-                messagesEl.scrollTop = previousTop + (messagesEl.scrollHeight - previousHeight);
-            }
-            syncAudioWidgets();
-            hydrateAudioPlayers();
+
+            messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
         function updateComposerState() {
@@ -1321,7 +1129,6 @@
             updateComposerState();
         }
 
-        // REST API
         async function fetchJson(url) {
             const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin', cache: 'no-store', headers: apiHeaders() });
             const data = await response.json().catch(() => ({}));
@@ -1397,6 +1204,7 @@
             postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).catch(() => {});
         }
 
+        // Таймер логикасы (60 секунд)
         function setOperatorLockTtl(ttl) {
             const seconds = Math.max(0, Math.ceil(Number(ttl) || 0));
             operatorLockUntil = seconds > 0 ? Date.now() + seconds * 1000 : 0;
@@ -1407,7 +1215,7 @@
             if (!lockEl) return;
             const remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
             lockEl.classList.toggle('show', Boolean(activePhone && remaining > 0));
-            lockEl.textContent = remaining > 0 ? `Bot sleep ${remaining}s` : '';
+            lockEl.textContent = remaining > 0 ? `Оператор: ${remaining}с` : '';
         }
 
         async function loadOperatorLock() {
@@ -1430,7 +1238,6 @@
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
 
-            // 🚀 1-ЛОГИКА: "Жаңа" ішінен чатқа кіргенде, автоматты түрде "Бәрі" (all) вкладкасына ауыстыру
             if (activeTab === 'new') {
                 activeTab = 'all';
             }
@@ -1461,7 +1268,6 @@
 
         function closeChat() { app.classList.remove('chat-open'); activePhone = ''; operatorLockUntil = 0; renderOperatorLock(); setActiveHeader(''); renderList(); }
 
-        // АРХИВ ЖӘНЕ ӨШІРУ ЛОГИКАСЫ
         async function runChatAction(action, phone) {
             const cleanPhone = normalizePhone(phone);
             if (!cleanPhone || isResolving) return;
@@ -1516,12 +1322,13 @@
                 isSending = false;
                 pendingText = '';
                 
-                // 🚀 2-ЛОГИКА: Оператор жауап берген сәтте автоматты түрде "Оператор" вкладкасына секіру
                 const chat = chats.find(c => c.phone === activePhone);
                 if (chat) {
                     chat.hasOperator = true;
                     chat.unread = false;
                 }
+                
+                // Хабарлама жібергенде 60 секундтық таймер қосу
                 setOperatorLockTtl(60);
                 activeTab = 'operator';
 
@@ -1573,32 +1380,6 @@
             if (item) openChat(item.dataset.phone);
         });
 
-        messagesEl.addEventListener('click', event => {
-            const playButton = event.target.closest('[data-audio-play]');
-            if (playButton) {
-                const audio = playButton.closest('.wa-audio')?.querySelector('audio');
-                if (!audio) return;
-                for (const other of messagesEl.querySelectorAll('audio.audio-player')) {
-                    if (other !== audio) other.pause();
-                }
-                if (audio.paused) audio.play().catch(() => {});
-                else audio.pause();
-                return;
-            }
-
-            const speedButton = event.target.closest('[data-audio-speed]');
-            if (!speedButton) return;
-
-            const speeds = [1, 1.5, 2];
-            const current = Number(speedButton.dataset.speed || 1);
-            const next = speeds[(speeds.indexOf(current) + 1) % speeds.length] || 1;
-            const wrapper = speedButton.closest('.wa-audio') || speedButton.closest('[data-audio-wrapper]');
-            const audio = wrapper?.querySelector('audio');
-            if (audio) audio.playbackRate = next;
-            speedButton.dataset.speed = String(next);
-            speedButton.textContent = `${String(next).replace('.', ',')}x`;
-        });
-
         searchInput.addEventListener('input', () => renderList());
         searchInput.addEventListener('keydown', event => {
             if (event.key !== 'Enter') return;
@@ -1646,6 +1427,7 @@
             if (activePhone) loadOperatorLock();
         }, 3000);
 
+        // Таймерді әр секунд сайын жаңарту
         setInterval(renderOperatorLock, 1000);
 
     </script>
