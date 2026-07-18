@@ -483,59 +483,62 @@
             text-transform: uppercase;
         }
 
-        /* АУДИО ОЙНАТҚЫШ СТИЛЬДЕРІ */
-        .audio-wrap {
-            display: block;
-            margin-top: 8px;
-        }
+       
+        /* АУДИО ОЙНАТҚЫШ СТИЛЬДЕРІ (WhatsApp стиль) */
+        .audio-wrap { display: block; margin-top: 4px; }
         .audio-player { display: none; }
-        .audio-status {
-            min-height: 34px;
+        .audio-status { color: inherit; font-size: 12px; font-style: italic; opacity: 0.7; padding: 4px; }
+        .wa-audio {
             display: flex;
             align-items: center;
-            color: #a9bad2;
-            font-size: 12px;
-            font-weight: 800;
-        }
-        .wa-audio {
-            min-width: 280px;
-            max-width: 100%;
-            display: grid;
-            grid-template-columns: 42px minmax(120px, 1fr) 44px 52px;
             gap: 10px;
-            align-items: center;
-            padding: 10px 12px;
-            border-radius: 14px;
-            background: #075e46;
+            min-width: 220px;
+            max-width: 280px;
+            padding: 4px 6px;
         }
-        .wa-audio.loading { opacity: .72; }
-        .audio-play, .audio-speed {
+        .wa-audio.loading { opacity: 0.6; }
+        .audio-play {
+            width: 36px;
             height: 36px;
-            border-radius: 999px;
-            background: rgba(0, 0, 0, .18);
-            color: #f1fff8;
-            font-size: 13px;
-            font-weight: 900;
+            flex: 0 0 auto;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            display: grid;
+            place-items: center;
+            font-size: 16px;
+            padding-left: 2px;
         }
-        .audio-play { width: 36px; font-size: 16px; }
-        .audio-play:disabled { cursor: default; opacity: .55; }
+        .user .audio-play { background: rgba(255, 255, 255, 0.1); }
+        .audio-play:disabled { cursor: not-allowed; opacity: 0.5; }
+        .audio-wave-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
         .audio-wave {
-            height: 30px;
-            background:
-                repeating-linear-gradient(90deg, rgba(226, 255, 244, .34) 0 3px, transparent 3px 9px);
-            mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
-            border-radius: 999px;
+            height: 16px;
+            background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.4) 0 2px, transparent 2px 5px);
+            border-radius: 8px;
+            width: 100%;
         }
-        .audio-time {
-            color: rgba(241, 255, 248, .76);
-            font-size: 13px;
-            font-weight: 850;
-            text-align: right;
+        .user .audio-wave { background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0 2px, transparent 2px 5px); }
+        .audio-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.7);
+            font-weight: 600;
         }
         .audio-speed {
-            min-width: 48px;
+            background: rgba(255, 255, 255, 0.15);
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 10px;
         }
-        .audio-bubble { width: min(430px, 90%); max-width: min(430px, 90%); }
 
         .composer {
             position: sticky;
@@ -929,7 +932,13 @@
             const time = Number(value || 0);
             if (!time || time < 100000000000) return '';
             const date = new Date(time);
-            return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' });
+            try {
+                // Қазақ немесе Орыс тілінде уақытты шығару
+                return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' });
+            } catch (error) {
+                // Егер браузер kk-KZ локалін қолдамаса, қате бермей стандартты уақытты шығарады
+                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
         }
 
         function userIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.8 20a7.2 7.2 0 0 1 14.4 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'; }
@@ -1084,99 +1093,23 @@
             listEl.scrollTop = previousTop;
         }
 
-        // АУДИО ОЙНАТҚЫШ
-        function buildAudioHtml(item) {
-            const mediaKind = String(item?.mediaKind || item.type || '').toLowerCase();
-            const mediaTypeRaw = String(item.mediaType || '').trim();
-            const mediaType = (mediaTypeRaw.split(';')[0] || '').replace(/[^\w/+.-]/g, '');
-            const hasAudioPayload = Boolean(item.audioMessage || item.data?.message?.audioMessage);
-            const isMedia = mediaKind === 'audio' || mediaKind === 'ptt' || mediaType.startsWith('audio/') || hasAudioPayload;
-            if (!isMedia) return '';
-            
-            const rawData = String(item.mediaData || item.body || '');
-            const hasInlineAudio = rawData.startsWith('data:audio') || rawData.includes(';base64,') || /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
-            const safeMediaType = mediaType || 'audio/ogg';
-            const src = hasInlineAudio
-                ? (rawData.startsWith('data:') ? rawData : `data:${safeMediaType};base64,${rawData}`)
-                : '';
-            const messageId = String(item.id || '').replace(/"/g, '&quot;');
-            const player = (source) => `
-                <div class="wa-audio">
-                    <button class="audio-play" type="button" data-audio-play aria-label="Play">▶</button>
-                    <div class="audio-wave" aria-hidden="true"></div>
-                    <span class="audio-time" data-audio-time>0:00</span>
-                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
-                    <audio class="audio-player" preload="metadata" src="${escapeHtml(source)}"></audio>
-                </div>`;
-            
-            return `
-                <div class="audio-wrap ${src ? '' : 'loading'}" data-audio-wrapper data-audio-id="${escapeHtml(messageId)}">
-                    ${src ? player(src) : `<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>`}
-                </div>`;
-        }
-
+        // --- АУДИО ОЙНАТҚЫШ (WHATSAPP STYLE) ---
         function formatAudioTime(value) {
             const seconds = Math.max(0, Math.floor(Number(value) || 0));
             return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-        }
-
-        function syncAudioWidgets() {
-            for (const audio of messagesEl.querySelectorAll('audio.audio-player:not([data-bound])')) {
-                audio.dataset.bound = '1';
-                const widget = audio.closest('.wa-audio');
-                const play = widget?.querySelector('[data-audio-play]');
-                const time = widget?.querySelector('[data-audio-time]');
-                const update = () => {
-                    if (time) time.textContent = formatAudioTime(audio.currentTime || audio.duration || 0);
-                    if (play) play.textContent = audio.paused ? '▶' : 'Ⅱ';
-                };
-                audio.addEventListener('loadedmetadata', update);
-                audio.addEventListener('timeupdate', update);
-                audio.addEventListener('play', update);
-                audio.addEventListener('pause', update);
-                audio.addEventListener('ended', () => {
-                    audio.currentTime = 0;
-                    update();
-                });
-                update();
-            }
-        }
-
-        async function hydrateAudioPlayers() {
-            const wrappers = [...messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])')];
-            for (const wrapper of wrappers) {
-                if (wrapper.querySelector('audio') || !wrapper.dataset.audioId) {
-                    wrapper.dataset.audioLoaded = '1';
-                    continue;
-                }
-                wrapper.dataset.audioLoaded = '1';
-                try {
-                    const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(wrapper.dataset.audioId)}`);
-                    if (!data.mediaData) throw new Error('MEDIA_EMPTY');
-                    wrapper.classList.remove('loading');
-                    wrapper.innerHTML = `
-                        <div class="wa-audio">
-                            <button class="audio-play" type="button" data-audio-play aria-label="Play">▶</button>
-                            <div class="audio-wave" aria-hidden="true"></div>
-                            <span class="audio-time" data-audio-time>0:00</span>
-                            <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
-                            <audio class="audio-player" preload="metadata" src="${escapeHtml(data.mediaData)}"></audio>
-                        </div>`;
-                    syncAudioWidgets();
-                } catch {
-                    const status = wrapper.querySelector('[data-audio-status]');
-                    if (status) status.textContent = 'Аудио жүктелмеді. Қайта ашып көріңіз.';
-                }
-            }
         }
 
         function audioMarkup(src = '') {
             return `
                 <div class="wa-audio ${src ? '' : 'loading'}">
                     <button class="audio-play" type="button" data-audio-play aria-label="Play" ${src ? '' : 'disabled'}>&#9658;</button>
-                    <div class="audio-wave" aria-hidden="true"></div>
-                    <span class="audio-time" data-audio-time>0:00</span>
-                    <button class="audio-speed" type="button" data-audio-speed data-speed="1" title="Playback speed" aria-label="Playback speed">1x</button>
+                    <div class="audio-wave-col">
+                        <div class="audio-wave" aria-hidden="true"></div>
+                        <div class="audio-meta">
+                            <span class="audio-time" data-audio-time>0:00</span>
+                            <button class="audio-speed" type="button" data-audio-speed data-speed="1">1x</button>
+                        </div>
+                    </div>
                     <audio class="audio-player" preload="metadata" src="${escapeHtml(src)}"></audio>
                 </div>`;
         }
@@ -1194,7 +1127,7 @@
                 ? (rawData.startsWith('data:') ? rawData : `data:${mediaType || 'audio/ogg'};base64,${rawData}`)
                 : '';
 
-            return `<div class="audio-wrap ${src ? '' : 'loading'}" data-audio-wrapper data-audio-id="${escapeHtml(item.id || '')}">${audioMarkup(src)}</div>`;
+            return `<div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(item.id || '')}">${src ? audioMarkup(src) : '<div class="audio-status" data-audio-status>Аудио жүктелуде...</div>'}</div>`;
         }
 
         function syncAudioWidgets() {
@@ -1211,10 +1144,7 @@
                 audio.addEventListener('timeupdate', update);
                 audio.addEventListener('play', update);
                 audio.addEventListener('pause', update);
-                audio.addEventListener('ended', () => {
-                    audio.currentTime = 0;
-                    update();
-                });
+                audio.addEventListener('ended', () => { audio.currentTime = 0; update(); });
                 update();
             }
         }
@@ -1228,20 +1158,21 @@
                 }
                 const id = wrapper.dataset.audioId;
                 if (!id) continue;
-                wrapper.dataset.audioLoaded = '1';
+                
+                wrapper.dataset.audioLoaded = '1'; // Қайта-қайта сұрай бермес үшін бұғаттаймыз
                 try {
                     const data = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
                     if (!data.mediaData) throw new Error('MEDIA_EMPTY');
-                    wrapper.classList.remove('loading');
                     wrapper.innerHTML = audioMarkup(data.mediaData);
                     syncAudioWidgets();
                 } catch {
-                    delete wrapper.dataset.audioLoaded;
-                    setTimeout(hydrateAudioPlayers, 3000);
+                    const status = wrapper.querySelector('[data-audio-status]');
+                    if (status) status.textContent = 'Аудио жүктелмеді';
+                    delete wrapper.dataset.audioLoaded; // Қате болса кейін қайта көреді
                 }
             }
         }
-
+        // ----------------------------------------
         function getHistorySignature(history) {
             if (!history || !history.length) return '__empty__';
             return (history || []).map(item => [

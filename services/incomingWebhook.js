@@ -169,23 +169,27 @@ async function forwardToOpenBot(payload) {
 async function forwardIncomingWhatsAppMessage(payload) {
   const started = Date.now();
   const skipOpenBot = await shouldSkipOpenBot(payload);
-  const [redisResult, openBotResult] = await Promise.allSettled([
-    saveIncomingMessage(payload),
-    skipOpenBot ? Promise.resolve({ skipped: true, reason: 'operator_active' }) : forwardToOpenBot(payload)
-  ]);
-
-  if (redisResult.status === 'rejected') {
-    console.error(`[INBOX REDIS] failed elapsed=${Date.now() - started}ms error=${redisResult.reason?.message || redisResult.reason}`);
+  
+  // Redis-ке жазу өте жылдам, оны күтуге болады
+  const redisResult = await saveIncomingMessage(payload).catch(err => {
+      console.error(`[INBOX REDIS] failed elapsed=${Date.now() - started}ms error=${err.message}`);
+      return { success: false, error: err };
+  });
+  
+  if (redisResult.skipped) {
+      return { redis: redisResult, openbot: { skipped: true, reason: redisResult.reason } };
   }
 
-  if (openBotResult.status === 'rejected') {
-    console.error(`[OPENBOT WEBHOOK] failed elapsed=${Date.now() - started}ms status=${openBotResult.reason?.response?.status || '-'} error=${openBotResult.reason?.message || openBotResult.reason}`);
-    throw openBotResult.reason;
+  // Webhook-ты фондық режимде (background) жібереміз, Node.js процесін тоқтатпаймыз
+  if (!skipOpenBot) {
+      forwardToOpenBot(payload).catch(err => {
+          console.error(`[OPENBOT WEBHOOK BACKGROUND] failed elapsed=${Date.now() - started}ms error=${err.message}`);
+      });
   }
 
   return {
-    redis: redisResult.status === 'fulfilled' ? redisResult.value : { success: false },
-    openbot: openBotResult.value
+    redis: redisResult,
+    openbot: { status: 'processing_in_background' }
   };
 }
 

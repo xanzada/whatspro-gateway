@@ -52,7 +52,7 @@ const authResetting = new Set();
 const pendingTextQueues = new Map();
 const flushTimers = new Map();
 const intentionallyStopped = new Set();
-const messageCache = new Map();
+
 const jidMap = new Map();
 let shutdownInProgress = false;
 
@@ -673,10 +673,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
         console.log(`📥 [${instanceId}] Жаңа хат: ${msg.from} -> ${msg.body}`);
 
-        if (msg.hasMedia) {
-            messageCache.set(msg.id.id, msg);
-            setTimeout(() => messageCache.delete(msg.id.id), 10 * 60 * 1000); 
-        }
+       
         scheduleMediaPersist(instanceId, msg);
 
         let downloadedMedia = null;
@@ -1052,13 +1049,10 @@ async function sendPresence(instanceId, phone) {
 // 📥 КЛИЕНТТЕН КЕЛГЕН СУРЕТ/АУДИОНЫ ЖҮКТЕП АЛУ (Base64 форматына)
 async function getBase64Media(instanceId, keyObj) {
     try {
-        // Контроллер keyObj жібереді, соның ішінен нақты хаттың id-ін суырып аламыз
         const actualMessageId = (typeof keyObj === 'object') ? keyObj.id : keyObj;
-        
-        const msg = messageCache.get(actualMessageId);
-        if (!msg || !msg.hasMedia) return null;
-        
-        return (await persistMessageMedia(instanceId, msg))?.mediaUrl || null;
+        // Тек Redis-тен оқимыз. Егер жоқ болса, демек әлі жүктелмеген немесе өшіп қалған.
+        const persisted = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, actualMessageId)]).catch(() => '');
+        return persisted || null;
     } catch (error) {
         console.error(`❌ [DOWNLOAD MEDIA ERROR] ${instanceId}:`, error.message);
         return null;
