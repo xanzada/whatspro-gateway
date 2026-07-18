@@ -664,16 +664,15 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    <!--__CHAT_CONFIG__-->
     <script>
-        const CHAT_CONFIG = window.__CHAT_CONFIG__ || {};
         const params = new URLSearchParams(window.location.search);
-        const instanceId = String(CHAT_CONFIG.instance || params.get('instance') || 'prestige').trim();
-        const apiBase = String(CHAT_CONFIG.apiBase || window.location.origin).replace(/\/+$/, '');
-        const endpoints = CHAT_CONFIG.endpoints || {
+        const instanceId = (params.get('instance') || 'prestige').trim();
+        const apiBase = window.location.origin.replace(/\/+$/, '');
+        const endpoints = {
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
-            send: '/api/chat/send'
+            send: '/api/chat/send',
+            action: '/api/chat/action'
         };
 
         const app = document.getElementById('app');
@@ -718,13 +717,13 @@
                 placeholder: 'Клиентке WhatsApp арқылы жауап...',
                 resolve: 'Жаздым',
                 restore: 'Қайтару',
-                resolving: 'Белгіленуде...',
                 resolveTitle: 'Чатты аяқталды деп белгілеу',
                 restoreTitle: 'Чатты архивтен қайтару',
                 deleteTitle: 'Диалогты толық өшіру',
                 resolveDone: 'Чат аяқталды деп белгіленді',
                 restoreDone: 'Чат архивтен қайтарылды',
                 deleteDone: 'Диалог өшірілді',
+                resolveFailed: 'Чатты белгілеу мүмкін болмады',
                 archiveBadge: 'архив',
                 archiveMeta: 'Архивтегі диалог',
                 archivedPlaceholder: 'Алдымен чатты архивтен қайтарыңыз',
@@ -761,13 +760,13 @@
                 placeholder: 'Ответ клиенту через WhatsApp...',
                 resolve: 'Готово',
                 restore: 'Вернуть',
-                resolving: 'Закрываем...',
                 resolveTitle: 'Отметить чат завершенным',
                 restoreTitle: 'Вернуть чат из архива',
                 deleteTitle: 'Полностью удалить диалог',
                 resolveDone: 'Чат отмечен завершенным',
                 restoreDone: 'Чат возвращен из архива',
                 deleteDone: 'Диалог удален',
+                resolveFailed: 'Не удалось отметить чат',
                 archiveBadge: 'архив',
                 archiveMeta: 'Диалог в архиве',
                 archivedPlaceholder: 'Сначала верните чат из архива',
@@ -778,11 +777,12 @@
         };
 
         let lang = localStorage.getItem('operator_chat_lang') === 'ru' ? 'ru' : 'kk';
-        let chats = []; // Жергілікті массив (архив пен вкладкаларды ұстап тұру үшін)
-        let activeTab = 'all';
+        let chats = [];
+        let activeTab = 'new';
         let activePhone = '';
         let toastTimer = null;
         let isSending = false;
+        let isResolving = false;
         let pendingText = '';
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
@@ -828,21 +828,6 @@
             return digits.length >= 10 ? digits : '';
         }
 
-        function isChatArchived(chat) {
-            return Boolean(chat && chat.closed);
-        }
-
-        function counts() {
-            const active = chats.filter(chat => !isChatArchived(chat));
-            const archived = chats.filter(isChatArchived);
-            return {
-                new: active.filter(chat => chat.unread).length,
-                all: active.length,
-                operator: active.filter(chat => chat.hasOperator).length,
-                archive: archived.length
-            };
-        }
-
         function updateDirectChatButton() {
             const phone = searchPhoneCandidate();
             const alreadyListed = phone && chats.some(chat => normalizePhone(chat.phone) === phone);
@@ -862,6 +847,19 @@
             searchInput.value = '';
             renderList();
             openChat(phone);
+        }
+
+        function isChatArchived(chat) { return Boolean(chat && chat.closed); }
+
+        function counts() {
+            const active = chats.filter(chat => !isChatArchived(chat));
+            const archived = chats.filter(isChatArchived);
+            return {
+                new: active.filter(chat => chat.unread).length,
+                all: active.length,
+                operator: active.filter(chat => chat.hasOperator).length,
+                archive: archived.length
+            };
         }
 
         function filteredChats() {
@@ -923,6 +921,7 @@
                 const active = activePhone === phone ? 'active' : '';
                 const unread = chat.unread ? 'unread' : '';
                 const archived = isChatArchived(chat);
+                const actionDisabled = isResolving ? 'disabled' : '';
                 
                 const badges = [
                     archived ? `<span class="badge gray">${escapeHtml(t('archiveBadge'))}</span>` : '',
@@ -933,12 +932,12 @@
                 const actions = archived
                     ? `
                         <div class="item-actions">
-                            <button class="chat-action restore" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('restoreTitle'))}" aria-label="${escapeHtml(t('restoreTitle'))}">${checkIconSvg()}</button>
-                            <button class="chat-action delete" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('deleteTitle'))}" aria-label="${escapeHtml(t('deleteTitle'))}">${xIconSvg()}</button>
+                            <button class="chat-action restore" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('restoreTitle'))}" aria-label="${escapeHtml(t('restoreTitle'))}">${checkIconSvg()}</button>
+                            <button class="chat-action delete" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('deleteTitle'))}" aria-label="${escapeHtml(t('deleteTitle'))}">${xIconSvg()}</button>
                         </div>`
                     : `
                         <div class="item-actions">
-                            <button class="chat-action done" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" title="${escapeHtml(t('resolveTitle'))}" aria-label="${escapeHtml(t('resolveTitle'))}">${checkIconSvg()}</button>
+                            <button class="chat-action done" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('resolveTitle'))}" aria-label="${escapeHtml(t('resolveTitle'))}">${checkIconSvg()}</button>
                         </div>`;
 
                 return `
@@ -957,23 +956,9 @@
             }).join('');
         }
 
-        function renderDefaultChatEmpty() {
-            messagesEl.innerHTML = `
-                <div class="empty">
-                    <div class="empty-box">
-                        <div class="empty-icon">
-                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
-                        </div>
-                        <h2 id="select-title">${escapeHtml(t('selectTitle'))}</h2>
-                        <p id="select-text">${escapeHtml(t('selectText'))}</p>
-                    </div>
-                </div>`;
-        }
-
-        // АУДИО ЖӘНЕ МЕДИА ОЙНАТҚЫШ
+        // АУДИО ОЙНАТҚЫШ
         function buildAudioHtml(item) {
-            // API-дан келетін type: 'media' немесе audioMessage бойынша тексеру
-            const isMedia = item.type === 'media' || String(item.mediaKind || '') === 'audio' || item.hasMedia;
+            const isMedia = item.type === 'audio' || item.type === 'ptt' || String(item?.mediaKind || '') === 'audio' || item.hasMedia;
             if (!isMedia) return '';
             
             const rawData = String(item.mediaData || item.body || '');
@@ -1057,11 +1042,13 @@
             backBtn.title = t('back');
             setActiveHeader(activePhone);
             renderList();
-            if (!activePhone) renderDefaultChatEmpty();
+            if (!activePhone) {
+                messagesEl.innerHTML = `<div class="empty"><div class="empty-box"><div class="empty-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg></div><h2>${escapeHtml(t('selectTitle'))}</h2><p>${escapeHtml(t('selectText'))}</p></div></div>`;
+            }
             updateComposerState();
         }
 
-        // REST API Helpers
+        // REST API
         async function fetchJson(url) {
             const response = await fetch(`${apiBase}${url}`, { credentials: 'same-origin' });
             const data = await response.json().catch(() => ({}));
@@ -1082,58 +1069,18 @@
         }
 
         async function loadInbox() {
-    if (!instanceId) return;
-    try {
-        const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
-        const items = data.items || [];
-        
-        // Бұрыннан бар чаттардың архив/оператор статусқарын есте сақтау
-        const existingStatus = new Map();
-        chats.forEach(c => {
-            existingStatus.set(c.phone, { closed: c.closed, hasOperator: c.hasOperator, unread: c.unread });
-        });
-
-        const uniqueChatsMap = new Map();
-
-        items.forEach(item => {
-            const rawPhone = String(item.phone || '');
-            // 🚀 ҮТІРДІ ҚИЫП, ТАЗА НӨМІРДІ АЛАМЫЗ (Спамды жою)
-            const purePhone = normalizePhone(rawPhone.split(',')[0]);
-            if (!purePhone) return;
-
-            const timestamp = Number(rawPhone.split(',')[1]) || item.updatedAt || Date.now();
-            
-            if (!uniqueChatsMap.has(purePhone)) {
-                const old = existingStatus.get(purePhone);
-                // 🚀 ЕГЕР ОПЕРАТОР ЖАУАП БЕРМЕГЕН БОЛСА - "ЖАҢА" ВКЛАДКАСЫНА ЖІБЕРЕМІЗ
-                const isUnread = old ? old.unread : (!old?.hasOperator && !old?.closed);
+            if (!instanceId) return;
+            try {
+                const data = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}`);
+                chats = data.items || [];
                 
-                uniqueChatsMap.set(purePhone, {
-                    phone: purePhone,
-                    lastAt: timestamp,
-                    lastText: 'Open conversation',
-                    unread: isUnread,
-                    hasOperator: old ? old.hasOperator : false,
-                    closed: old ? old.closed : false
+                chats.forEach(chat => {
+                    if (chat.phone === activePhone) chat.unread = false; 
                 });
-            } else {
-                const current = uniqueChatsMap.get(purePhone);
-                if (timestamp > current.lastAt) {
-                    current.lastAt = timestamp;
-                    if (activePhone !== purePhone) {
-                        current.unread = true; // Белсенді емес чатқа жаңа хат келсе "Жаңа" қылады
-                    }
-                }
-            }
-        });
-
-        // Сұрыптап массивке қайтару
-        chats = Array.from(uniqueChatsMap.values()).sort((a, b) => b.lastAt - a.lastAt);
-        renderList();
-    } catch (error) {
-        console.error('Inbox load error:', error);
-    }
-}
+                
+                renderList();
+            } catch (error) {}
+        }
 
         async function loadHistory() {
             if (!activePhone) return;
@@ -1143,63 +1090,58 @@
                     renderHistory(data.history || []);
                     updateComposerState();
                 }
-            } catch (error) {
-                console.error('History load error:', error);
-            }
+            } catch (error) {}
         }
 
-      function openChat(phone) {
-    activePhone = normalizePhone(phone);
-    if (!activePhone) return;
+        function openChat(phone) {
+            activePhone = normalizePhone(phone);
+            if (!activePhone) return;
 
-    app.classList.add('chat-open');
-    setActiveHeader(activePhone);
-    inputEl.style.height = 'auto';
-    isSending = false;
-    
-    // 🚀 Чатты ашқан сәтте оны оқылды деп белгілейміз ("Жаңадан" кетеді)
-    const chat = chats.find(c => c.phone === activePhone);
-    if (chat) chat.unread = false;
+            app.classList.add('chat-open');
+            setActiveHeader(activePhone);
+            inputEl.style.height = 'auto';
+            isSending = false;
+            
+            const chat = chats.find(c => c.phone === activePhone);
+            if (chat) chat.unread = false;
 
-    updateComposerState();
-    messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
-    renderList();
-    loadHistory();
-    if (!isMobile()) inputEl.focus({ preventScroll: true });
-}
+            updateComposerState();
+            messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
+            renderList();
+            loadHistory();
+            if (!isMobile()) inputEl.focus({ preventScroll: true });
+        }
 
-        function closeChat() { app.classList.remove('chat-open'); }
+        function closeChat() { app.classList.remove('chat-open'); activePhone = ''; setActiveHeader(''); renderList(); }
 
-        // АРХИВ ЖӘНЕ УДАЛИТЬ ЛОГИКАЛАРЫ (Жергілікті массивте)
-        function runChatAction(action, phone) {
+        // АРХИВ ЖӘНЕ ӨШІРУ ЛОГИКАСЫ
+        async function runChatAction(action, phone) {
             const cleanPhone = normalizePhone(phone);
-            if (!cleanPhone) return;
+            if (!cleanPhone || isResolving) return;
 
-            if (action === 'close') {
-                const chat = chats.find(c => c.phone === cleanPhone);
-                if (chat) {
-                    chat.closed = true;
-                    showToast(t('resolveDone'));
-                }
-            } else if (action === 'restore') {
-                const chat = chats.find(c => c.phone === cleanPhone);
-                if (chat) {
-                    chat.closed = false;
-                    showToast(t('restoreDone'));
-                }
-            } else if (action === 'delete') {
-                chats = chats.filter(c => c.phone !== cleanPhone);
-                showToast(t('deleteDone'));
-            }
-
-            if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
-                activePhone = '';
-                closeChat();
-                renderDefaultChatEmpty();
-                setActiveHeader('');
-            }
+            isResolving = true;
             renderList();
             updateComposerState();
+
+            try {
+                await postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(cleanPhone)}`, { action });
+                
+                if (action === 'close') showToast(t('resolveDone'));
+                if (action === 'restore') showToast(t('restoreDone'));
+                if (action === 'delete') showToast(t('deleteDone'));
+
+                if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
+                    activePhone = '';
+                    app.classList.remove('chat-open');
+                    setActiveHeader('');
+                    messagesEl.innerHTML = '';
+                }
+            } catch (err) {
+                showToast(t('resolveFailed'));
+            } finally {
+                isResolving = false;
+                loadInbox();
+            }
         }
 
         async function sendMessage() {
@@ -1218,22 +1160,11 @@
                 await postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { text });
                 isSending = false;
                 pendingText = '';
-                
-                // 🚀 Оператор жауап берген соң чат статусқарын реттейміз
-                const chat = chats.find(c => c.phone === activePhone);
-                if (chat) {
-                    chat.hasOperator = true;
-                    chat.unread = false;
-                }
-
                 loadInbox();
                 loadHistory();
             } catch (error) {
-              
                 isSending = false;
-                if (pendingText && !inputEl.value.trim()) {
-                    inputEl.value = pendingText;
-                }
+                if (pendingText && !inputEl.value.trim()) inputEl.value = pendingText;
                 pendingText = '';
                 showToast(t('sendFailed'));
                 updateComposerState();
@@ -1244,6 +1175,17 @@
             const button = event.target.closest('.tab');
             if (!button) return;
             activeTab = button.dataset.tab;
+            
+            if (activePhone) {
+                const chat = chats.find(c => c.phone === activePhone);
+                const isArchived = isChatArchived(chat);
+                if ((activeTab === 'archive' && !isArchived) || (activeTab !== 'archive' && isArchived)) {
+                    activePhone = '';
+                    closeChat();
+                    setActiveHeader('');
+                    messagesEl.innerHTML = '';
+                }
+            }
             renderList();
         });
 
@@ -1301,11 +1243,10 @@
         updateComposerState();
         loadInbox();
         
-        // Поллинг: Хабарларды автоматты түрде жаңартып тұру (REST API)
         setInterval(() => {
             loadInbox();
             if (activePhone) loadHistory();
-        }, 5000);
+        }, 4000);
 
     </script>
 </body>
