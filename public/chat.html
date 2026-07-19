@@ -446,99 +446,75 @@
 
         /* --- ЧАТТЫҢ НЕГІЗГІ ОРНАЛАСУЫ (WhatsApp/Telegram стилі) --- */
 .row {
-    display: flex;
-    width: 100%;
-    margin-bottom: 12px;
-    align-items: flex-end; /* Көпіршіктер төменнен тураланады */
-}
+            display: flex;
+            margin: 0 0 12px;
+        }
 
-/* Клиент (сол жақта) */
-.row.user {
-    justify-content: flex-start;
-    padding-right: 15%;
-}
+        /* Клиент сол жақта */
+        .row.user { justify-content: flex-start; }
+        
+        /* Оператор мен Бот оң жақта */
+        .row.operator, .row.model { justify-content: flex-end; }
+        .row.system { justify-content: center; }
 
-/* Оператор/Бот (оң жақта) */
-.row.operator, .row.model {
-    justify-content: flex-end;
-    padding-left: 15%;
-}
+        .bubble {
+            max-width: min(680px, 78%);
+            padding: 11px 13px;
+            border-radius: var(--radius);
+            border: 1px solid var(--line);
+            color: #eaf1fb;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+        }
 
-.row.system {
-    justify-content: center;
-    padding: 0 10%;
-}
+        /* Клиент дизайны */
+        .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
+        
+        /* Бот дизайны */
+        .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-right-radius: 3px; }
+        
+        /* Оператор дизайны */
+        .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
+        
+        .system .bubble {
+            max-width: min(560px, 90%);
+            padding: 8px 11px;
+            background: rgba(245, 158, 11, .12);
+            border-color: rgba(245, 158, 11, .28);
+            color: #fcd34d;
+            font-size: 13px;
+            text-align: center;
+        }
 
-/* --- ХАТ КӨПІРШІКТЕРІ --- */
-.bubble {
-    position: relative;
-    display: inline-block;
-    max-width: 100%;
-    padding: 10px 14px;
-    border-radius: 14px;
-    font-size: 14.5px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
+        .bubble-label {
+            display: block;
+            margin-bottom: 5px;
+            color: #93c5fd;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
 
-/* Клиент дизайны */
-.row.user .bubble {
-    background: var(--panel-2);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-bottom-left-radius: 4px; /* WhatsApp бұрышы */
-}
+        .audio-player {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            height: 38px;
+            margin-top: 0;
+            display: block;
+        }
 
-/* Оператор дизайны */
-.row.operator .bubble, .row.model .bubble {
-    background: #0f766e; /* Сіздің жасыл түсіңіз */
-    color: #ffffff;
-    border-bottom-right-radius: 4px; /* WhatsApp бұрышы */
-}
+        .audio-wrap {
+            display: grid;
+            margin-top: 8px;
+        }
 
-.system .bubble {
-    background: rgba(245, 158, 11, .12);
-    border: 1px solid rgba(245, 158, 11, .28);
-    color: #fcd34d;
-    font-size: 13px;
-    text-align: center;
-    border-radius: 12px;
-}
-
-.bubble-label {
-    display: block;
-    font-size: 11.5px;
-    font-weight: 700;
-    margin-bottom: 6px;
-    color: rgba(255, 255, 255, 0.7);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.row.user .bubble-label {
-    color: rgba(140, 160, 186, 0.8);
-}
-
-/* --- АУДИО ОЙНАТҚЫШ --- */
-.audio-wrap {
-    display: block;
-    width: 260px;
-    max-width: 100%;
-    margin: 2px 0;
-}
-
-.audio-player {
-    width: 100%;
-    height: 40px;
-    outline: none;
-    border-radius: 20px;
-}
-
-.bubble:has(.audio-wrap) {
-    padding: 8px;
-}
+        .audio-bubble {
+            width: min(360px, 86%);
+            max-width: min(360px, 86%);
+        }
 
 @media (max-width: 520px) {
     .row.user { padding-right: 10%; }
@@ -1137,16 +1113,30 @@
 
 function buildMessageHtml(item) {
     try {
-        const isOperator = item.direction === 'outgoing' || item.fromMe === true || item.role === 'operator' || item.role === 'model';
-        const bubbleClass = isOperator ? 'operator' : 'user';
-        const text = escapeHtml(cleanText(item.text || item.body || ''));
+        const role = String(item.role || '').toLowerCase();
+        const isBot = role === 'model' || role === 'assistant';
+        const isOperator = item.direction === 'outgoing' || item.fromMe === true || role === 'operator';
         
+        let bubbleClass = 'user';
+        let labelHtml = '';
+
+        if (isBot) {
+            bubbleClass = 'model';
+            labelHtml = '<span class="bubble-label">AI Bot</span>';
+        } else if (isOperator) {
+            bubbleClass = 'operator';
+            labelHtml = '<span class="bubble-label">Operator</span>';
+        } else if (role === 'system') {
+            bubbleClass = 'system';
+        }
+
+        const text = escapeHtml(cleanText(item.text || item.body || ''));
         const audioHtml = buildAudioHtml(item);
         
         let content = '';
         
-        if (isOperator) {
-            content += '<span class="bubble-label">Operator</span>';
+        if (labelHtml) {
+            content += labelHtml;
         }
         
         if (audioHtml) {
@@ -1159,9 +1149,11 @@ function buildMessageHtml(item) {
 
         if (!content) return '';
 
+        const bubbleDivClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
+
         return `
             <div class="row ${bubbleClass}">
-                <div class="bubble">
+                <div class="${bubbleDivClass}">
                     ${content}
                 </div>
             </div>
