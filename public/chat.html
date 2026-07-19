@@ -488,14 +488,34 @@
             }
         }
 
-        function updateComposer() {
+        function updateComposerState() {
             var hasActive = Boolean(activePhone);
-            var activeChat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
-            var archived = isChatArchived(activeChat);
-            inputEl.disabled = !hasActive || isSending || archived;
-            sendBtn.disabled = !hasActive || isSending || archived || !inputEl.value.trim();
-            inputEl.placeholder = archived ? t('archivedPlaceholder') : t('placeholder');
+            var isArchived = false;
+            
+            // Активті чаттың архивте немесе жабық екенін тексеру
+            if (hasActive && chats && chats.length > 0) {
+                for (var i = 0; i < chats.length; i++) {
+                    if (normalizePhone(chats[i].phone) === activePhone) {
+                        isArchived = Boolean(chats[i].closed);
+                        break;
+                    }
+                }
+            }
+
+            // Бұғаттау (disable) логикасы
+            var shouldDisable = !hasActive || isSending || isArchived;
+
+            if (inputEl) {
+                inputEl.disabled = shouldDisable;
+                inputEl.placeholder = isArchived ? t('archivedPlaceholder') : t('placeholder');
+            }
+            if (sendBtn) {
+                sendBtn.disabled = shouldDisable || !inputEl.value.trim();
+            }
         }
+        
+        // Егер басқа жерде ескі атымен шақырылса, қате бермес үшін:
+        var updateComposer = updateComposerState;
 
         function setHeader() {
             var chat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
