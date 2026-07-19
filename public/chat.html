@@ -91,7 +91,17 @@
             .audio-bubble { width: calc(100vw - 48px); max-width: calc(100vw - 48px) !important; }
             .audio-message { min-width: 0; grid-template-columns: 40px minmax(90px, 1fr) auto; }
         }
-    </style>
+    
+/* Stable message alignment and audio layout */
+.row { width: 100%; min-width: 0; }
+.row.user { justify-content: flex-start; }
+.row.operator, .row.model { justify-content: flex-end; }
+.bubble { min-width: 0; }
+.audio-bubble { width: min(360px, 86%); max-width: min(360px, 86%); padding: 8px 10px; }
+.audio-message { width: 100%; min-width: 248px; }
+.audio-native { display: none; }
+@media (max-width: 520px) { .audio-bubble { width: calc(100vw - 32px); max-width: calc(100vw - 32px); } .audio-message { min-width: 0; } }
+</style>
 </head>
 <body class="bg-bgDark text-textMain h-[100dvh] overflow-hidden flex font-sans" id="app">
 
@@ -574,7 +584,7 @@
             }
             messagesEl.innerHTML = html;
             
-            if (isScrolledNearBottom) scrollToBottom();
+            scrollToBottom();
             hydrateAudioPlayers();
         }
 
