@@ -8,8 +8,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome (Иконкалар) -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <!-- Socket.io -->
-    <script src="/socket.io/socket.io.js"></script>
     
     <script>
         tailwind.config = {
@@ -64,6 +62,35 @@
 
         textarea { resize: none; overflow-y: auto; }
         textarea:focus { outline: none; }
+
+        /* Functional chat/audio patch: preserves the existing visual language */
+        .audio-bubble { width: min(340px, 85vw); }
+        .audio-message {
+            width: 100%; min-width: 248px; display: grid;
+            grid-template-columns: 42px minmax(120px, 1fr) auto;
+            align-items: center; gap: 10px; margin-top: 4px;
+        }
+        .audio-native { display: none; }
+        .audio-play {
+            width: 42px; height: 42px; border-radius: 999px;
+            display: grid; place-items: center; color: #17212b;
+            background: #f5f7fa; flex: 0 0 auto;
+        }
+        .audio-play i { transform: translateX(1px); }
+        .audio-track { height: 24px; position: relative; overflow: hidden; cursor: pointer; }
+        .audio-track::before {
+            content: ''; position: absolute; inset: 9px 0;
+            border-radius: 999px; background: #8b9bb4;
+        }
+        .audio-progress {
+            position: absolute; left: 0; top: 9px; bottom: 9px; width: 0;
+            border-radius: 999px; background: #f5f7fa;
+        }
+        .audio-duration { min-width: 34px; color: #d7e1ec; font-size: 12px; font-variant-numeric: tabular-nums; }
+        @media (max-width: 420px) {
+            .audio-bubble { width: calc(100vw - 48px); max-width: calc(100vw - 48px) !important; }
+            .audio-message { min-width: 0; grid-template-columns: 40px minmax(90px, 1fr) auto; }
+        }
     </style>
 </head>
 <body class="bg-bgDark text-textMain h-[100dvh] overflow-hidden flex font-sans" id="app">
@@ -172,7 +199,42 @@
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const chatToken = String(chatConfig.chatToken || '');
 
+        function apiHeaders(extra) {
+            return Object.assign(
+                {},
+                chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {},
+                extra || {}
+            );
+        }
+
+        async function fetchJson(url) {
+            var response = await fetch(apiBase + url, {
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: apiHeaders({ Accept: 'application/json' })
+            });
+            var data = await response.json().catch(function(){ return {}; });
+            if (!response.ok) throw new Error(data.error || ('HTTP_' + response.status));
+            return data;
+        }
+
+        async function postJson(url, body) {
+            var response = await fetch(apiBase + url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: apiHeaders({ 'content-type': 'application/json', Accept: 'application/json' }),
+                body: JSON.stringify(body || {})
+            });
+            var data = await response.json().catch(function(){ return {}; });
+            if (!response.ok) throw new Error(data.error || ('HTTP_' + response.status));
+            return data;
+        }
+
         const endpoints = {
+            inbox: '/api/chat/inbox',
+            history: '/api/chat/history',
+            send: '/api/chat/send',
             media: '/api/chat/media',
             lock: '/api/chat/operator-lock',
             action: '/api/chat/action',
@@ -257,6 +319,13 @@
         let toastTimer = null;
         let isSending = false;
         let isResolving = false;
+        let pendingText = '';
+        let inboxSignature = '';
+        let historySignature = '';
+        let isInboxLoading = false;
+        let isHistoryLoading = false;
+        let isLockLoading = false;
+        let lastViewSyncAt = 0;
         let operatorLockUntil = 0;
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
@@ -293,6 +362,11 @@
         }
 
         function normalizePhone(value) { return String(value || '').replace(/\D/g, ''); }
+
+        function searchPhoneCandidate() {
+            var digits = normalizePhone(searchInput.value);
+            return digits.length >= 10 ? digits : '';
+        }
         
         function scrollToBottom() {
             requestAnimationFrame(function() {
@@ -391,60 +465,98 @@
         }
 
         // АУДИО ОЙНАТҚЫШ
+        function normalizeAudioSource(value, fallbackType) {
+            var raw = String(value || '').trim();
+            if (!raw) return '';
+            var mime = String(fallbackType || 'audio/ogg').split(';')[0].trim().toLowerCase();
+            if (mime.indexOf('audio/') !== 0) mime = 'audio/ogg';
+
+            if (raw.indexOf('data:') === 0) {
+                var comma = raw.indexOf(',');
+                if (comma < 0) return '';
+                var header = raw.substring(0, comma);
+                var payload = raw.substring(comma + 1).replace(/\s+/g, '');
+                if (!payload) return '';
+                var match = header.match(/^data:([^;,]+)/i);
+                var detected = match && match[1] && match[1].indexOf('audio/') === 0 ? match[1] : mime;
+                return 'data:' + detected + ';base64,' + payload;
+            }
+
+            raw = raw.replace(/\s+/g, '');
+            return raw ? 'data:' + mime + ';base64,' + raw : '';
+        }
+
         function buildAudioHtml(item) {
             if (!item) return '';
-            var type = String(item.type || item.mediaKind || '').toLowerCase();
-            var mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '');
-            var rawData = String(item.mediaData || '').trim();
-            var hasAudioMsg = false;
-            if (item.audioMessage) hasAudioMsg = true;
-            if (item.data && item.data.message && item.data.message.audioMessage) hasAudioMsg = true;
-            
-            if (type !== 'audio' && type !== 'ptt' && !hasAudioMsg && mediaType.indexOf('audio/') !== 0) return '';
-            
-            if (rawData) {
-                var src = rawData.indexOf('data:') === 0 ? rawData : 'data:' + mediaType + ';base64,' + rawData.replace(/\s+/g, '');
-                return '<div class="mt-2"><audio controls controlsList="nodownload" preload="metadata" src="' + escapeHtml(src) + '"></audio></div>';
-            }
-            if (item.id) {
-                return '<div class="mt-2" data-audio-id="' + escapeHtml(String(item.id)) + '"><audio controls controlsList="nodownload" preload="none"></audio></div>';
-            }
-            return '';
+            var type = String(item.mediaKind || item.type || '').toLowerCase();
+            var mediaType = String(item.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
+            var hasAudioPayload = Boolean(item.audioMessage || (item.data && item.data.message && item.data.message.audioMessage));
+            var isAudio = type === 'audio' || type === 'ptt' || mediaType.indexOf('audio/') === 0 || hasAudioPayload;
+            if (!isAudio) return '';
+
+            var src = normalizeAudioSource(item.mediaData, mediaType);
+            var id = escapeHtml(String(item.id || ''));
+            var source = src ? ' src="' + escapeHtml(src) + '"' : '';
+            var pending = src ? '' : ' data-audio-id="' + id + '"';
+
+            return '<div class="audio-message"' + pending + '>' +
+                '<audio class="audio-native" preload="metadata"' + source + '></audio>' +
+                '<button class="audio-play" type="button" aria-label="Play"><i class="fa-solid fa-play"></i></button>' +
+                '<div class="audio-track"><div class="audio-progress"></div></div>' +
+                '<span class="audio-duration">0:00</span>' +
+            '</div>';
         }
 
         function buildMessageHtml(item) {
             try {
                 var role = String(item.role || '').toLowerCase();
+                var source = String(item.source || '').toLowerCase();
+                var isSystem = role === 'system';
+                var isBot = role === 'model' || role === 'assistant' || role === 'bot';
+                var isOperator = role === 'operator' || source === 'operator_panel';
                 var isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
-                var isBot = role === 'model' || role === 'assistant';
-                var isOp = role === 'operator';
-                
+
                 var wrapperCls = 'flex justify-start w-full';
                 var bubbleCls = 'bg-bubbleUser text-textMain rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                var labelHtml = '';
+                var label = lang === 'ru' ? 'Клиент' : 'Клиент';
+                var labelClass = 'text-sky-300';
 
-                if (isBot && !isOutgoing) {
-                    wrapperCls = 'flex justify-end w-full';
-                    bubbleCls = 'bg-bubbleBot text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                    labelHtml = '<div class="text-[10px] font-bold text-blue-300 mb-1 uppercase tracking-wider">' + t('botLabel') + '</div>';
-                } else if (isOutgoing || isOp) {
-                    wrapperCls = 'flex justify-end w-full';
-                    bubbleCls = 'bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                    if (isOp) labelHtml = '<div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">' + t('operatorBadge') + '</div>';
-                } else if (role === 'system') {
+                if (isSystem) {
                     wrapperCls = 'flex justify-center w-full';
                     bubbleCls = 'bg-gray-800 text-gray-400 rounded-lg px-3 py-1 text-xs text-center max-w-[90%] border border-gray-700';
+                    label = '';
+                } else if (isOperator) {
+                    wrapperCls = 'flex justify-end w-full';
+                    bubbleCls = 'bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                    label = lang === 'ru' ? 'Оператор' : 'Оператор';
+                    labelClass = 'text-emerald-300';
+                } else if (isBot) {
+                    wrapperCls = 'flex justify-end w-full';
+                    bubbleCls = 'bg-bubbleBot text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                    label = t('botLabel');
+                    labelClass = 'text-blue-300';
+                } else if (isOutgoing) {
+                    wrapperCls = 'flex justify-end w-full';
+                    bubbleCls = 'bg-bubbleBot text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                    label = t('botLabel');
+                    labelClass = 'text-blue-300';
                 }
 
                 var text = escapeHtml(cleanText(item.text || item.body || ''));
                 var audioHtml = buildAudioHtml(item);
-                var timeHtml = '<div class="text-[10px] text-white/50 text-right mt-1.5 float-right clear-both ml-3">' + escapeHtml(formatTime(item.createdAt)) + '</div>';
+                var labelHtml = label ? '<div class="text-[10px] font-bold ' + labelClass + ' mb-1 uppercase tracking-wider">' + escapeHtml(label) + '</div>' : '';
+                var timeHtml = '<div class="text-[10px] text-white/50 text-right mt-1.5 clear-both">' + escapeHtml(formatTime(item.createdAt || item.timestamp)) + '</div>';
 
-                if (!text && !audioHtml && !labelHtml) return '';
-                if (audioHtml && !text) bubbleCls += ' !p-1 !bg-transparent !shadow-none';
+                if (!text && !audioHtml && !isSystem) return '';
+                if (audioHtml) bubbleCls += ' audio-bubble';
 
-                return '<div class="' + wrapperCls + '"><div class="' + bubbleCls + '">' + labelHtml + '<div class="text-[14px] leading-relaxed break-words">' + text + '</div>' + audioHtml + timeHtml + '</div></div>';
-            } catch (e) { return ''; }
+                return '<div class="' + wrapperCls + '"><div class="' + bubbleCls + '">' + labelHtml +
+                    (text ? '<div class="text-[14px] leading-relaxed break-words">' + text + '</div>' : '') +
+                    audioHtml + timeHtml + '</div></div>';
+            } catch (e) {
+                console.error('Message render error:', e);
+                return '';
+            }
         }
 
         function renderHistory(history) {
@@ -470,22 +582,74 @@
             var placeholders = messagesEl.querySelectorAll('[data-audio-id]:not([data-loaded])');
             for (var i = 0; i < placeholders.length; i++) {
                 var el = placeholders[i];
-                var id = el.getAttribute('data-audio-id');
+                var id = String(el.getAttribute('data-audio-id') || '').trim();
                 var player = el.querySelector('audio');
                 if (!id || !player) continue;
-                
+
                 el.setAttribute('data-loaded', '1');
                 try {
-                    var res = await fetch(apiBase + endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id), { headers: apiHeaders() });
-                    var data = await res.json();
-                    if (data && data.mediaData) {
-                        var type = String(data.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
-                        player.src = data.mediaData.startsWith('data:') ? data.mediaData : 'data:' + type + ';base64,' + data.mediaData.replace(/\s+/g, '');
-                    }
-                } catch (e) {
+                    var response = await fetch(
+                        apiBase + endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id),
+                        {
+                            credentials: 'same-origin',
+                            cache: 'no-store',
+                            headers: apiHeaders({ Accept: 'audio/*,application/octet-stream;q=0.9' })
+                        }
+                    );
+                    if (!response.ok) throw new Error('MEDIA_HTTP_' + response.status);
+                    var blob = await response.blob();
+                    if (!blob || !blob.size || blob.type.indexOf('audio/') !== 0) throw new Error('MEDIA_INVALID');
+
+                    var previousUrl = player.getAttribute('data-object-url');
+                    if (previousUrl) URL.revokeObjectURL(previousUrl);
+                    var objectUrl = URL.createObjectURL(blob);
+                    player.setAttribute('data-object-url', objectUrl);
+                    player.src = objectUrl;
+                    player.load();
+                    bindAudioPlayer(el);
+                } catch (error) {
                     el.removeAttribute('data-loaded');
+                    setTimeout(hydrateAudioPlayers, 3000);
                 }
             }
+
+            var ready = messagesEl.querySelectorAll('.audio-message:not([data-audio-bound])');
+            for (var j = 0; j < ready.length; j++) bindAudioPlayer(ready[j]);
+        }
+
+        function formatAudioDuration(value) {
+            var seconds = Math.max(0, Math.floor(Number(value) || 0));
+            return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+        }
+
+        function bindAudioPlayer(wrapper) {
+            if (!wrapper || wrapper.getAttribute('data-audio-bound') === '1') return;
+            var player = wrapper.querySelector('audio');
+            var button = wrapper.querySelector('.audio-play');
+            var progress = wrapper.querySelector('.audio-progress');
+            var duration = wrapper.querySelector('.audio-duration');
+            if (!player || !button) return;
+
+            wrapper.setAttribute('data-audio-bound', '1');
+            function sync() {
+                var total = Number.isFinite(player.duration) ? player.duration : 0;
+                var current = Number.isFinite(player.currentTime) ? player.currentTime : 0;
+                if (duration) duration.textContent = formatAudioDuration(player.paused ? total : current);
+                if (progress) progress.style.width = total > 0 ? Math.min(100, current / total * 100) + '%' : '0%';
+                button.innerHTML = '<i class="fa-solid fa-' + (player.paused ? 'play' : 'pause') + '"></i>';
+            }
+            button.addEventListener('click', function() {
+                var all = messagesEl.querySelectorAll('audio.audio-native');
+                for (var i = 0; i < all.length; i++) if (all[i] !== player) all[i].pause();
+                if (player.paused) player.play().catch(function(){}); else player.pause();
+            });
+            player.addEventListener('loadedmetadata', sync);
+            player.addEventListener('durationchange', sync);
+            player.addEventListener('timeupdate', sync);
+            player.addEventListener('play', sync);
+            player.addEventListener('pause', sync);
+            player.addEventListener('ended', function(){ player.currentTime = 0; sync(); });
+            sync();
         }
 
         function updateComposerState() {
@@ -542,23 +706,22 @@
         function openChat(phone) {
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
-            
             if (activeTab === 'new') activeTab = 'all';
-            
+
             app.classList.add('chat-open');
             setHeader();
-            updateComposer();
             inputEl.value = '';
             inputEl.style.height = 'auto';
             messagesEl.innerHTML = '<div class="m-auto text-textMuted text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + t('loading') + '</div>';
-            
+
             var chat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
             if (chat) { chat.unread = false; chat.viewed = true; }
             renderList();
-
-            if (socket && socket.connected) {
-                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
-            }
+            updateComposerState();
+            historySignature = '';
+            loadHistory(true);
+            loadOperatorLock();
+            syncViewedState();
             if (!isMobile()) inputEl.focus();
         }
 
@@ -583,30 +746,55 @@
             if (items.length > 0 && items[0].phone) openChat(items[0].phone);
         }
 
-        function actionChat(action, phone) {
-            if (isResolving) return;
+        async function actionChat(action, phone) {
+            var cleanPhone = normalizePhone(phone);
+            if (!cleanPhone || isResolving) return;
             isResolving = true;
-            var events = { close: 'operator_close_chat', restore: 'operator_restore_chat', delete: 'operator_delete_chat' };
-            var eventName = events[action];
-            if (!eventName) return;
-            socket.emit(eventName, { instanceId: instanceId, phone: normalizePhone(phone) });
+            updateComposerState();
+            try {
+                await postJson(endpoints.action + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(cleanPhone), { action: action });
+                inboxSignature = '';
+                if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) closeChat();
+                await loadInbox(true);
+            } catch (error) {
+                showToast(error.message || 'Action failed', 'error');
+            } finally {
+                isResolving = false;
+                updateComposerState();
+            }
         }
 
-        function sendMessage() {
+        async function sendMessage() {
             var text = inputEl.value.trim();
             if (!text || !activePhone || isSending) return;
-            
+
             pendingText = text;
             isSending = true;
             inputEl.value = '';
             inputEl.style.height = 'auto';
-            updateComposer();
+            updateComposerState();
+            messagesEl.insertAdjacentHTML('beforeend', buildMessageHtml({
+                role: 'operator', source: 'operator_panel', direction: 'outgoing', fromMe: true,
+                text: text, createdAt: Date.now()
+            }));
+            scrollToBottom();
 
-            socket.emit('operator_send_message', { instanceId: instanceId, phone: activePhone, text: text });
-            
-            // 60 секундтық таймерді қосу
-            operatorLockUntil = Date.now() + 60000;
-            renderOperatorLock();
+            try {
+                await postJson(endpoints.send + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(activePhone), { text: text });
+                pendingText = '';
+                operatorLockUntil = Date.now() + 60000;
+                renderOperatorLock();
+                historySignature = '';
+                inboxSignature = '';
+                await Promise.all([loadHistory(true), loadInbox(true), loadOperatorLock()]);
+            } catch (error) {
+                if (pendingText && !inputEl.value.trim()) inputEl.value = pendingText;
+                pendingText = '';
+                showToast(t('sendFailed'), 'error');
+            } finally {
+                isSending = false;
+                updateComposerState();
+            }
         }
 
         // --- БАТЫРМАЛАР ЖӘНЕ ОҚИҒАЛАР (EVENTS) ---
@@ -655,9 +843,12 @@
         backBtn.addEventListener('click', closeChat);
         sendBtn.addEventListener('click', sendMessage);
         refreshBtn.addEventListener('click', function() {
-            if (socket.connected) {
-                socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-                if (activePhone) socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            inboxSignature = '';
+            historySignature = '';
+            loadInbox(true);
+            if (activePhone) {
+                loadHistory(true);
+                loadOperatorLock();
             }
         });
 
@@ -684,111 +875,90 @@
             });
         }
 
-        // --- SOCKET.IO ТЫҢДАУШЫЛАРЫ ---
-        const socket = io({ transports: ['websocket', 'polling'] });
-
-        socket.on('connect', function() {
-            socket.emit('operator_join', instanceId);
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('active_chats_list', function(payload) {
-            chats = Array.isArray(payload) ? payload : (payload && payload.chats ? payload.chats : []);
-            renderList();
-            ensureDesktopSelection();
-            setHeader();
-        });
-
-        socket.on('chat_history_data', function(data) {
-            if (data && normalizePhone(data.phone) === activePhone) {
-                renderHistory(data.history || []);
-                updateComposer();
+        // --- REST СИНХРОНДАУ ---
+        async function loadInbox(force) {
+            if (isInboxLoading && !force) return;
+            isInboxLoading = true;
+            try {
+                var data = await fetchJson(endpoints.inbox + '/' + encodeURIComponent(instanceId) + '?limit=500');
+                var nextChats = Array.isArray(data.items) ? data.items : (Array.isArray(data.chats) ? data.chats : []);
+                var signature = JSON.stringify(nextChats.map(function(chat){
+                    return [chat.phone, chat.lastAt, chat.updatedAt, chat.lastText, chat.unread, chat.viewed, chat.hasOperator, chat.closed];
+                }));
+                chats = nextChats;
+                if (force || signature !== inboxSignature) {
+                    inboxSignature = signature;
+                    renderList();
+                    ensureDesktopSelection();
+                    setHeader();
+                }
+            } catch (error) {
+                console.error('Inbox load failed:', error);
+            } finally {
+                isInboxLoading = false;
             }
-        });
+        }
 
-        socket.on('new_client_message', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-            if (activePhone === normalizePhone(data.phone)) {
-                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+        async function loadHistory(force) {
+            if (!activePhone || (isHistoryLoading && !force)) return;
+            isHistoryLoading = true;
+            var requestedPhone = activePhone;
+            try {
+                var data = await fetchJson(endpoints.history + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(requestedPhone));
+                if (requestedPhone !== activePhone) return;
+                var history = Array.isArray(data.history) ? data.history : (Array.isArray(data.items) ? data.items : []);
+                var signature = JSON.stringify(history.map(function(item){
+                    return [item.id, item.createdAt, item.timestamp, item.role, item.source, item.direction, item.fromMe, item.text, item.body, item.type, item.mediaKind, item.mediaType, String(item.mediaData || '').length];
+                }));
+                if (force || signature !== historySignature) {
+                    historySignature = signature;
+                    renderHistory(history);
+                }
+                syncViewedState();
+            } catch (error) {
+                console.error('History load failed:', error);
+                if (requestedPhone === activePhone) messagesEl.innerHTML = '<div class="m-auto text-red-400 text-sm">' + escapeHtml(error.message) + '</div>';
+            } finally {
+                isHistoryLoading = false;
             }
-        });
+        }
 
-        socket.on('operator_message', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-            if (activePhone === normalizePhone(data.phone)) {
-                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+        function syncViewedState() {
+            if (!activePhone || Date.now() - lastViewSyncAt < 5000) return;
+            lastViewSyncAt = Date.now();
+            postJson(endpoints.action + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(activePhone), { action: 'view' }).catch(function(){});
+        }
+
+        async function loadOperatorLock() {
+            if (!activePhone || isLockLoading) return;
+            isLockLoading = true;
+            var requestedPhone = activePhone;
+            try {
+                var data = await fetchJson(endpoints.lock + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(requestedPhone));
+                if (activePhone === normalizePhone(data.phone || requestedPhone)) {
+                    operatorLockUntil = Number(data.ttl || 0) > 0 ? Date.now() + Number(data.ttl) * 1000 : 0;
+                    renderOperatorLock();
+                }
+            } catch (error) {
+            } finally {
+                isLockLoading = false;
             }
-        });
-
-        socket.on('operator_send_ok', function(data) {
-            isSending = false;
-            pendingText = '';
-            updateComposer();
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-            if (data && normalizePhone(data.phone) === activePhone) {
-                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
-            }
-        });
-
-        socket.on('operator_send_error', function(data) {
-            isSending = false;
-            if (pendingText && !inputEl.value.trim()) {
-                inputEl.value = pendingText;
-                inputEl.style.height = Math.min(inputEl.scrollHeight, 132) + 'px';
-            }
-            pendingText = '';
-            updateComposer();
-            showToast(data && data.error === 'WHATSAPP_NOT_READY' ? 'WhatsApp қосылмаған' : t('sendFailed'), 'error');
-            if (activePhone) socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
-        });
-
-        socket.on('chat_closed', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            showToast(t('resolveDone'));
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('operator_close_ok', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('chat_restored', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            showToast(t('restoreDone'));
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('operator_restore_ok', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('chat_deleted', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            showToast(t('deleteDone'));
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
-
-        socket.on('operator_delete_ok', function(data) {
-            if (!data || data.instanceId !== instanceId) return;
-            isResolving = false;
-            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        });
+        }
 
         // БАСТАПҚЫ БАПТАУЛАР
         setHeader();
-        setInterval(renderOperatorLock, 1000);
+        updateComposerState();
+        loadInbox(true);
+
         setInterval(function() {
-            if (socket.connected) socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
-        }, 8000);
+            loadInbox(false);
+            if (activePhone) {
+                loadHistory(false);
+                loadOperatorLock();
+            }
+        }, 3000);
+
+        setInterval(renderOperatorLock, 1000);
 
     </script>
 </body>

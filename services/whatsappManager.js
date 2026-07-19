@@ -23,24 +23,85 @@ function chatMediaKey(instanceId, messageId) {
 
 async function persistMessageMedia(instanceId, msg) {
     if (!msg?.hasMedia || !redisClient.isOpen) return null;
-    const mediaType = String(media.mimetype || 'audio/ogg')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
 
-const mediaUrl = `data:${mediaType};base64,${String(media.data).replace(/\s+/g, '')}`;
-    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, msg.id.id), mediaUrl, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
-    return { media, mediaUrl };
+    const messageId = String(msg?.id?.id || '').trim();
+
+    if (!messageId) {
+        throw new Error('MEDIA_MESSAGE_ID_MISSING');
+    }
+
+    const media = await msg.downloadMedia();
+
+    if (!media?.data) {
+        throw new Error('MEDIA_DOWNLOAD_EMPTY');
+    }
+
+    const mediaType = String(media.mimetype || 'audio/ogg')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+
+    const base64 = String(media.data || '').replace(/\s+/g, '');
+
+    if (!base64) {
+        throw new Error('MEDIA_BASE64_EMPTY');
+    }
+
+    const decoded = Buffer.from(base64, 'base64');
+
+    if (!decoded.length) {
+        throw new Error('MEDIA_BASE64_INVALID');
+    }
+
+    const mediaUrl = `data:${mediaType};base64,${base64}`;
+
+    await redisClient.sendCommand([
+        'SET',
+        chatMediaKey(instanceId, messageId),
+        mediaUrl,
+        'EX',
+        String(CHAT_ARCHIVE_TTL_SECONDS)
+    ]);
+
+    return {
+        media: {
+            ...media,
+            mimetype: mediaType,
+            data: base64
+        },
+        mediaUrl
+    };
 }
 
 function scheduleMediaPersist(instanceId, msg) {
-    if (!msg?.hasMedia || !(msg.type === 'audio' || msg.type === 'ptt')) return;
-    [1500, 5000, 12000, 25000].forEach(ms => {
-        setTimeout(() => {
-            persistMessageMedia(instanceId, msg).catch(error => {
-                console.warn(`[MEDIA RETRY] ${instanceId}: ${msg.id?.id || '-'} ${error.message}`);
-            });
-        }, ms);
+    const type = String(msg?.type || '').toLowerCase();
+    const isAudio = type === 'audio' || type === 'ptt';
+
+    if (!msg?.hasMedia || !isAudio) return;
+
+    const delays = [1000, 3000, 7000, 15000, 30000];
+
+    delays.forEach(delayMs => {
+        setTimeout(async () => {
+            try {
+                const messageId = String(msg?.id?.id || '').trim();
+
+                if (!messageId || !redisClient.isOpen) return;
+
+                const exists = await redisClient
+                    .sendCommand(['EXISTS', chatMediaKey(instanceId, messageId)])
+                    .catch(() => 0);
+
+                if (Number(exists) === 1) return;
+
+                await persistMessageMedia(instanceId, msg);
+            } catch (error) {
+                console.warn(
+                    `[MEDIA RETRY] ${instanceId}: ${msg?.id?.id || '-'} ` +
+                    `${error?.message || error}`
+                );
+            }
+        }, delayMs);
     });
 }
 

@@ -604,95 +604,76 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
 });
 
 app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, res) => {
-  const instanceId = String(req.params.instanceId || '').trim();
-  const messageId = String(req.params.messageId || '').trim();
-  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  if (!messageId || messageId.length > 200 || /[\s/\\]/.test(messageId)) return res.status(400).json({ error: 'BAD_MESSAGE_ID' });
-
-  const persisted = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '');
-  const mediaData = persisted ? '' : await getBase64Media(instanceId, messageId);
-  const result = persisted || mediaData;
-  if (result && !persisted) {
-    await redisClient.sendCommand(['SET', chatMediaKey(instanceId, messageId), result, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
-  }
-if (!result) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
-
-    const normalizedMediaData = String(result).trim().replace(/\s+/g, '');
-
-    res.json({
-        success: true,
-        instanceId,
-        messageId,
-        mediaData: normalizedMediaData,
-        mediaType: normalizedMediaData.match(/^data:([^;,]+)/i)?.[1] || 'audio/ogg'
-    });
-});
-
-app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
-  const instanceId = String(req.params.instanceId || '').trim();
-  const phone = normalizePhone(req.params.phone || '');
-  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
-  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
-
-  const ttl = await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => -2);
-  res.json({ success: true, instanceId, phone, ttl: Math.max(0, Number(ttl) || 0), total: OPERATOR_ACTIVE_SECONDS });
-});
-
-app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
-    const phone = normalizePhone(req.params.phone || '');
-    const action = req.body?.action;
+    const messageId = String(req.params.messageId || '').trim();
 
-    if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-    if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
-
-    if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
-
-    if (action === 'view') {
-        const viewedAt = Date.now();
-        await Promise.all([
-            redisClient.sendCommand(['ZADD', chatViewedKey(instanceId), String(viewedAt), phone]),
-            redisClient.sendCommand(['ZADD', chatInboxKey(instanceId), String(viewedAt), phone])
-        ]);
-    } else if (action === 'close') {
-        await Promise.all([
-            redisClient.sendCommand(['SADD', chatArchiveKey(instanceId), phone]),
-            redisClient.sendCommand(['SET', chatArchiveMarkerKey(instanceId, phone), '1', 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]),
-            redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]).catch(() => 0),
-            expireChatKeys(instanceId, phone, CHAT_ARCHIVE_TTL_SECONDS)
-        ]);
-    } else if (action === 'restore') {
-        await Promise.all([
-            redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]),
-            redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]),
-            expireChatKeys(instanceId, phone, CHAT_STANDARD_TTL_SECONDS)
-        ]);
-    } else if (action === 'delete') {
-        await Promise.all([
-            redisClient.sendCommand(['SADD', chatArchiveKey(instanceId), phone]),
-            redisClient.sendCommand(['SET', chatArchiveMarkerKey(instanceId, phone), '1', 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)])
-        ]);
-        const allMembers = await redisClient.sendCommand(['ZRANGE', chatInboxKey(instanceId), '0', '-1']).catch(() => []);
-        const membersToDelete = allMembers.filter(m => m.startsWith(phone));
-        if (membersToDelete.length) {
-            await redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), ...membersToDelete]);
-        } else {
-            await redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]).catch(() => 0);
-        }
-        await redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]).catch(() => 0);
-        await redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]);
-        await redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]).catch(() => 0);
-        await Promise.all([
-            redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]).catch(() => 0),
-            redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]).catch(() => 0)
-        ]);
-    } else {
-        return res.status(400).json({ error: 'BAD_ACTION' });
+    if (!isValidInstanceId(instanceId)) {
+        return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
     }
-    res.json({ success: true });
-});
 
+    if (!messageId || messageId.length > 256) {
+        return res.status(400).json({ error: 'BAD_MESSAGE_ID' });
+    }
+
+    if (!redisClient.isOpen) {
+        return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+    }
+
+    try {
+        const mediaData = await redisClient
+            .sendCommand(['GET', chatMediaKey(instanceId, messageId)])
+            .catch(() => '');
+
+        if (!mediaData) {
+            res.set('Retry-After', '3');
+            return res.status(404).json({ error: 'MEDIA_NOT_READY' });
+        }
+
+        const raw = String(mediaData).trim();
+        const match = raw.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+
+        if (!match) {
+            return res.status(422).json({ error: 'INVALID_MEDIA_DATA' });
+        }
+
+        const mediaType = String(match[1] || 'audio/ogg')
+            .trim()
+            .toLowerCase();
+
+        if (!mediaType.startsWith('audio/')) {
+            return res.status(415).json({ error: 'UNSUPPORTED_MEDIA_TYPE' });
+        }
+
+        const base64 = String(match[2] || '').replace(/\s+/g, '');
+
+        if (!base64) {
+            return res.status(422).json({ error: 'EMPTY_MEDIA_DATA' });
+        }
+
+        const buffer = Buffer.from(base64, 'base64');
+
+        if (!buffer.length) {
+            return res.status(422).json({ error: 'INVALID_MEDIA_BUFFER' });
+        }
+
+        res.set({
+            'Content-Type': mediaType,
+            'Content-Length': String(buffer.length),
+            'Content-Disposition': 'inline',
+            'Cache-Control': 'private, max-age=3600',
+            'X-Content-Type-Options': 'nosniff'
+        });
+
+        return res.status(200).send(buffer);
+    } catch (error) {
+        console.error(
+            `[CHAT MEDIA] ${instanceId}/${messageId}:`,
+            error?.stack || error?.message || error
+        );
+
+        return res.status(500).json({ error: 'MEDIA_READ_FAILED' });
+    }
+});
 app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = String(req.params.phone || '').replace(/\D/g, '');
