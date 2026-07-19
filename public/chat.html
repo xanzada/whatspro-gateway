@@ -449,36 +449,29 @@
         .row.model, .row.operator { justify-content: flex-end; }
         .row.system { justify-content: center; }
 
-        .row {
-    display: flex;
-    width: 100%;
-    min-width: 0;
-    margin: 0 0 8px;
+       .row { 
+    display: flex; 
+    margin: 0 0 12px; 
 }
+.row.user { justify-content: flex-start; }
+.row.model, .row.operator { justify-content: flex-end; }
+.row.system { justify-content: center; }
 
 .bubble {
-    display: block;
-    width: fit-content;
-    min-width: 0;
     max-width: min(680px, 78%);
-    padding: 9px 12px;
+    padding: 11px 13px;
     border-radius: var(--radius);
     border: 1px solid var(--line);
     color: #eaf1fb;
-    line-height: 1.35;
+    line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
 }
 
-.row.user .bubble {
-    margin-right: auto;
-}
-
-.row.operator .bubble,
-.row.model .bubble {
-    margin-left: auto;
-}
+.user .bubble { background: #162236; border-bottom-left-radius: 3px; }
+.model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
+.operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
 
 .bubble:has(.audio-wrap) {
     width: min(340px, calc(100vw - 32px));
@@ -1155,7 +1148,7 @@ function buildAudioHtml(item) {
     if (!item) return '';
 
     const mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
-    const mediaType = String(item.mediaType || 'audio/ogg')
+    const mediaType = String(item.mediaType || '')
         .split(';')[0]
         .replace(/[^\w/+.-]/g, '');
 
