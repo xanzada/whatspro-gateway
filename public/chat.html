@@ -121,8 +121,9 @@
             <div class="hidden items-center gap-1.5 px-3 py-1.5 border border-teal-500/30 rounded-full bg-teal-800/20 text-teal-300 text-xs font-bold" id="operator-lock"></div>
         </header>
 
-        <main class="flex-1 overflow-y-auto p-4 flex flex-col space-y-4" id="messages">
-            <div class="h-full flex items-center justify-center text-center text-muted">
+        <!-- Хаттар контейнері: flex flex-col қасиеттері арқылы mt-auto ішкі блокты төменге итереді -->
+        <main class="flex-1 overflow-y-auto p-4 flex flex-col" id="messages">
+            <div class="h-full w-full flex items-center justify-center text-center text-muted">
                 <div class="grid place-items-center gap-3 max-w-sm">
                     <div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl">
                         <i class="fa-regular fa-comments"></i>
@@ -160,8 +161,11 @@
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const chatToken = String(chatConfig.chatToken || '');
 
+        // Секірусіз тегіс түсіру үшін
         function scrollToBottomSafe(messagesEl) {
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+            setTimeout(() => {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }, 10);
         }
 
         function apiHeaders(extra = {}) {
@@ -513,16 +517,16 @@
                 const isOperator = isOutgoing || role === 'operator';
                 
                 let bubbleClass = 'bg-userBubble text-gray-200 px-5 py-6 border border-gray-700/50 rounded-xl rounded-tl-sm shadow-sm text-right';
-                let wrapperClass = 'flex justify-start';
+                let wrapperClass = 'flex justify-start w-full';
                 let labelHtml = '';
 
                 if (isBot && !isOutgoing) {
                     bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
-                    wrapperClass = 'flex justify-end';
+                    wrapperClass = 'flex justify-end w-full';
                     labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">AI Bot</div>';
                 } else if (isOperator) {
                     bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
-                    wrapperClass = 'flex justify-end';
+                    wrapperClass = 'flex justify-end w-full';
                     labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>';
                 } else if (role === 'system') {
                     wrapperClass = 'flex justify-center w-full';
@@ -546,7 +550,7 @@
                 }
 
                 return `
-                    <div class="${wrapperClass} w-full">
+                    <div class="${wrapperClass}">
                         <div class="${bubbleClass} min-w-[220px]">
                             ${content}
                         </div>
@@ -560,18 +564,26 @@
 
         async function renderHistory(history) {
             if (!messagesEl) return;
-            messagesEl.innerHTML = '';
+            
+            // Егер қолданушы өзі жоғарыға қарай айналдырып қойған болса (scroll-up), секіртпеу үшін тексереміз
+            const isScrolledNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop <= messagesEl.clientHeight + 150;
+            
+            const htmlPieces = [];
             if (Array.isArray(history)) {
                 history.forEach(function(item) {
                     try {
                         var messageHtml = buildMessageHtml(item);
-                        if (messageHtml) {
-                            messagesEl.insertAdjacentHTML('beforeend', messageHtml);
-                        }
+                        if (messageHtml) htmlPieces.push(messageHtml);
                     } catch (e) {}
                 });
             }
-            scrollToBottomSafe(messagesEl);
+
+            // `mt-auto` класы бар враппер барлық хаттарды төменгі жағына итеріп, жабыстырып тұрады
+            messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${htmlPieces.join('')}</div>`;
+            
+            if (isScrolledNearBottom) {
+                scrollToBottomSafe(messagesEl);
+            }
             if (typeof hydrateAudioPlayers === 'function') hydrateAudioPlayers();
         }
 
@@ -639,7 +651,7 @@
             setActiveHeader(activePhone);
             renderList();
             if (!activePhone) {
-                messagesEl.innerHTML = `<div class="h-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
+                messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
             }
             updateComposerState();
         }
@@ -756,7 +768,7 @@
             updateComposerState();
             historySignature = '';
             lastViewSyncAt = 0;
-            messagesEl.innerHTML = `<div class="h-full flex items-center justify-center text-muted"><p>${escapeHtml(t('loading'))}</p></div>`;
+            messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-muted"><p>${escapeHtml(t('loading'))}</p></div>`;
             renderList();
             
             postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).then(loadInbox).catch(() => {});
@@ -812,15 +824,23 @@
             pendingText = text;
             isSending = true;
             
-            // Add optimistic UI message exactly like the operator bubble in the Tailwind styling
-            messagesEl.insertAdjacentHTML('beforeend', `
-                <div class="flex justify-end w-full mb-4">
+            const msgHtml = `
+                <div class="flex justify-end w-full">
                     <div class="bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm min-w-[220px]">
                         <div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>
                         ${escapeHtml(text)}
                     </div>
                 </div>
-            `);
+            `;
+            
+            // Жаңа хатты wrapper-дің (mt-auto) ішіне қосамыз
+            const wrapper = messagesEl.querySelector('.mt-auto');
+            if (wrapper) {
+                wrapper.insertAdjacentHTML('beforeend', msgHtml);
+            } else {
+                messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${msgHtml}</div>`;
+            }
+            
             scrollToBottomSafe(messagesEl);
             inputEl.value = '';
             inputEl.style.height = 'auto';
@@ -864,7 +884,6 @@
             renderList();
         });
         
-        // Use generic event delegation for tabs because querySelector may miss dynamically bound ones initially
         document.addEventListener('click', event => {
             const tabBtn = event.target.closest('.tab');
             if(tabBtn && tabBtn.parentElement.getAttribute('role') === 'tablist') {
