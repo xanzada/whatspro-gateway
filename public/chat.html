@@ -1074,41 +1074,34 @@
             listEl.scrollTop = previousTop;
         }
  function buildAudioHtml(item) {
-    try {
-        if (!item) return '';
+    if (!item) return '';
 
-        const type = String(item.type || item.mediaKind || '').toLowerCase();
-        const mime = String(item.mediaType || '').toLowerCase();
-        
-        // Нақты аудио екенін тексеру
-        const isActuallyAudio = type === 'audio' || type === 'ptt' || mime.startsWith('audio/') || Boolean(item.hasMedia && mime.startsWith('audio/'));
-        
-        if (!isActuallyAudio) return ''; 
+    const type = String(item.type || item.mediaKind || '').toLowerCase();
+    
+    // ҚАТАҢ ТЕКСЕРУ: Тек нақты аудио хаттарға ғана плеер шығарамыз. Мәтінге (сілтемелерге) өтпейді.
+    if (type !== 'audio' && type !== 'ptt') return ''; 
 
-        const rawData = String(item.mediaData || '').trim();
-        let src = '';
+    const rawData = String(item.mediaData || '').trim();
+    const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
 
-        if (rawData) {
-            src = rawData.startsWith('data:') ? rawData : `data:${mime || 'audio/ogg'};base64,${rawData.replace(/\s+/g, '')}`;
-        }
-
-        if (src) {
-            return `
-                <div class="audio-wrap">
-                    <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
-                </div>
-            `;
-        }
-
+    if (rawData) {
+        const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
         return `
-            <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id || ''))}">
+            <div class="audio-wrap">
+                <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
+            </div>
+        `;
+    }
+
+    if (item.id) {
+        return `
+            <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}">
                 <audio class="audio-player" controls preload="none"></audio>
             </div>
         `;
-    } catch (e) {
-        console.error("Audio build error:", e);
-        return '';
     }
+
+    return '';
 }
 
 function buildMessageHtml(item) {
@@ -1134,22 +1127,15 @@ function buildMessageHtml(item) {
         const audioHtml = buildAudioHtml(item);
         
         let content = '';
-        
-        if (labelHtml) {
-            content += labelHtml;
-        }
-        
-        if (audioHtml) {
-            content += audioHtml;
-        }
-        
-        if (text) {
-            content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
-        }
+        if (labelHtml) content += labelHtml;
+        if (audioHtml) content += audioHtml;
+        if (text) content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
 
         if (!content) return '';
 
-        const bubbleDivClass = audioHtml ? 'bubble audio-bubble' : 'bubble';
+        // ТҮЗЕТУ: Мәтін мен аудио бірігіп, төртбұрыш блокқа айналып кетпеуі үшін
+        // 'audio-bubble' класын тек ішінде мәтіні жоқ, таза аудио хаттарға ғана қолданамыз.
+        const bubbleDivClass = (audioHtml && !text) ? 'bubble audio-bubble' : 'bubble';
 
         return `
             <div class="row ${bubbleClass}">
@@ -1163,6 +1149,7 @@ function buildMessageHtml(item) {
         return '';
     }
 }
+
 
 async function renderHistory(history) {
     if (!messagesEl) return;
