@@ -4,9 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Оператор чаты</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome (Иконкалар) -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Socket.io -->
     <script src="/socket.io/socket.io.js"></script>
+    
     <script>
         tailwind.config = {
             theme: {
@@ -35,7 +39,7 @@
         ::-webkit-scrollbar-thumb { background: #3b4b5e; border-radius: 10px; }
         ::-webkit-scrollbar-thumb:hover { background: #4b5b6e; }
 
-        /* Аудио ойнатқышты қараңғы дизайнға бейімдеу */
+        /* Аудио ойнатқыш */
         audio {
             height: 40px;
             width: 100%;
@@ -47,7 +51,7 @@
         audio::-webkit-media-controls-panel { background-color: #f1f3f4; }
         audio::-webkit-media-controls-enclosure { border-radius: 20px; }
 
-        /* Мобильді ауысу (Transition) */
+        /* Мобильді бейімделу және анимация */
         .sidebar-panel, .chat-panel { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         
         @media (max-width: 768px) {
@@ -58,17 +62,14 @@
             .back-btn { display: flex !important; }
         }
 
-        /* Мәтін енгізу өрісі (Textarea) */
         textarea { resize: none; overflow-y: auto; }
         textarea:focus { outline: none; }
     </style>
 </head>
 <body class="bg-bgDark text-textMain h-[100dvh] overflow-hidden flex font-sans" id="app">
 
-    <!-- СИДБАР (Сол жақ панель) -->
+    <!-- СИДБАР -->
     <aside class="sidebar-panel bg-bgPanel w-full md:w-[380px] lg:w-[420px] flex flex-col border-r border-line shrink-0">
-        
-        <!-- Сидбар Басқы бөлігі -->
         <header class="p-4 flex items-center justify-between border-b border-line shrink-0 bg-bgPanel/95 backdrop-blur-sm z-10">
             <div class="flex items-center gap-3 min-w-0">
                 <div class="w-11 h-11 rounded-full bg-gradient-to-tr from-teal-500 to-emerald-400 flex items-center justify-center shadow-lg shrink-0">
@@ -83,24 +84,20 @@
                 </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
-                <button id="lang-toggle" class="w-9 h-9 rounded-full bg-bgHover text-textMuted hover:text-white hover:bg-line transition-colors text-xs font-black">KZ</button>
+                <button class="lang-toggle w-9 h-9 rounded-full bg-bgHover text-textMuted hover:text-white hover:bg-line transition-colors text-xs font-black">KZ</button>
                 <button id="refresh-btn" class="w-9 h-9 rounded-full bg-bgHover text-textMuted hover:text-white hover:bg-line transition-colors">
                     <i class="fa-solid fa-rotate-right"></i>
                 </button>
             </div>
         </header>
 
-        <!-- Фильтрлер мен Іздеу -->
         <section class="p-3 border-b border-line shrink-0">
-            <!-- Іздеу -->
             <div class="relative mb-3">
                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <i class="fa-solid fa-magnifying-glass text-textMuted text-sm"></i>
                 </div>
                 <input type="text" id="search-input" autocomplete="off" placeholder="Іздеу..." class="w-full bg-bgInput text-sm text-textMain rounded-full pl-10 pr-4 py-2.5 border border-transparent focus:border-accent focus:ring-1 focus:ring-accent transition-all placeholder-textMuted">
             </div>
-            
-            <!-- Табтар -->
             <div class="flex p-1 bg-bgInput rounded-lg gap-1" role="tablist">
                 <button class="tab active flex-1 py-1.5 text-xs font-bold rounded-md bg-accent text-white shadow-sm transition-all truncate" data-tab="new">Жаңа</button>
                 <button class="tab flex-1 py-1.5 text-xs font-bold rounded-md text-textMuted hover:text-white hover:bg-bgHover transition-all truncate" data-tab="all">Бәрі</button>
@@ -110,38 +107,32 @@
             <button id="direct-chat-btn" class="w-full mt-2 py-2 bg-bgHover hover:bg-line rounded-lg text-sm text-blue-400 font-bold hidden transition-colors"></button>
         </section>
 
-        <!-- Хаттар тізімі -->
         <main class="flex-1 overflow-y-auto p-2" id="contact-list"></main>
     </aside>
 
-    <!-- НЕГІЗГІ ЧАТ АЙМАҒЫ -->
+    <!-- ЧАТ АЙМАҒЫ -->
     <section class="chat-panel bg-bgDark flex-1 flex flex-col min-w-0 shadow-[-10px_0_30px_rgba(0,0,0,0.3)] md:shadow-none">
-        
-        <!-- Чат Басқы бөлігі -->
         <header class="p-3 md:p-4 flex items-center justify-between border-b border-line bg-bgPanel shrink-0">
             <div class="flex items-center gap-3 min-w-0">
                 <button id="back-btn" class="back-btn hidden w-10 h-10 rounded-full hover:bg-bgHover items-center justify-center text-textMuted transition-colors shrink-0">
                     <i class="fa-solid fa-arrow-left text-lg"></i>
                 </button>
-                
                 <div class="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-white shrink-0" id="active-avatar">
                     <i class="fa-solid fa-user"></i>
                 </div>
-                
                 <div class="truncate">
                     <h2 class="font-bold text-base truncate" id="active-phone">Диалог таңдаңыз</h2>
                     <div class="text-[12px] text-textMuted truncate" id="active-meta">Тарихты көру үшін сол жақтан таңдаңыз</div>
                 </div>
             </div>
-
             <!-- 60 СЕКУНДТЫҚ ТАЙМЕР -->
-            <div id="operator-lock" class="hidden items-center gap-2 px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400 text-xs font-bold shrink-0 shadow-sm animate-pulse">
-            </div>
+            <div id="operator-lock" class="hidden items-center gap-2 px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400 text-xs font-bold shrink-0 shadow-sm animate-pulse"></div>
         </header>
 
-        <!-- Хаттар тарихы (Секіру багтары жойылған тұрақты контейнер) -->
-        <main class="flex-1 overflow-y-auto p-4 md:p-6" id="messages-container">
+        <!-- Хаттар контейнері -->
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col" id="messages-container">
             <div id="messages" class="flex flex-col justify-end min-h-full space-y-4">
+                <!-- Бастапқы бос экран -->
                 <div class="m-auto flex flex-col items-center justify-center text-center text-textMuted opacity-60">
                     <div class="w-16 h-16 rounded-full bg-bgHover flex items-center justify-center mb-4">
                         <i class="fa-regular fa-comments text-3xl"></i>
@@ -163,7 +154,7 @@
         </footer>
     </section>
 
-    <!-- Хабарламалар (Toasts) -->
+    <!-- Хабарламалар (Toast) -->
     <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-full bg-gray-800 text-white text-sm font-bold shadow-2xl transition-all duration-300 transform -translate-y-20 opacity-0 flex items-center gap-2"></div>
 
     <script>
@@ -181,14 +172,7 @@
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const chatToken = String(chatConfig.chatToken || '');
 
-        function apiHeaders(extra = {}) {
-            return { ...(chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}), ...extra };
-        }
-        
         const endpoints = {
-            inbox: '/api/chat/inbox',
-            history: '/api/chat/history',
-            send: '/api/chat/send',
             media: '/api/chat/media',
             lock: '/api/chat/operator-lock',
             action: '/api/chat/action',
@@ -204,47 +188,43 @@
         const searchInput = document.getElementById('search-input');
         const directChatBtn = document.getElementById('direct-chat-btn');
         const toast = document.getElementById('toast');
-        const langToggles = Array.from(document.querySelectorAll('#lang-toggle'));
         const refreshBtn = document.getElementById('refresh-btn');
         const backBtn = document.getElementById('back-btn');
         const lockEl = document.getElementById('operator-lock');
+        const langToggles = document.querySelectorAll('.lang-toggle');
 
         const copy = {
             kk: {
                 title: 'Оператор чаты',
-                operatorLabel: 'Оператор чаты',
-                instanceTitle: value => `${value.toUpperCase()} операторлары`,
-                langTitle: 'Тілді ауыстыру',
+                operatorLabel: 'Оператор',
+                instanceTitle: function(v){ return v.toUpperCase(); },
                 tabs: { new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
                 dialog: 'Диалог',
-                defaultMeta: 'Тарихты көру үшін таңдаңыз',
+                defaultMeta: 'Тарихты көру үшін сол жақтан таңдаңыз',
                 selectedMeta: 'WhatsApp желісі',
                 selectTitle: 'Чатты таңдаңыз',
                 selectText: 'Осы жерде толық хат алмасу тарихы шығады.',
                 emptySearch: 'Нәтиже табылған жоқ',
-                emptyNew: 'Жаңа хаттар жоқ',
                 emptyArchive: 'Архив бос',
-                openAll: 'Бәрін ашу',
                 noHistory: 'Хабарламалар жоқ',
                 loading: 'Жүктелуде...',
                 noMessage: 'Хабар жоқ',
                 newBadge: 'Жаңа',
-                operatorBadge: 'Оператор',
+                operatorBadge: 'Опер',
                 botLabel: 'AI Бот',
                 systemDefault: 'Жүйелік хабар',
                 placeholder: 'Жауап жазу...',
                 archivedPlaceholder: 'Чат архивтелген',
                 resolveDone: 'Чат аяқталды',
-                restoreDone: 'Чат қайтарылды',
+                restoreDone: 'Қайтарылды',
                 deleteDone: 'Өшірілді',
                 sendFailed: 'Жіберілмеді',
-                directOpen: phone => `+${phone} нөміріне жазу`
+                directOpen: function(p){ return '+' + p + ' жазу'; }
             },
             ru: {
                 title: 'Чат оператора',
-                operatorLabel: 'Чат оператора',
-                instanceTitle: value => `Операторы ${value.toUpperCase()}`,
-                langTitle: 'Сменить язык',
+                operatorLabel: 'Оператор',
+                instanceTitle: function(v){ return v.toUpperCase(); },
                 tabs: { new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
                 dialog: 'Диалог',
                 defaultMeta: 'Выберите чат слева',
@@ -252,23 +232,21 @@
                 selectTitle: 'Выберите чат',
                 selectText: 'Здесь появится история сообщений.',
                 emptySearch: 'Ничего не найдено',
-                emptyNew: 'Нет новых',
                 emptyArchive: 'Архив пуст',
-                openAll: 'Открыть все',
                 noHistory: 'Нет сообщений',
                 loading: 'Загрузка...',
                 noMessage: 'Нет сообщений',
                 newBadge: 'Новое',
-                operatorBadge: 'Оператор',
+                operatorBadge: 'Опер',
                 botLabel: 'AI Бот',
-                systemDefault: 'Системное сообщение',
+                systemDefault: 'Системное',
                 placeholder: 'Написать ответ...',
                 archivedPlaceholder: 'Чат в архиве',
                 resolveDone: 'Чат завершен',
-                restoreDone: 'Чат восстановлен',
+                restoreDone: 'Восстановлен',
                 deleteDone: 'Удалено',
                 sendFailed: 'Не отправлено',
-                directOpen: phone => `Написать +${phone}`
+                directOpen: function(p){ return '+' + p + ' написать'; }
             }
         };
 
@@ -279,34 +257,37 @@
         let toastTimer = null;
         let isSending = false;
         let isResolving = false;
-        let pendingText = '';
-        let isInboxLoading = false;
-        let isHistoryLoading = false;
         let operatorLockUntil = 0;
-        let isLockLoading = false;
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
-        
-        function showToast(text, type = 'info') {
+        function isMobile() { return window.innerWidth <= 768; }
+
+        function showToast(text, type) {
             clearTimeout(toastTimer);
-            let icon = type === 'error' ? '<i class="fa-solid fa-circle-exclamation text-red-400"></i>' : '<i class="fa-solid fa-circle-check text-emerald-400"></i>';
-            toast.innerHTML = `${icon} <span>${escapeHtml(text)}</span>`;
+            var icon = type === 'error' ? '<i class="fa-solid fa-circle-exclamation text-red-400"></i>' : '<i class="fa-solid fa-circle-check text-emerald-400"></i>';
+            toast.innerHTML = icon + ' <span>' + escapeHtml(text) + '</span>';
             toast.classList.remove('-translate-y-20', 'opacity-0');
             toast.classList.add('translate-y-0', 'opacity-100');
-            toastTimer = setTimeout(() => {
+            toastTimer = setTimeout(function() {
                 toast.classList.remove('translate-y-0', 'opacity-100');
                 toast.classList.add('-translate-y-20', 'opacity-0');
             }, 2500);
         }
 
         function escapeHtml(value) {
-            return String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
+            return String(value || '').replace(/[&<>"']/g, function(c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
+            });
+        }
+
+        function cleanText(value) {
+            return String(value || '').replace(/\[System:[^\]]*\]/gi, '').replace(/\[Оператор:\s*/gi, '').replace(/\]$/g, '').trim();
         }
 
         function formatTime(value) {
-            const time = Number(value || 0);
+            var time = Number(value || 0);
             if (!time) return '';
-            const date = new Date(time);
+            var date = new Date(time);
             try { return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' }); } 
             catch (e) { return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
         }
@@ -314,8 +295,7 @@
         function normalizePhone(value) { return String(value || '').replace(/\D/g, ''); }
         
         function scrollToBottom() {
-            // Тегіс әрі секірмейтін скролл
-            requestAnimationFrame(() => {
+            requestAnimationFrame(function() {
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
             });
         }
@@ -323,24 +303,33 @@
         function isChatArchived(chat) { return Boolean(chat && chat.closed); }
 
         function renderTabs() {
-            document.querySelectorAll('.tab').forEach(tab => {
-                const key = tab.dataset.tab;
+            var tabs = document.querySelectorAll('.tab');
+            var countsObj = {
+                new: chats.filter(function(c){ return !isChatArchived(c) && c.unread; }).length,
+                all: chats.filter(function(c){ return !isChatArchived(c) && c.viewed && !c.hasOperator; }).length,
+                operator: chats.filter(function(c){ return !isChatArchived(c) && c.hasOperator; }).length,
+                archive: chats.filter(function(c){ return isChatArchived(c); }).length
+            };
+            
+            for (var i = 0; i < tabs.length; i++) {
+                var tab = tabs[i];
+                var key = tab.dataset.tab;
                 if(key === activeTab) {
-                    tab.classList.add('bg-accent', 'text-white');
-                    tab.classList.remove('text-textMuted', 'hover:bg-bgHover');
+                    tab.className = 'tab active flex-1 py-1.5 text-xs font-bold rounded-md bg-accent text-white shadow-sm transition-all truncate';
                 } else {
-                    tab.classList.remove('bg-accent', 'text-white');
-                    tab.classList.add('text-textMuted', 'hover:bg-bgHover');
+                    tab.className = 'tab flex-1 py-1.5 text-xs font-bold rounded-md text-textMuted hover:text-white hover:bg-bgHover transition-all truncate';
                 }
-                tab.textContent = copy[lang].tabs[key];
-            });
+                var count = countsObj[key] ? ' ' + countsObj[key] : '';
+                tab.textContent = copy[lang].tabs[key] + count;
+            }
         }
 
         function renderList() {
             renderTabs();
-            const query = searchInput.value.trim().toLowerCase();
-            let items = chats.filter(chat => {
-                const archived = isChatArchived(chat);
+            var query = searchInput.value.trim().toLowerCase();
+            
+            var items = chats.filter(function(chat) {
+                var archived = isChatArchived(chat);
                 if (activeTab === 'archive' && !archived) return false;
                 if (activeTab !== 'archive' && archived) return false;
                 if (activeTab === 'new' && !chat.unread) return false;
@@ -349,145 +338,149 @@
                 return String(chat.phone).includes(query) || String(chat.lastText || '').toLowerCase().includes(query);
             });
 
+            if (query) {
+                var searchPhone = normalizePhone(query);
+                var alreadyListed = searchPhone && chats.some(function(c){ return normalizePhone(c.phone) === searchPhone; });
+                directChatBtn.hidden = !searchPhone || alreadyListed;
+                if (!directChatBtn.hidden) directChatBtn.textContent = copy[lang].directOpen(searchPhone);
+            } else {
+                directChatBtn.hidden = true;
+            }
+
             if (!items.length) {
-                listEl.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-textMuted p-4 opacity-50"><i class="fa-solid fa-inbox text-4xl mb-3"></i><p class="text-sm font-bold">${escapeHtml(t('emptySearch'))}</p></div>`;
+                var emptyTxt = activeTab === 'archive' ? t('emptyArchive') : t('emptySearch');
+                listEl.innerHTML = '<div class="h-full flex flex-col items-center justify-center text-textMuted p-4 opacity-50"><i class="fa-solid fa-inbox text-4xl mb-3"></i><p class="text-sm font-bold">' + escapeHtml(emptyTxt) + '</p></div>';
                 return;
             }
 
-            listEl.innerHTML = items.map(chat => {
-                const phone = normalizePhone(chat.phone);
-                const isActive = activePhone === phone;
-                const isUnread = chat.unread;
-                const archived = isChatArchived(chat);
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+                var chat = items[i];
+                var phone = normalizePhone(chat.phone);
+                var isActive = activePhone === phone;
+                var isUnread = chat.unread;
+                var archived = isChatArchived(chat);
                 
-                let activeClass = isActive ? 'bg-bgHover border-accent/50' : 'border-transparent hover:bg-bgHover/50';
-                let avatarClass = isUnread ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-line text-textMuted';
-                let previewClass = isUnread ? 'text-white font-bold' : 'text-textMuted';
+                var activeClass = isActive ? 'bg-bgHover border-accent/50' : 'border-transparent hover:bg-bgHover/50';
+                var avatarClass = isUnread ? 'bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-line text-textMuted';
+                var previewClass = isUnread ? 'text-white font-bold' : 'text-textMuted';
 
-                const badges = [
-                    archived ? `<span class="px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 text-[10px] font-bold uppercase">${escapeHtml(t('archiveBadge'))}</span>` : '',
-                    chat.unread ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase">${escapeHtml(t('newBadge'))}</span>` : '',
-                    chat.hasOperator ? `<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-bold uppercase">${escapeHtml(t('operatorBadge'))}</span>` : ''
-                ].join('');
+                var badges = '';
+                if (archived) badges += '<span class="px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 text-[10px] font-bold uppercase">' + escapeHtml(t('archiveBadge')) + '</span>';
+                if (chat.unread) badges += '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase">' + escapeHtml(t('newBadge')) + '</span>';
+                if (chat.hasOperator) badges += '<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-bold uppercase">' + escapeHtml(t('operatorBadge')) + '</span>';
 
-                const actions = archived
-                    ? `<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="restore" data-phone="${phone}"><i class="fa-solid fa-arrow-rotate-left text-xs"></i></button>`
-                    : `<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="close" data-phone="${phone}"><i class="fa-solid fa-check text-xs"></i></button>`;
+                var actions = archived
+                    ? '<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="restore" data-phone="' + phone + '"><i class="fa-solid fa-arrow-rotate-left text-xs"></i></button>'
+                    : '<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="close" data-phone="' + phone + '"><i class="fa-solid fa-check text-xs"></i></button>';
 
-                return `
-                    <div class="flex items-center p-3 mb-1.5 border rounded-xl cursor-pointer text-left transition-all ${activeClass}" data-phone="${phone}">
-                        <div class="w-12 h-12 rounded-full flex items-center justify-center text-white shrink-0 ${avatarClass} transition-all"><i class="fa-solid fa-user"></i></div>
-                        <div class="flex-1 min-w-0 ml-3">
-                            <div class="flex justify-between items-center mb-0.5">
-                                <div class="font-bold text-[15px] text-textMain truncate">+${escapeHtml(phone)}</div>
-                                <div class="text-[11px] text-textMuted font-bold shrink-0 ml-2">${escapeHtml(formatTime(chat.lastAt))}</div>
-                            </div>
-                            <div class="text-[13px] truncate mt-0.5 ${previewClass}">${escapeHtml(chat.lastText || t('noMessage'))}</div>
-                            <div class="flex gap-1.5 mt-2">${badges}</div>
-                        </div>
-                        <div class="ml-2 shrink-0 z-10 action-zone">${actions}</div>
-                    </div>`;
-            }).join('');
+                html += '<div class="flex items-center p-3 mb-1.5 border rounded-xl cursor-pointer text-left transition-all ' + activeClass + '" data-phone="' + phone + '">' +
+                            '<div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0 transition-all ' + avatarClass + '"><i class="fa-solid fa-user"></i></div>' +
+                            '<div class="flex-1 min-w-0 ml-3">' +
+                                '<div class="flex justify-between items-center mb-0.5">' +
+                                    '<div class="font-bold text-[15px] text-textMain truncate">+' + escapeHtml(phone) + '</div>' +
+                                    '<div class="text-[11px] text-textMuted font-bold shrink-0 ml-2">' + escapeHtml(formatTime(chat.lastAt)) + '</div>' +
+                                '</div>' +
+                                '<div class="text-[13px] truncate mt-0.5 ' + previewClass + '">' + escapeHtml(chat.lastText || t('noMessage')) + '</div>' +
+                                '<div class="flex gap-1.5 mt-2">' + badges + '</div>' +
+                            '</div>' +
+                            '<div class="ml-2 shrink-0 z-10">' + actions + '</div>' +
+                        '</div>';
+            }
+            listEl.innerHTML = html;
         }
 
-        // АУДИО ОЙНАТҚЫШ (NATIVE, БАГСЫЗ)
+        // АУДИО ОЙНАТҚЫШ
         function buildAudioHtml(item) {
             if (!item) return '';
-            const type = String(item.type || item.mediaKind || '').toLowerCase();
-            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '');
-            const rawData = String(item.mediaData || '').trim();
-            const hasAudioMsg = Boolean(item.audioMessage || (item.data && item.data.message && item.data.message.audioMessage));
+            var type = String(item.type || item.mediaKind || '').toLowerCase();
+            var mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '');
+            var rawData = String(item.mediaData || '').trim();
+            var hasAudioMsg = false;
+            if (item.audioMessage) hasAudioMsg = true;
+            if (item.data && item.data.message && item.data.message.audioMessage) hasAudioMsg = true;
             
             if (type !== 'audio' && type !== 'ptt' && !hasAudioMsg && mediaType.indexOf('audio/') !== 0) return '';
             
             if (rawData) {
-                const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
-                return `<div class="mt-2"><audio controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio></div>`;
+                var src = rawData.indexOf('data:') === 0 ? rawData : 'data:' + mediaType + ';base64,' + rawData.replace(/\s+/g, '');
+                return '<div class="mt-2"><audio controls controlsList="nodownload" preload="metadata" src="' + escapeHtml(src) + '"></audio></div>';
             }
             if (item.id) {
-                // Серверден жүктеуді күтетін қаңқа
-                return `<div class="mt-2" data-audio-id="${escapeHtml(String(item.id))}"><audio controls controlsList="nodownload" preload="none"></audio></div>`;
+                return '<div class="mt-2" data-audio-id="' + escapeHtml(String(item.id)) + '"><audio controls controlsList="nodownload" preload="none"></audio></div>';
             }
             return '';
         }
 
         function buildMessageHtml(item) {
             try {
-                const role = String(item.role || '').toLowerCase();
-                const isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
-                const isBot = role === 'model' || role === 'assistant';
-                const isOp = role === 'operator';
+                var role = String(item.role || '').toLowerCase();
+                var isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
+                var isBot = role === 'model' || role === 'assistant';
+                var isOp = role === 'operator';
                 
-                let wrapperCls = 'flex justify-start w-full';
-                let bubbleCls = 'bg-bubbleUser text-textMain rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                let labelHtml = '';
+                var wrapperCls = 'flex justify-start w-full';
+                var bubbleCls = 'bg-bubbleUser text-textMain rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                var labelHtml = '';
 
                 if (isBot && !isOutgoing) {
                     wrapperCls = 'flex justify-end w-full';
                     bubbleCls = 'bg-bubbleBot text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                    labelHtml = `<div class="text-[10px] font-bold text-blue-300 mb-1 uppercase tracking-wider">${t('botLabel')}</div>`;
+                    labelHtml = '<div class="text-[10px] font-bold text-blue-300 mb-1 uppercase tracking-wider">' + t('botLabel') + '</div>';
                 } else if (isOutgoing || isOp) {
                     wrapperCls = 'flex justify-end w-full';
                     bubbleCls = 'bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
-                    labelHtml = isOp ? `<div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">${t('operatorBadge')}</div>` : '';
+                    if (isOp) labelHtml = '<div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">' + t('operatorBadge') + '</div>';
                 } else if (role === 'system') {
                     wrapperCls = 'flex justify-center w-full';
                     bubbleCls = 'bg-gray-800 text-gray-400 rounded-lg px-3 py-1 text-xs text-center max-w-[90%] border border-gray-700';
                 }
 
-                let text = escapeHtml(cleanText(item.text || item.body || ''));
-                let audioHtml = buildAudioHtml(item);
-                let timeHtml = `<div class="text-[10px] text-white/50 text-right mt-1.5 float-right clear-both ml-3">${escapeHtml(formatTime(item.createdAt))}</div>`;
+                var text = escapeHtml(cleanText(item.text || item.body || ''));
+                var audioHtml = buildAudioHtml(item);
+                var timeHtml = '<div class="text-[10px] text-white/50 text-right mt-1.5 float-right clear-both ml-3">' + escapeHtml(formatTime(item.createdAt)) + '</div>';
 
                 if (!text && !audioHtml && !labelHtml) return '';
-                
-                // Тек аудио келсе, фонды мөлдір қылып, padding азайтамыз
-                if (audioHtml && !text) {
-                    bubbleCls += ' !p-1 !bg-transparent !shadow-none';
-                }
+                if (audioHtml && !text) bubbleCls += ' !p-1 !bg-transparent !shadow-none';
 
-                return `
-                    <div class="${wrapperCls}">
-                        <div class="${bubbleCls}">
-                            ${labelHtml}
-                            <div class="text-[14px] leading-relaxed break-words">${text}</div>
-                            ${audioHtml}
-                            ${timeHtml}
-                        </div>
-                    </div>`;
+                return '<div class="' + wrapperCls + '"><div class="' + bubbleCls + '">' + labelHtml + '<div class="text-[14px] leading-relaxed break-words">' + text + '</div>' + audioHtml + timeHtml + '</div></div>';
             } catch (e) { return ''; }
         }
 
-        async function renderHistory(history) {
+        function renderHistory(history) {
             if (!messagesEl) return;
-            const isScrolledNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop <= messagesContainer.clientHeight + 100;
+            var isScrolledNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop <= messagesContainer.clientHeight + 100;
             
             if (!history || !history.length) {
-                messagesEl.innerHTML = `<div class="m-auto text-textMuted text-sm">${t('noHistory')}</div>`;
+                messagesEl.innerHTML = '<div class="m-auto text-textMuted text-sm">' + t('noHistory') + '</div>';
                 return;
             }
 
-            const html = history.map(item => buildMessageHtml(item)).join('');
+            var html = '';
+            for (var i = 0; i < history.length; i++) {
+                html += buildMessageHtml(history[i]);
+            }
             messagesEl.innerHTML = html;
             
             if (isScrolledNearBottom) scrollToBottom();
             hydrateAudioPlayers();
         }
 
-        // Аудионы серверден жүктеп алу (Background)
         async function hydrateAudioPlayers() {
-            const placeholders = messagesEl.querySelectorAll('[data-audio-id]:not([data-loaded])');
-            for (const el of placeholders) {
-                const id = el.getAttribute('data-audio-id');
-                const player = el.querySelector('audio');
+            var placeholders = messagesEl.querySelectorAll('[data-audio-id]:not([data-loaded])');
+            for (var i = 0; i < placeholders.length; i++) {
+                var el = placeholders[i];
+                var id = el.getAttribute('data-audio-id');
+                var player = el.querySelector('audio');
                 if (!id || !player) continue;
                 
                 el.setAttribute('data-loaded', '1');
                 try {
-                    const res = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
-                    if (res && res.mediaData) {
-                        const type = String(res.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
-                        player.src = res.mediaData.startsWith('data:') ? res.mediaData : `data:${type};base64,${res.mediaData.replace(/\s+/g, '')}`;
+                    var res = await fetch(apiBase + endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id), { headers: apiHeaders() });
+                    var data = await res.json();
+                    if (data && data.mediaData) {
+                        var type = String(data.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
+                        player.src = data.mediaData.startsWith('data:') ? data.mediaData : 'data:' + type + ';base64,' + data.mediaData.replace(/\s+/g, '');
                     }
                 } catch (e) {
                     el.removeAttribute('data-loaded');
@@ -496,379 +489,286 @@
         }
 
         function updateComposer() {
-            const hasActive = Boolean(activePhone);
-            const archived = isChatArchived(chats.find(c => normalizePhone(c.phone) === activePhone));
+            var hasActive = Boolean(activePhone);
+            var activeChat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
+            var archived = isChatArchived(activeChat);
             inputEl.disabled = !hasActive || isSending || archived;
             sendBtn.disabled = !hasActive || isSending || archived || !inputEl.value.trim();
             inputEl.placeholder = archived ? t('archivedPlaceholder') : t('placeholder');
         }
 
         function setHeader() {
-            const chat = chats.find(c => normalizePhone(c.phone) === activePhone);
-            document.getElementById('active-phone').textContent = activePhone ? `+${activePhone}` : t('dialog');
+            var chat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
+            document.getElementById('active-phone').textContent = activePhone ? '+' + activePhone : t('dialog');
             document.getElementById('active-meta').textContent = activePhone ? (isChatArchived(chat) ? t('archiveMeta') : t('selectedMeta')) : t('defaultMeta');
+            document.getElementById('instance-title').textContent = copy[lang].instanceTitle(instanceId);
+            document.getElementById('operator-label').textContent = t('operatorLabel');
         }
 
-        // 60 секундтық таймерді көрсету
+        // 60 СЕКУНД ТАЙМЕР
         function renderOperatorLock() {
             if (!lockEl) return;
-            const remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
+            var remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
             if (activePhone && remaining > 0) {
                 lockEl.classList.remove('hidden');
                 lockEl.classList.add('flex');
-                lockEl.innerHTML = `<i class="fa-solid fa-lock text-[10px]"></i> Бот үзілісі: ${remaining}с`;
+                lockEl.innerHTML = '<i class="fa-solid fa-lock text-[10px]"></i> ' + remaining + 'с';
             } else {
                 lockEl.classList.add('hidden');
                 lockEl.classList.remove('flex');
             }
         }
 
-        async function loadOperatorLock() {
-            if (!activePhone) return;
-            try {
-                const data = await fetchJson(`${endpoints.lock}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
-                if (data.phone === activePhone) {
-                    operatorLockUntil = data.ttl > 0 ? Date.now() + (data.ttl * 1000) : 0;
-                    renderOperatorLock();
-                }
-            } catch (e) {}
-        }
-
-        // API сұраулары
-        // SOCKET.IO БАЙЛАНЫСЫ
-        const socket = io({ transports: ['websocket', 'polling'] });
-
-        function requestChats() {
-            if (socket.connected) socket.emit('request_active_chats', { instanceId, includeArchived: true });
-        }
-
-        function requestHistory() {
-            if (activePhone && socket.connected) socket.emit('request_chat_history', { instanceId, phone: activePhone });
-        }
-
         function openChat(phone) {
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
+            
             if (activeTab === 'new') activeTab = 'all';
             
             app.classList.add('chat-open');
             setHeader();
-            updateComposerState();
+            updateComposer();
             inputEl.value = '';
             inputEl.style.height = 'auto';
-            isSending = false;
-            isResolving = false;
+            messagesEl.innerHTML = '<div class="m-auto text-textMuted text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + t('loading') + '</div>';
             
-            messagesEl.innerHTML = `<div class="m-auto text-textMuted text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ${t('loading')}</div>`;
+            var chat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
+            if (chat) { chat.unread = false; chat.viewed = true; }
             renderList();
-            requestHistory();
-            loadOperatorLock();
-            if (!isMobile()) inputEl.focus({ preventScroll: true });
+
+            if (socket && socket.connected) {
+                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            }
+            if (!isMobile()) inputEl.focus();
         }
 
-        function closeChat() { 
-            app.classList.remove('chat-open'); 
-            activePhone = ''; 
-            operatorLockUntil = 0; 
-            renderOperatorLock(); 
-            setHeader(); 
-            renderList(); 
+        function closeChat() {
+            app.classList.remove('chat-open');
+            activePhone = '';
+            setHeader();
+            updateComposer();
+            renderList();
         }
 
         function ensureDesktopSelection() {
             if (isMobile() || activePhone) return;
-            const firstVisible = filteredChats()[0];
-            if (firstVisible && firstVisible.phone) openChat(firstVisible.phone);
-        }
-
-        function reconcileActiveChat() {
-            if (!activePhone) return;
-            let record = chats.find(c => normalizePhone(c.phone) === activePhone);
-            const visibleInCurrentTab = record && (
-                (activeTab === 'archive' && isChatArchived(record)) ||
-                (activeTab !== 'archive' && !isChatArchived(record))
-            );
-            if (visibleInCurrentTab) return;
-
-            activePhone = '';
-            app.classList.remove('chat-open');
-            isResolving = false;
-            setHeader();
-            messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
-            updateComposerState();
-        }
-
-        function archiveChatInView(phone, closedAt = Date.now()) {
-            const cleanPhone = normalizePhone(phone);
-            chats = chats.map(chat => normalizePhone(chat.phone) === cleanPhone ? { ...chat, closed: true, closedAt } : chat);
-            if (activePhone === cleanPhone && activeTab !== 'archive') {
-                activePhone = '';
-                app.classList.remove('chat-open');
-                setHeader();
-                messagesEl.innerHTML = '';
-            }
-            isResolving = false;
-            inputEl.value = '';
-            inputEl.style.height = 'auto';
-            renderList();
-            updateComposerState();
-            ensureDesktopSelection();
-        }
-
-        function restoreChatInView(phone) {
-            const cleanPhone = normalizePhone(phone);
-            chats = chats.map(chat => normalizePhone(chat.phone) === cleanPhone ? { ...chat, closed: false, closedAt: 0 } : chat);
-            if (activePhone === cleanPhone && activeTab === 'archive') {
-                activePhone = '';
-                app.classList.remove('chat-open');
-                setHeader();
-                messagesEl.innerHTML = '';
-            }
-            isResolving = false;
-            inputEl.value = '';
-            inputEl.style.height = 'auto';
-            renderList();
-            updateComposerState();
-            ensureDesktopSelection();
-        }
-
-        function deleteChatFromView(phone) {
-            const cleanPhone = normalizePhone(phone);
-            chats = chats.filter(chat => normalizePhone(chat.phone) !== cleanPhone);
-            if (activePhone === cleanPhone) {
-                activePhone = '';
-                app.classList.remove('chat-open');
-                setHeader();
-                messagesEl.innerHTML = '';
-            }
-            isResolving = false;
-            inputEl.value = '';
-            inputEl.style.height = 'auto';
-            renderList();
-            updateComposerState();
-            ensureDesktopSelection();
+            var items = chats.filter(function(chat) {
+                var archived = isChatArchived(chat);
+                if (activeTab === 'archive' && !archived) return false;
+                if (activeTab !== 'archive' && archived) return false;
+                if (activeTab === 'new' && !chat.unread) return false;
+                if (activeTab === 'operator' && !chat.hasOperator) return false;
+                return true;
+            });
+            if (items.length > 0 && items[0].phone) openChat(items[0].phone);
         }
 
         function actionChat(action, phone) {
-            const cleanPhone = normalizePhone(phone);
-            if (!cleanPhone || isResolving) return;
-
-            const record = chats.find(chat => normalizePhone(chat.phone) === cleanPhone);
-            if (action === 'delete' && !isChatArchived(record)) return;
-
-            const events = { close: 'operator_close_chat', restore: 'operator_restore_chat', delete: 'operator_delete_chat' };
-            const eventName = events[action];
-            if (!eventName) return;
-
+            if (isResolving) return;
             isResolving = true;
-            renderList();
-            updateComposerState();
-            socket.emit(eventName, { instanceId, phone: cleanPhone });
+            var events = { close: 'operator_close_chat', restore: 'operator_restore_chat', delete: 'operator_delete_chat' };
+            var eventName = events[action];
+            if (!eventName) return;
+            socket.emit(eventName, { instanceId: instanceId, phone: normalizePhone(phone) });
         }
 
         function sendMessage() {
-            const text = inputEl.value.trim();
+            var text = inputEl.value.trim();
             if (!text || !activePhone || isSending) return;
             
             pendingText = text;
             isSending = true;
-            
-            const msgHtml = `
-                <div class="flex justify-end w-full opacity-70">
-                    <div class="bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm">
-                        <div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">Operator</div>
-                        <div class="text-[14px] leading-relaxed break-words">${escapeHtml(text)}</div>
-                    </div>
-                </div>`;
-            
-            const wrapper = messagesEl.querySelector('.mt-auto');
-            if (wrapper) wrapper.insertAdjacentHTML('beforeend', msgHtml);
-            else messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${msgHtml}</div>`;
-            
-            scrollToBottomSafe(messagesEl);
             inputEl.value = '';
             inputEl.style.height = 'auto';
-            updateComposerState();
+            updateComposer();
 
-            socket.emit('operator_send_message', { instanceId, phone: activePhone, text });
+            socket.emit('operator_send_message', { instanceId: instanceId, phone: activePhone, text: text });
             
-            // 60 СЕКУНД ТАЙМЕР
+            // 60 секундтық таймерді қосу
             operatorLockUntil = Date.now() + 60000;
             renderOperatorLock();
         }
 
-        // --- ОҚИҒАЛАРДЫ БАСҚАРУ ---
-        listEl.addEventListener('click', e => {
-            const actionBtn = e.target.closest('button[data-action]');
+        // --- БАТЫРМАЛАР ЖӘНЕ ОҚИҒАЛАР (EVENTS) ---
+        listEl.addEventListener('click', function(e) {
+            var actionBtn = e.target.closest('button[data-action]');
             if (actionBtn) {
                 e.stopPropagation();
                 actionChat(actionBtn.dataset.action, actionBtn.dataset.phone);
                 return;
             }
-            const item = e.target.closest('[data-phone]');
+            var item = e.target.closest('[data-phone]');
             if (item) openChat(item.dataset.phone);
         });
 
-        document.querySelector('[role="tablist"]').addEventListener('click', e => {
-            const tab = e.target.closest('.tab');
+        document.querySelector('[role="tablist"]').addEventListener('click', function(e) {
+            var tab = e.target.closest('.tab');
             if (tab) {
                 activeTab = tab.dataset.tab;
-                reconcileActiveChat();
+                if (activePhone) {
+                    var chat = chats.find(function(c){ return normalizePhone(c.phone) === activePhone; });
+                    var archived = isChatArchived(chat);
+                    if ((activeTab === 'archive' && !archived) || (activeTab !== 'archive' && archived)) {
+                        closeChat();
+                        messagesEl.innerHTML = '<div class="m-auto flex flex-col items-center justify-center text-center text-textMuted opacity-60"><div class="w-16 h-16 rounded-full bg-bgHover flex items-center justify-center mb-4"><i class="fa-regular fa-comments text-3xl"></i></div><p class="text-lg font-bold text-textMain">' + t('selectTitle') + '</p><p class="text-sm mt-1">' + t('selectText') + '</p></div>';
+                    }
+                }
                 renderList();
                 ensureDesktopSelection();
             }
         });
 
-        searchInput.addEventListener('input', () => { reconcileActiveChat(); renderList(); ensureDesktopSelection(); });
-        searchInput.addEventListener('keydown', e => {
+        searchInput.addEventListener('input', renderList);
+        searchInput.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                openDirectChatFromSearch();
+                var phone = searchPhoneCandidate();
+                if (phone) openChat(phone);
             }
         });
 
-        directChatBtn.addEventListener('click', openDirectChatFromSearch);
-        backBtn.addEventListener('click', closeChat);
-        sendBtn.addEventListener('click', sendMessage);
-        refreshBtn.addEventListener('click', requestChats);
-        
-        inputEl.addEventListener('input', () => {
-            inputEl.style.height = 'auto';
-            inputEl.style.height = `${Math.min(inputEl.scrollHeight, 120)}px`;
-            updateComposerState();
-        });
-        inputEl.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+        directChatBtn.addEventListener('click', function() {
+            var phone = searchPhoneCandidate();
+            if (phone) openChat(phone);
         });
 
-        for (const button of langToggles) {
-            button.addEventListener('click', () => {
+        backBtn.addEventListener('click', closeChat);
+        sendBtn.addEventListener('click', sendMessage);
+        refreshBtn.addEventListener('click', function() {
+            if (socket.connected) {
+                socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
+                if (activePhone) socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            }
+        });
+
+        inputEl.addEventListener('input', function() {
+            inputEl.style.height = 'auto';
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+            updateComposer();
+        });
+
+        inputEl.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        for (var i = 0; i < langToggles.length; i++) {
+            langToggles[i].addEventListener('click', function() {
                 lang = lang === 'kk' ? 'ru' : 'kk';
                 localStorage.setItem('operator_chat_lang', lang);
-                applyLanguage();
+                setHeader();
+                renderTabs();
+                updateComposer();
             });
         }
 
         // --- SOCKET.IO ТЫҢДАУШЫЛАРЫ ---
-        socket.on('connect', () => {
+        const socket = io({ transports: ['websocket', 'polling'] });
+
+        socket.on('connect', function() {
             socket.emit('operator_join', instanceId);
-            requestChats();
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('active_chats_list', payload => {
+        socket.on('active_chats_list', function(payload) {
             chats = Array.isArray(payload) ? payload : (payload && payload.chats ? payload.chats : []);
-            reconcileActiveChat();
-            setActiveHeader(activePhone);
             renderList();
-            updateComposerState();
             ensureDesktopSelection();
+            setHeader();
         });
 
-        socket.on('chat_history_data', data => {
-            if (data && normalizePhone(data.phone) !== activePhone) return;
-            renderHistory(data ? data.history || [] : []);
-            updateComposerState();
+        socket.on('chat_history_data', function(data) {
+            if (data && normalizePhone(data.phone) === activePhone) {
+                renderHistory(data.history || []);
+                updateComposer();
+            }
         });
 
-        socket.on('new_client_message', data => {
+        socket.on('new_client_message', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            if (activeTab === 'operator' || activeTab === 'archive') activeTab = 'new';
-            requestChats();
-            if (activePhone === normalizePhone(data.phone)) requestHistory();
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
+            if (activePhone === normalizePhone(data.phone)) {
+                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            }
         });
 
-        socket.on('operator_message', data => {
+        socket.on('operator_message', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            requestChats();
-            if (activePhone === normalizePhone(data.phone)) requestHistory();
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
+            if (activePhone === normalizePhone(data.phone)) {
+                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            }
         });
 
-        socket.on('operator_send_ok', data => {
+        socket.on('operator_send_ok', function(data) {
             isSending = false;
             pendingText = '';
-            updateComposerState();
-            requestChats();
-            if (data && normalizePhone(data.phone) === activePhone) requestHistory();
+            updateComposer();
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
+            if (data && normalizePhone(data.phone) === activePhone) {
+                socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
+            }
         });
 
-        socket.on('operator_send_error', data => {
+        socket.on('operator_send_error', function(data) {
             isSending = false;
             if (pendingText && !inputEl.value.trim()) {
                 inputEl.value = pendingText;
-                inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 132) + 'px';
             }
             pendingText = '';
-            updateComposerState();
-            showToast(data && data.error === 'WHATSAPP_NOT_READY' ? t('whatsappNotReady') : t('sendFailed'), 'error');
-            requestHistory();
+            updateComposer();
+            showToast(data && data.error === 'WHATSAPP_NOT_READY' ? 'WhatsApp қосылмаған' : t('sendFailed'), 'error');
+            if (activePhone) socket.emit('request_chat_history', { instanceId: instanceId, phone: activePhone });
         });
 
-        socket.on('chat_closed', data => {
+        socket.on('chat_closed', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            archiveChatInView(normalizePhone(data.phone), Number((data && data.closedAt) || Date.now()));
+            isResolving = false;
             showToast(t('resolveDone'));
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('operator_close_ok', data => {
+        socket.on('operator_close_ok', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            archiveChatInView(data.phone, Number((data && data.closedAt) || Date.now()));
-            requestChats();
-        });
-
-        socket.on('operator_close_error', () => {
             isResolving = false;
-            renderList();
-            updateComposerState();
-            showToast(t('resolveFailed'), 'error');
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('chat_restored', data => {
+        socket.on('chat_restored', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            restoreChatInView(data.phone);
+            isResolving = false;
             showToast(t('restoreDone'));
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('operator_restore_ok', data => {
+        socket.on('operator_restore_ok', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            restoreChatInView(data.phone);
-            requestChats();
-        });
-
-        socket.on('operator_restore_error', () => {
             isResolving = false;
-            renderList();
-            updateComposerState();
-            showToast(t('restoreFailed'), 'error');
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('chat_deleted', data => {
+        socket.on('chat_deleted', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            deleteChatFromView(data.phone);
+            isResolving = false;
             showToast(t('deleteDone'));
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('operator_delete_ok', data => {
+        socket.on('operator_delete_ok', function(data) {
             if (!data || data.instanceId !== instanceId) return;
-            deleteChatFromView(data.phone);
-            requestChats();
-        });
-
-        socket.on('operator_delete_error', () => {
             isResolving = false;
-            renderList();
-            updateComposerState();
-            showToast(t('deleteFailed'), 'error');
+            socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
         });
 
-        socket.on('disconnect', () => showToast(t('disconnected'), 'error'));
-
-        // БАСТАПҚЫ ІСКЕ ҚОСУ
-        document.getElementById('instance-title').textContent = instanceId.toUpperCase();
-        applyLanguage();
-        updateComposerState();
-        requestChats();
-        setInterval(requestChats, 8000);
+        // БАСТАПҚЫ БАПТАУЛАР
+        setHeader();
         setInterval(renderOperatorLock, 1000);
+        setInterval(function() {
+            if (socket.connected) socket.emit('request_active_chats', { instanceId: instanceId, includeArchived: true });
+        }, 8000);
 
     </script>
 </body>
