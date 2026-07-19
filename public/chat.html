@@ -449,59 +449,81 @@
         .row.model, .row.operator { justify-content: flex-end; }
         .row.system { justify-content: center; }
 
-        .bubble {
-            max-width: min(680px, 78%);
-            padding: 11px 13px;
-            border-radius: var(--radius);
-            border: 1px solid var(--line);
-            color: #eaf1fb;
-            line-height: 1.45;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
-        }
+        .row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    margin: 0 0 8px;
+}
 
-        .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
-        .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
-        .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
-        .system .bubble {
-            max-width: min(560px, 90%);
-            padding: 8px 11px;
-            background: rgba(245, 158, 11, .12);
-            border-color: rgba(245, 158, 11, .28);
-            color: #fcd34d;
-            font-size: 13px;
-            text-align: center;
-        }
-
-        .bubble-label {
-            display: block;
-            margin-bottom: 5px;
-            color: #93c5fd;
-            font-size: 11px;
-            font-weight: 900;
-            text-transform: uppercase;
-        }
-
- .audio-wrap {
+.bubble {
     display: block;
-    flex: 0 0 280px;
-    width: 280px;
-    min-width: 250px;
+    width: fit-content;
+    min-width: 0;
+    max-width: min(680px, 78%);
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
+    color: #eaf1fb;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+}
+
+.row.user .bubble {
+    margin-right: auto;
+}
+
+.row.operator .bubble,
+.row.model .bubble {
+    margin-left: auto;
+}
+
+.bubble:has(.audio-wrap) {
+    width: min(340px, calc(100vw - 32px));
+    max-width: min(340px, calc(100vw - 32px));
+    padding: 7px 9px;
+}
+
+.audio-wrap {
+    display: block;
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
-    margin-top: 4px;
+    margin: 2px 0 0;
     overflow: visible;
+    white-space: normal;
 }
 
 .audio-player {
     display: block;
-    flex: 0 0 280px;
-    width: 280px;
+    width: 100%;
     min-width: 250px;
     max-width: 100%;
-    height: 36px;
+    height: 42px;
     margin: 0;
     outline: none;
+}
+
+@media (max-width: 520px) {
+    .bubble {
+        max-width: calc(100vw - 32px);
+        padding: 9px 10px;
+        font-size: 14px;
+        line-height: 1.38;
+    }
+
+    .bubble:has(.audio-wrap) {
+        width: calc(100vw - 32px);
+        max-width: calc(100vw - 32px);
+    }
+
+    .audio-player {
+        min-width: 0;
+        width: 100%;
+        height: 42px;
+    }
 }
 
         .composer {
@@ -1102,12 +1124,38 @@
 
     scrollToBottomSafe(messagesEl);
     hydrateAudioPlayers();
+
 }
-        function buildAudioHtml(item) {
+
+function normalizeAudioData(value, mediaType = 'audio/ogg') {
+    let raw = String(value || '').trim();
+
+    if (!raw) return '';
+
+    raw = raw.replace(/\s+/g, '');
+
+    if (raw.startsWith('data:')) {
+        const commaIndex = raw.indexOf(',');
+        if (commaIndex < 0) return '';
+
+        const payload = raw.slice(commaIndex + 1);
+        if (!payload) return '';
+
+        return `data:${mediaType || 'audio/ogg'};base64,${payload}`;
+    }
+
+    if (raw.includes(',')) {
+        raw = raw.slice(raw.lastIndexOf(',') + 1);
+    }
+
+    return `data:${mediaType || 'audio/ogg'};base64,${raw}`;
+}
+
+function buildAudioHtml(item) {
     if (!item) return '';
 
     const mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
-    const mediaType = String(item.mediaType || '')
+    const mediaType = String(item.mediaType || 'audio/ogg')
         .split(';')[0]
         .replace(/[^\w/+.-]/g, '');
 
@@ -1124,29 +1172,23 @@
 
     if (!isAudio) return '';
 
-    const rawData = String(item.mediaData || '');
-    const isInlineAudio =
-        rawData.startsWith('data:audio') ||
-        rawData.includes(';base64,') ||
-        /^[A-Za-z0-9+/=]{80,}$/.test(rawData);
+    const inlineData = String(item.mediaData || '').trim();
 
-    const src = isInlineAudio
-        ? rawData.startsWith('data:')
-            ? rawData
-            : `data:${mediaType || 'audio/ogg'};base64,${rawData}`
-        : '';
+    if (inlineData) {
+        const src = normalizeAudioData(inlineData, mediaType);
 
-    if (src) {
-        return `
-            <div class="audio-wrap">
-                <audio
-                    class="audio-player"
-                    controls
-                    preload="metadata"
-                    src="${escapeHtml(src)}">
-                </audio>
-            </div>
-        `;
+        if (src) {
+            return `
+                <div class="audio-wrap">
+                    <audio
+                        class="audio-player"
+                        controls
+                        preload="metadata"
+                        src="${escapeHtml(src)}">
+                    </audio>
+                </div>
+            `;
+        }
     }
 
     return `
@@ -1160,16 +1202,19 @@
 }
 
 async function hydrateAudioPlayers() {
-    var wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
+    const wrappers = messagesEl.querySelectorAll(
+        '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
+    );
 
-    for (var i = 0; i < wrappers.length; i++) {
-        var wrapper = wrappers[i];
-        var audio = wrapper.querySelector('audio');
-        var messageId = String(wrapper.getAttribute('data-audio-id') || '').trim();
+    for (const wrapper of wrappers) {
+        const player = wrapper.querySelector('audio');
+        const messageId = String(
+            wrapper.getAttribute('data-audio-id') || ''
+        ).trim();
 
-        if (!messageId) continue;
+        if (!player || !messageId) continue;
 
-        if (audio && audio.getAttribute('src')) {
+        if (player.getAttribute('src')) {
             wrapper.setAttribute('data-audio-loaded', '1');
             continue;
         }
@@ -1177,35 +1222,23 @@ async function hydrateAudioPlayers() {
         wrapper.setAttribute('data-audio-loaded', '1');
 
         try {
-            var result = await fetchJson(endpoints.media + '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(messageId));
+            const result = await fetchJson(
+                `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
+            );
 
-            if (!result || !result.mediaData) {
-                throw new Error('MEDIA_EMPTY');
-            }
+            const mediaType = String(result?.mediaType || 'audio/ogg')
+                .split(';')[0]
+                .replace(/[^\w/+.-]/g, '');
 
-            var player = wrapper.querySelector('audio');
+            const src = normalizeAudioData(result?.mediaData, mediaType);
 
-            if (!player) {
-                throw new Error('AUDIO_ELEMENT_MISSING');
-            }
-
-            var raw = String(result.mediaData).trim();
-
-            if (raw.indexOf('data:') === 0) {
-                var commaIndex = raw.indexOf(',');
-                raw = commaIndex >= 0 ? raw.substring(commaIndex + 1) : '';
-            }
-
-            raw = raw.replace(/\s+/g, '');
-
-            if (!raw) {
+            if (!src) {
                 throw new Error('AUDIO_DATA_EMPTY');
             }
 
-            var mediaData = 'data:audio/ogg;base64,' + raw;
-
+            player.pause();
             player.removeAttribute('src');
-            player.setAttribute('src', mediaData);
+            player.src = src;
             player.load();
         } catch (error) {
             wrapper.removeAttribute('data-audio-loaded');

@@ -615,8 +615,16 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
   if (result && !persisted) {
     await redisClient.sendCommand(['SET', chatMediaKey(instanceId, messageId), result, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
   }
-  if (!result) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
-  res.json({ success: true, instanceId, messageId, mediaData: result });
+if (!result) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
+
+const normalizedMediaData = String(result).trim().replace(/\s+/g, '');
+
+res.json({
+    success: true,
+    instanceId,
+    messageId,
+    mediaData: normalizedMediaData,
+    mediaType: normalizedMediaData.match(/^data:([^;,]+)/i)?.[1] || 'audio/ogg'
 });
 
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {

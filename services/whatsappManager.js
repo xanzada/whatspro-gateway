@@ -23,9 +23,12 @@ function chatMediaKey(instanceId, messageId) {
 
 async function persistMessageMedia(instanceId, msg) {
     if (!msg?.hasMedia || !redisClient.isOpen) return null;
-    const media = await msg.downloadMedia();
-    if (!media?.data) return null;
-    const mediaUrl = `data:${media.mimetype || 'audio/ogg'};base64,${media.data}`;
+    const mediaType = String(media.mimetype || 'audio/ogg')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+
+const mediaUrl = `data:${mediaType};base64,${String(media.data).replace(/\s+/g, '')}`;
     await redisClient.sendCommand(['SET', chatMediaKey(instanceId, msg.id.id), mediaUrl, 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
     return { media, mediaUrl };
 }
