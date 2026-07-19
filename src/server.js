@@ -617,14 +617,15 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
   }
 if (!result) return res.status(404).json({ error: 'MEDIA_NOT_FOUND' });
 
-const normalizedMediaData = String(result).trim().replace(/\s+/g, '');
+    const normalizedMediaData = String(result).trim().replace(/\s+/g, '');
 
-res.json({
-    success: true,
-    instanceId,
-    messageId,
-    mediaData: normalizedMediaData,
-    mediaType: normalizedMediaData.match(/^data:([^;,]+)/i)?.[1] || 'audio/ogg'
+    res.json({
+        success: true,
+        instanceId,
+        messageId,
+        mediaData: normalizedMediaData,
+        mediaType: normalizedMediaData.match(/^data:([^;,]+)/i)?.[1] || 'audio/ogg'
+    });
 });
 
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
