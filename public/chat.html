@@ -92,15 +92,17 @@
             .audio-message { min-width: 0; grid-template-columns: 40px minmax(90px, 1fr) auto; }
         }
     
-/* Stable message alignment and audio layout */
+/* Corrected interaction layer */
+.messages { overscroll-behavior: contain; touch-action: pan-y; }
+.composer { position: sticky; bottom: 0; z-index: 10; }
+textarea:disabled { pointer-events: auto; }
 .row { width: 100%; min-width: 0; }
 .row.user { justify-content: flex-start; }
 .row.operator, .row.model { justify-content: flex-end; }
-.bubble { min-width: 0; }
 .audio-bubble { width: min(360px, 86%); max-width: min(360px, 86%); padding: 8px 10px; }
-.audio-message { width: 100%; min-width: 248px; }
-.audio-native { display: none; }
-@media (max-width: 520px) { .audio-bubble { width: calc(100vw - 32px); max-width: calc(100vw - 32px); } .audio-message { min-width: 0; } }
+.audio-wrap { width: 100%; min-width: 0; margin-top: 4px; }
+.audio-player { display: block; width: 100%; min-width: 220px; height: 40px; }
+@media (max-width: 520px) { .audio-bubble { width: calc(100vw - 32px); max-width: calc(100vw - 32px); } .audio-player { min-width: 0; height: 42px; } }
 </style>
 </head>
 <body class="bg-bgDark text-textMain h-[100dvh] overflow-hidden flex font-sans" id="app">
@@ -904,6 +906,7 @@
                 }
             } catch (error) {
                 console.error('Inbox load failed:', error);
+                listEl.innerHTML = '<div class="empty"><div class="empty-box"><h2>Чат жүктелмеді</h2><p>' + escapeHtml(error.message || 'API error') + '</p></div></div>';
             } finally {
                 isInboxLoading = false;
             }

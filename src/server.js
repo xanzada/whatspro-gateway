@@ -481,16 +481,15 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
 
   const limit = parseLimit(req.query.limit, 100, 500);
   const inboxRows = await readInboxEntries(instanceId, limit * 2);
-  const legacyHistoryKeys = await redisClient.scanIterator ? (async () => {
-    const keys = [];
-    for await (const key of redisClient.scanIterator({ MATCH: `${openbotHistoryKey(instanceId, '*')}`, COUNT: 100 })) keys.push(String(key));
-    return keys.map(key => ({ phone: key.slice(`history:${instanceId}:`.length), updatedAt: 0 }));
-  })().catch(() => []) : [];
-  const mergedInboxRows = [...inboxRows, ...legacyHistoryKeys];
+  const legacyHistoryKeys = [];
+  for await (const key of redisClient.scanIterator({ MATCH: `history:${instanceId}:*`, COUNT: 100 })) {
+    const phone = normalizePhone(String(key).slice(`history:${instanceId}:`.length));
+    if (isValidChatPhone(phone)) legacyHistoryKeys.push({ phone, updatedAt: 0 });
+  }
   const candidates = [];
   const seen = new Set();
 
-  for (const row of mergedInboxRows) {
+  for (const row of [...inboxRows, ...legacyHistoryKeys]) {
     const phone = normalizePhone(row.phone);
     if (!isValidChatPhone(phone) || seen.has(phone)) continue;
     seen.add(phone);
@@ -604,6 +603,7 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
     
   const history = [...chatHistory, ...openbotHistory]
     .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+    .filter((entry, index, rows) => !entry.id || rows.findIndex(item => item.id === entry.id) === index)
     .slice(-limit);
 
   res.json({ success: true, instanceId, phone, history });
@@ -717,7 +717,7 @@ app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
   const ttl = redisClient.isOpen ? await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => 0) : 0;
-  res.json({ success: true, instanceId, phone, ttl: Math.max(0, Number(ttl) || 0) });
+  return res.json({ success: true, instanceId, phone, ttl: Math.max(0, Number(ttl) || 0) });
 });
 
 app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
@@ -727,25 +727,11 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
   if (!['view', 'close', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
-  if (action === 'view') {
-    await redisClient.sendCommand(['ZADD', chatViewedKey(instanceId), String(Date.now()), phone]);
-  } else if (action === 'close') {
-    await redisClient.sendCommand(['SADD', chatArchiveKey(instanceId), phone]);
-    await redisClient.sendCommand(['SET', chatArchiveMarkerKey(instanceId, phone), String(Date.now()), 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]).catch(() => 0);
-  } else if (action === 'restore') {
-    await redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]);
-    await redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]);
-  } else if (action === 'delete') {
-    await Promise.all([
-      redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]),
-      redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]),
-      redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]),
-      redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]),
-      redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]),
-      redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)])
-    ]);
-  }
-  res.json({ success: true, instanceId, phone, action });
+  if (action === 'view') await redisClient.sendCommand(['ZADD', chatViewedKey(instanceId), String(Date.now()), phone]);
+  if (action === 'close') { await redisClient.sendCommand(['SADD', chatArchiveKey(instanceId), phone]); await redisClient.sendCommand(['SET', chatArchiveMarkerKey(instanceId, phone), String(Date.now()), 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]); }
+  if (action === 'restore') { await redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]); await redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]); }
+  if (action === 'delete') await Promise.all([redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]), redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]), redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]), redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]), redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]), redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)])]);
+  return res.json({ success: true, instanceId, phone, action });
 });
 
 app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
