@@ -1098,74 +1098,105 @@
             listEl.scrollTop = previousTop;
         }
  function buildAudioHtml(item) {
-    if (!item) return '';
+    try {
+        if (!item) return '';
 
-    const type = String(item.type || item.mediaKind || '').toLowerCase();
-    const mime = String(item.mediaType || '').toLowerCase();
-    
-    // ҚАТАҢ ТЕКСЕРУ: Бұл нақты аудио ма? (Мәтіндік хаттарды өткізбейді)
-    const isActuallyAudio = type === 'audio' || type === 'ptt' || mime.startsWith('audio/') || Boolean(item.hasMedia && mime.startsWith('audio/'));
-    
-    if (!isActuallyAudio) return ''; // Егер аудио болмаса, бос қайтарамыз (плеер шықпайды)
+        const type = String(item.type || item.mediaKind || '').toLowerCase();
+        const mime = String(item.mediaType || '').toLowerCase();
+        
+        // Нақты аудио екенін тексеру
+        const isActuallyAudio = type === 'audio' || type === 'ptt' || mime.startsWith('audio/') || Boolean(item.hasMedia && mime.startsWith('audio/'));
+        
+        if (!isActuallyAudio) return ''; 
 
-    const rawData = String(item.mediaData || '').trim();
-    let src = '';
+        const rawData = String(item.mediaData || '').trim();
+        let src = '';
 
-    if (rawData) {
-        src = rawData.startsWith('data:') ? rawData : `data:${mime || 'audio/ogg'};base64,${rawData.replace(/\s+/g, '')}`;
-    }
+        if (rawData) {
+            src = rawData.startsWith('data:') ? rawData : `data:${mime || 'audio/ogg'};base64,${rawData.replace(/\s+/g, '')}`;
+        }
 
-    if (src) {
+        if (src) {
+            return `
+                <div class="audio-wrap">
+                    <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
+                </div>
+            `;
+        }
+
         return `
-            <div class="audio-wrap">
-                <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
+            <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id || ''))}">
+                <audio class="audio-player" controls preload="none"></audio>
             </div>
         `;
+    } catch (e) {
+        console.error("Audio build error:", e);
+        return '';
     }
-
-    return `
-        <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id || ''))}">
-            <audio class="audio-player" controls preload="none"></audio>
-        </div>
-    `;
 }
 
 function buildMessageHtml(item) {
-    const isOperator = item.direction === 'outgoing' || item.fromMe === true || item.role === 'operator' || item.role === 'model';
-    const bubbleClass = isOperator ? 'operator' : 'user';
-    const text = escapeHtml(cleanText(item.text || item.body || ''));
-    
-    const audioHtml = buildAudioHtml(item);
-    
-    let content = '';
-    
-    // 1. Оператор белгісі
-    if (isOperator) {
-        content += '<span class="bubble-label">Operator</span>';
-    }
-    
-    // 2. Аудио (тек бар болса ғана қосылады)
-    if (audioHtml) {
-        content += audioHtml;
-    }
-    
-    // 3. Мәтін
-    if (text) {
-        // Егер үстінде аудио болса, мәтінді аздап төмен түсіреміз
-        content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
-    }
+    try {
+        const isOperator = item.direction === 'outgoing' || item.fromMe === true || item.role === 'operator' || item.role === 'model';
+        const bubbleClass = isOperator ? 'operator' : 'user';
+        const text = escapeHtml(cleanText(item.text || item.body || ''));
+        
+        const audioHtml = buildAudioHtml(item);
+        
+        let content = '';
+        
+        if (isOperator) {
+            content += '<span class="bubble-label">Operator</span>';
+        }
+        
+        if (audioHtml) {
+            content += audioHtml;
+        }
+        
+        if (text) {
+            content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
+        }
 
-    if (!content) return '';
+        if (!content) return '';
 
-    return `
-        <div class="row ${bubbleClass}">
-            <div class="bubble">
-                ${content}
+        return `
+            <div class="row ${bubbleClass}">
+                <div class="bubble">
+                    ${content}
+                </div>
             </div>
-        </div>
-    `;
+        `;
+    } catch (e) {
+        console.error("Message build error:", e);
+        return '';
+    }
 }
 
+async function renderHistory(history) {
+    if (!messagesEl) return;
+
+    messagesEl.innerHTML = '';
+
+    if (Array.isArray(history)) {
+        history.forEach(function(item) {
+            try {
+                if (typeof buildMessageHtml === 'function') {
+                    var messageHtml = buildMessageHtml(item);
+                    if (messageHtml) {
+                        messagesEl.insertAdjacentHTML('beforeend', messageHtml);
+                    }
+                }
+            } catch (e) {
+                console.error("Message render error:", e);
+            }
+        });
+    }
+
+    scrollToBottomSafe(messagesEl);
+    if (typeof hydrateAudioPlayers === 'function') {
+        hydrateAudioPlayers();
+    }
+}
 async function hydrateAudioPlayers() {
     const wrappers = messagesEl.querySelectorAll(
         '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
