@@ -1,735 +1,148 @@
-<!-- Бастапқы құрылым сақталды[cite: 3] -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="kk">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Оператор чаты</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        appBg: '#0f141e',
+                        sidebarBg: '#0b111d',
+                        headBg: '#18212f',
+                        userBubble: '#1b2436',
+                        operatorBubble: '#168379',
+                        inputBg: '#0f141e',
+                        inputBorder: '#168379',
+                        btnBg: '#2c3e56',
+                        operatorLabel: '#7dd3fc',
+                        line: '#27374e',
+                        muted: '#8ca0ba',
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        :root {
-            color-scheme: dark;
-            --bg: #0b111d;
-            --panel: #101826;
-            --panel-2: #162234;
-            --panel-3: #1d2b3f;
-            --line: #27374e;
-            --muted: #8ca0ba;
-            --text: #f4f7fb;
-            --soft: #c9d5e6;
-            --green: #10b981;
-            --blue: #3b82f6;
-            --orange: #f59e0b;
-            --red: #ef4444;
-            --shadow: 0 20px 60px rgba(0, 0, 0, .28);
-            --radius: 8px;
-        }
-
-        * { box-sizing: border-box; }
-        html, body { height: 100%; min-height: 0; }
-        body {
-            margin: 0;
-            overflow: hidden;
-            background: var(--bg);
-            color: var(--text);
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            letter-spacing: 0;
-        }
-
-        button, input, textarea { font: inherit; }
-        button { border: 0; cursor: pointer; }
-        
-        .app {
-            display: grid;
-            grid-template-columns: 390px minmax(0, 1fr);
-            height: 100%;
-            min-height: 0;
-            max-height: 100%;
-            overflow: hidden;
-            background:
-                linear-gradient(180deg, rgba(59, 130, 246, .08), transparent 260px),
-                var(--bg);
-        }
-
-        .sidebar {
-            min-width: 0;
-            min-height: 0;
-            max-height: 100%;
-            display: flex;
-            flex-direction: column;
-            border-right: 1px solid var(--line);
-            background: rgba(16, 24, 38, .98);
-        }
-
-        .side-head, .chat-head {
-            min-height: 68px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 14px 18px;
-            border-bottom: 1px solid var(--line);
-            background: rgba(16, 24, 38, .94);
-            backdrop-filter: blur(14px);
-        }
-
-        .brand {
-            min-width: 0;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .head-actions {
-            flex: 0 0 auto;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .brand-icon, .avatar, .empty-icon {
-            width: 42px;
-            height: 42px;
-            flex: 0 0 auto;
-            display: grid;
-            place-items: center;
-            border-radius: var(--radius);
-            background: #0f766e;
-            color: white;
-            box-shadow: 0 12px 30px rgba(16, 185, 129, .2);
-        }
-
-        .brand-text, .chat-title { min-width: 0; }
-        .eyebrow {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            margin: 0 0 3px;
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 999px;
-            background: var(--green);
-            box-shadow: 0 0 0 4px rgba(16, 185, 129, .12);
-        }
-
-        h1, h2, h3, p { margin: 0; }
-        h1, .chat-phone {
-            overflow: hidden;
-            color: var(--text);
-            font-size: 19px;
-            font-weight: 800;
-            line-height: 1.2;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .icon-btn {
-            width: 42px;
-            height: 42px;
-            flex: 0 0 auto;
-            display: grid;
-            place-items: center;
-            border-radius: var(--radius);
-            background: var(--panel-2);
-            color: var(--soft);
-            border: 1px solid var(--line);
-        }
-
-        .icon-btn:hover { background: var(--panel-3); color: white; }
-        .icon-btn:disabled { cursor: not-allowed; opacity: .5; }
-
-        .lang-toggle {
-            min-width: 42px;
-            height: 42px;
-            padding: 0 10px;
-            border-radius: var(--radius);
-            border: 1px solid var(--line);
-            background: #0f1b2d;
-            color: var(--text);
-            font-size: 12px;
-            font-weight: 900;
-            text-transform: uppercase;
-        }
-
-        .lang-toggle:hover { background: var(--panel-3); }
-
-        .filters {
-            padding: 16px 18px;
-            border-bottom: 1px solid var(--line);
-            background: #111c2d;
-        }
-
-        .tabs {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 5px;
-            padding: 5px;
-            border: 1px solid #1f3048;
-            border-radius: var(--radius);
-            background: #0b1422;
-        }
-
-        .tab {
-            min-height: 42px;
-            overflow: hidden;
-            border-radius: 6px;
-            background: transparent;
-            color: var(--muted);
-            font-size: 13px;
-            font-weight: 800;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .tab.active {
-            background: #31445d;
-            color: white;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04);
-        }
-
-        .search {
-            position: relative;
-            margin-top: 16px;
-        }
-
-        .search svg {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #6f85a1;
-            pointer-events: none;
-        }
-
-        .search input {
-            width: 100%;
-            height: 46px;
-            padding: 0 14px 0 44px;
-            border: 1px solid #2b3d55;
-            border-radius: var(--radius);
+        audio {
+            filter: invert(90%) hue-rotate(180deg) brightness(1.2);
+            height: 40px;
             outline: none;
-            background: #142034;
-            color: var(--text);
-        }
-
-        .search input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .14); }
-        .search input::placeholder { color: #71849c; }
-
-        .direct-chat {
-            width: 100%;
-            min-height: 38px;
-            margin-top: 8px;
-            padding: 0 12px;
-            border: 1px solid #2b3d55;
-            border-radius: var(--radius);
-            background: #19304c;
-            color: #dbeafe;
-            font-size: 13px;
-            font-weight: 850;
-            text-align: left;
-        }
-
-        .direct-chat:hover { background: #244766; }
-        .direct-chat[hidden] { display: none; }
-
-        .list {
-            flex: 1;
-            min-height: 0;
-            overflow-y: auto;
-            overscroll-behavior: contain;
-            scrollbar-gutter: stable;
-            padding: 8px;
-        }
-
-        .chat-item {
-            width: 100%;
-            display: grid;
-            grid-template-columns: 46px minmax(0, 1fr) auto;
-            gap: 12px;
-            align-items: center;
-            margin: 0 0 6px;
-            padding: 12px 10px;
-            border: 1px solid transparent;
-            border-radius: var(--radius);
-            background: transparent;
-            color: inherit;
-            cursor: pointer;
-            text-align: left;
-        }
-
-        .chat-item:hover { background: #152238; }
-        .chat-item:focus-visible { outline: 2px solid rgba(59, 130, 246, .75); outline-offset: 2px; }
-        .chat-item.active { border-color: #365274; background: #1a2a42; }
-
-        .avatar {
-            width: 46px;
-            height: 46px;
-            background: #263a54;
-            box-shadow: none;
-            font-weight: 900;
-        }
-
-        .avatar.unread {
-            background: #0e7490;
-            box-shadow: 0 0 0 4px rgba(14, 116, 144, .18);
-        }
-
-        .item-body { min-width: 0; }
-
-        .item-top, .badges {
-            min-width: 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .item-top { justify-content: space-between; }
-
-        .phone-wrap {
-            min-width: 0;
-            flex: 1 1 auto;
-        }
-
-        .phone {
-            min-width: 0;
-            overflow: hidden;
-            font-size: 15px;
-            font-weight: 850;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .contact-phone {
-            margin-top: 2px;
-            overflow: hidden;
-            color: var(--muted);
-            font-size: 11px;
-            font-weight: 750;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .time {
-            flex: 0 0 auto;
-            color: #7890ab;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .preview {
-            overflow: hidden;
-            margin-top: 4px;
-            color: #9aacbf;
-            font-size: 13px;
-            line-height: 1.35;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .chat-item.unread .preview { color: #7dd3fc; font-weight: 700; }
-        .badges { margin-top: 8px; flex-wrap: wrap; }
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            height: 22px;
-            padding: 0 8px;
-            border-radius: 999px;
-            background: rgba(59, 130, 246, .14);
-            color: #93c5fd;
-            font-size: 11px;
-            font-weight: 850;
-        }
-
-        .badge.green { background: rgba(16, 185, 129, .13); color: #6ee7b7; }
-        .badge.orange { background: rgba(245, 158, 11, .14); color: #fcd34d; }
-        .badge.gray { background: rgba(148, 163, 184, .14); color: #cbd5e1; }
-
-        .item-actions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 6px;
-        }
-
-        .chat-action {
-            width: 34px;
-            height: 34px;
-            flex: 0 0 auto;
-            display: grid;
-            place-items: center;
-            border-radius: var(--radius);
-            color: #d1fae5;
-            border: 1px solid rgba(16, 185, 129, .26);
-            background: rgba(16, 185, 129, .12);
-        }
-
-        .chat-action:hover { background: rgba(16, 185, 129, .2); color: white; }
-        .chat-action:disabled { cursor: not-allowed; opacity: .45; }
-        .chat-action svg { width: 18px; height: 18px; }
-
-        .chat-action.delete {
-            color: #fecaca;
-            border-color: rgba(239, 68, 68, .26);
-            background: rgba(239, 68, 68, .12);
-        }
-
-        .chat-action.delete:hover { background: rgba(239, 68, 68, .2); color: white; }
-
-        .chat {
-            min-width: 0;
-            min-height: 0;
-            height: 100%;
-            max-height: 100%;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            background: #09101b;
-        }
-
-        .back-btn { display: none; }
-        .chat-meta { display: none; }
-
-        .lock-pill {
-            display: none;
-            flex: 0 0 auto;
-            align-items: center;
-            gap: 6px;
-            margin-left: auto;
-            padding: 6px 9px;
-            border: 1px solid rgba(45, 212, 191, .28);
-            border-radius: 999px;
-            background: rgba(15, 118, 110, .18);
-            color: #99f6e4;
-            font-size: 12px;
-            font-weight: 900;
-            line-height: 1;
-        }
-
-        .lock-pill.show { display: inline-flex; }
-
-        .messages {
-            flex: 1 1 0;
-            height: 0;
-            min-height: 0;
-            overflow-y: auto;
-            overscroll-behavior: contain;
-            scrollbar-gutter: stable;
-            padding: 22px clamp(14px, 3vw, 34px);
-            background:
-                radial-gradient(circle at 25% 10%, rgba(16, 185, 129, .08), transparent 28%),
-                radial-gradient(circle at 88% 18%, rgba(245, 158, 11, .06), transparent 24%),
-                #09101b;
-        }
-
-        .empty {
-            min-height: 100%;
-            display: grid;
-            place-items: center;
-            text-align: center;
-            color: var(--muted);
-        }
-
-        .empty-box {
-            width: min(360px, 92vw);
-            display: grid;
-            justify-items: center;
-            gap: 12px;
-        }
-
-        .empty-icon { background: #172338; box-shadow: none; color: #8aa3bf; }
-        .empty h2 { color: var(--text); font-size: 20px; }
-        .empty p { line-height: 1.5; }
-
-        /* --- ЧАТТЫҢ НЕГІЗГІ ОРНАЛАСУЫ (WhatsApp/Telegram стилі) --- */
-        .row {
-            display: flex;
-            margin: 0 0 12px;
             width: 100%;
         }
-
-        /* Клиент сол жақта */
-        .row.user { justify-content: flex-start; }
+        audio::-webkit-media-controls-panel {
+            background-color: #f1f3f4;
+        }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2c3e56; border-radius: 4px; }
         
-        /* Оператор мен Бот оң жақта */
-        .row.operator, .row.model { justify-content: flex-end; }
+        .chat-open .sidebar-container { transform: translateX(-100%); }
+        .chat-open .chat-container { transform: translateX(0); }
         
-        .row.system { justify-content: center; }
-
-        .bubble {
-            max-width: min(680px, 85%);
-            padding: 10px 14px;
-            border-radius: var(--radius);
-            border: 1px solid var(--line);
-            color: #eaf1fb;
-            line-height: 1.45;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
-        }
-
-        /* Дизайндар */
-        .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
-        .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-right-radius: 3px; }
-        .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
-        
-        .system .bubble {
-            max-width: min(560px, 90%);
-            padding: 8px 11px;
-            background: rgba(245, 158, 11, .12);
-            border-color: rgba(245, 158, 11, .28);
-            color: #fcd34d;
-            font-size: 13px;
-            text-align: center;
-        }
-
-        .bubble-label {
-            display: block;
-            margin-bottom: 6px;
-            color: #93c5fd;
-            font-size: 11px;
-            font-weight: 900;
-            text-transform: uppercase;
-            opacity: 0.9;
-        }
-
-        /* Аудио элементтерінің реттелуі */
-        .audio-wrap {
-            display: block;
-            margin: 4px 0;
-            width: 100%;
-            min-width: 240px;
-        }
-
-        .audio-player {
-            width: 100%;
-            height: 38px;
-            border-radius: 6px;
-            outline: none;
-            display: block;
-        }
-
-        /* Тек аудио ғана бар болса, төртбұрыштың көлемін жинақылау */
-        .bubble.audio-bubble {
-            padding: 8px;
-            width: min(340px, 90%);
-        }
-
-        @media (max-width: 520px) {
-            .row.user { padding-right: 10%; }
-            .row.operator, .row.model { padding-left: 10%; }
-        }
-
-        .composer {
-            position: sticky;
-            bottom: 0;
-            z-index: 3;
-            flex: 0 0 auto;
-            padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
-            border-top: 1px solid var(--line);
-            background: rgba(16, 24, 38, .96);
-        }
-
-        .composer-box {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 46px;
-            gap: 10px;
-            align-items: end;
-            max-width: 980px;
-            margin: 0 auto;
-        }
-
-        textarea {
-            width: 100%;
-            min-height: 46px;
-            max-height: 132px;
-            padding: 12px 14px;
-            resize: none;
-            border: 1px solid #2b3d55;
-            border-radius: var(--radius);
-            outline: none;
-            background: #0e1726;
-            color: var(--text);
-            line-height: 1.35;
-        }
-
-        textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(16, 185, 129, .14); }
-        textarea:disabled { opacity: .58; }
-
-        .send {
-            width: 46px;
-            height: 46px;
-            display: grid;
-            place-items: center;
-            border-radius: var(--radius);
-            background: var(--green);
-            color: white;
-            box-shadow: 0 14px 30px rgba(16, 185, 129, .2);
-        }
-
-        .send:disabled { background: #2a3c55; color: #7d91aa; box-shadow: none; cursor: not-allowed; }
-        .empty-action {
-            min-height: 38px;
-            padding: 0 14px;
-            border-radius: var(--radius);
-            background: #19304c;
-            color: #dbeafe;
-            font-size: 13px;
-            font-weight: 850;
-        }
-
-        .empty-action:hover { background: #244766; }
-        .toast {
-            position: fixed;
-            left: 50%;
-            bottom: 22px;
-            z-index: 50;
-            max-width: calc(100vw - 32px);
-            transform: translateX(-50%) translateY(90px);
-            padding: 10px 14px;
-            border: 1px solid var(--line);
-            border-radius: var(--radius);
-            background: #111c2d;
-            color: white;
-            box-shadow: var(--shadow);
-            opacity: 0;
-            transition: .22s ease;
-        }
-
-        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
-        svg { width: 20px; height: 20px; }
-
         @media (max-width: 840px) {
-            .app { display: block; position: relative; height: 100dvh; overflow: hidden; }
-            .sidebar, .chat { position: absolute; inset: 0; width: 100%; transition: transform .24s ease; }
-            .chat { transform: translateX(100%); }
-            .app.chat-open .sidebar { transform: translateX(-100%); }
-            .app.chat-open .chat { transform: translateX(0); }
-            .back-btn { display: grid; }
-            .side-head, .chat-head { min-height: 64px; padding-inline: 14px; }
-            .filters { padding: 14px; }
-            .list { padding: 6px; }
-            .messages { padding: 16px 12px; }
-            .composer { padding-inline: 12px; }
-            h1, .chat-phone { font-size: 18px; }
-            .tab { font-size: 12px; }
-            .lang-toggle, .icon-btn { width: 40px; height: 40px; }
-            .composer-box { grid-template-columns: minmax(0, 1fr) 44px; }
-            .send { width: 44px; height: 44px; }
+            .sidebar-container, .chat-container {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                transition: transform 0.24s ease;
+            }
+            .chat-container { transform: translateX(100%); }
+            .back-btn { display: flex; }
         }
-
-        @media (max-width: 520px) {
-            .side-head, .chat-head { min-height: 58px; gap: 8px; padding: 10px; }
-            .brand { gap: 8px; }
-            .brand-icon, .avatar, .empty-icon { width: 38px; height: 38px; }
-            .avatar { width: 40px; height: 40px; }
-            h1, .chat-phone { font-size: 16px; }
-            .eyebrow { font-size: 10px; }
-            .filters { padding: 10px; }
-            .tabs { gap: 3px; padding: 4px; }
-            .tab { min-height: 34px; font-size: 11px; font-weight: 850; }
-            .search { margin-top: 12px; }
-            .search input { height: 40px; font-size: 14px; padding-left: 38px; }
-            .search svg { left: 11px; }
-            .chat-item { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; padding: 10px 8px; }
-            .item-actions { gap: 4px; }
-            .chat-action { width: 32px; height: 32px; }
-            .phone { font-size: 15px; }
-            .preview { font-size: 12px; }
-            .time { font-size: 11px; }
-            .badge { height: 18px; padding-inline: 6px; font-size: 10px; }
-            .head-actions { gap: 6px; }
-            .lang-toggle, .icon-btn { width: 36px; height: 36px; min-width: 36px; font-size: 11px; }
-            .messages { padding: 10px; font-size: 14px; }
-            .composer { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
-            textarea { min-height: 42px; padding: 10px 12px; font-size: 14px; }
-            .send { width: 42px; height: 42px; }
-            .composer-box { grid-template-columns: minmax(0, 1fr) 42px; gap: 8px; }
+        @media (min-width: 841px) {
+            .back-btn { display: none; }
+            .chat-container { transform: none !important; }
+            .sidebar-container { transform: none !important; }
         }
     </style>
 </head>
-<body>
-    <div class="app" id="app">
-        <aside class="sidebar">
-            <header class="side-head">
-                <div class="brand">
-                    <div class="brand-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8h-4.7L8 20v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
-                    </div>
-                    <div class="brand-text">
-                        <p class="eyebrow"><span class="dot"></span><span id="operator-label">Оператор чаты</span></p>
-                        <h1 id="instance-title">Кабинет</h1>
-                    </div>
-                </div>
-                <div class="head-actions">
-                    <button class="lang-toggle" id="lang-toggle" type="button" data-lang-toggle title="Тілді ауыстыру" aria-label="Тілді ауыстыру">KZ</button>
-                    <button class="icon-btn" id="refresh-btn" type="button" title="Жаңарту" aria-label="Жаңарту">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    </button>
-                </div>
-            </header>
+<body class="bg-appBg text-white h-screen overflow-hidden font-sans flex flex-col md:flex-row relative" id="app">
 
-            <section class="filters">
-                <div class="tabs" role="tablist" aria-label="Диалог сүзгісі">
-                    <button class="tab" id="tab-new" type="button" data-tab="new">Жаңа хаттар</button>
-                    <button class="tab active" id="tab-all" type="button" data-tab="all">Барлығы</button>
-                    <button class="tab" id="tab-operator" type="button" data-tab="operator">Оператор</button>
-                    <button class="tab" id="tab-archive" type="button" data-tab="archive">Архив</button>
+    <!-- Sidebar -->
+    <aside class="sidebar-container bg-sidebarBg w-full md:w-[390px] h-full flex flex-col border-r border-line z-10 shrink-0">
+        <header class="bg-headBg/95 backdrop-blur-md min-h-[68px] flex items-center justify-between px-4 py-3 border-b border-line">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-md bg-teal-700 text-white flex items-center justify-center shadow-[0_12px_30px_rgba(16,185,129,0.2)]">
+                    <i class="fa-solid fa-headset"></i>
                 </div>
-                <label class="search">
-                    <svg viewBox="0 0 24 24" fill="none"><path d="m21 21-4.35-4.35M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                    <input id="search-input" autocomplete="off" placeholder="Нөмір немесе мәтін бойынша іздеу">
-                </label>
-                <button class="direct-chat" id="direct-chat-btn" type="button" hidden></button>
-            </section>
-
-            <main class="list" id="contact-list"></main>
-        </aside>
-
-        <section class="chat">
-            <header class="chat-head">
-                <div class="brand">
-                    <button class="icon-btn back-btn" id="back-btn" type="button" title="Артқа" aria-label="Артқа">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="M15 19 8 12l7-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    </button>
-                    <div class="avatar" id="active-avatar">WA</div>
-                    <div class="chat-title">
-                        <div class="chat-phone" id="active-phone">Диалог</div>
-                        <div class="chat-meta" id="active-meta">WhatsApp оператор панелі</div>
-                    </div>
+                <div>
+                    <p class="text-muted text-[10px] font-bold uppercase flex items-center gap-1.5 mb-0.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]"></span>
+                        <span id="operator-label">Оператор чаты</span>
+                    </p>
+                    <h1 class="text-base font-extrabold truncate" id="instance-title">Кабинет</h1>
                 </div>
-                <div class="lock-pill" id="operator-lock" aria-live="polite"></div>
-            </header>
+            </div>
+            <div class="flex items-center gap-2">
+                <button class="w-10 h-10 rounded-md border border-line bg-[#0f1b2d] hover:bg-[#1d2b3f] text-xs font-black uppercase transition-colors" id="lang-toggle" data-lang-toggle title="Тілді ауыстыру">KZ</button>
+                <button class="w-10 h-10 rounded-md border border-line bg-btnBg hover:bg-[#3b4b61] text-gray-300 hover:text-white transition-colors flex items-center justify-center" id="refresh-btn" title="Жаңарту">
+                    <i class="fa-solid fa-rotate-right"></i>
+                </button>
+            </div>
+        </header>
 
-            <main class="messages" id="messages">
-                <div class="empty">
-                    <div class="empty-box">
-                        <div class="empty-icon">
-                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
-                        </div>
-                        <h2 id="select-title">Диалогты таңдаңыз</h2>
-                        <p id="select-text">Клиент хатын ашқанда толық тарих осы жерде көрінеді.</p>
-                    </div>
-                </div>
-            </main>
-
-            <footer class="composer">
-                <div class="composer-box">
-                    <textarea id="message-input" rows="1" disabled placeholder="Клиентке WhatsApp арқылы жауап..."></textarea>
-                    <button class="send" id="send-btn" type="button" disabled title="Жіберу" aria-label="Жіберу">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="m22 2-7 20-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M22 2 11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                    </button>
-                </div>
-            </footer>
+        <section class="p-4 border-b border-line bg-[#111c2d]">
+            <div class="grid grid-cols-4 gap-1 p-1 border border-[#1f3048] rounded-md bg-[#0b1422]" role="tablist">
+                <button class="tab active bg-[#31445d] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-new" data-tab="new">Жаңа</button>
+                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-all" data-tab="all">Бәрі</button>
+                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-operator" data-tab="operator">Опер</button>
+                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-archive" data-tab="archive">Архив</button>
+            </div>
+            <div class="relative mt-4">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"></i>
+                <input id="search-input" autocomplete="off" placeholder="Нөмір немесе мәтін бойынша іздеу" class="w-full h-11 pl-10 pr-3 border border-[#2b3d55] rounded-md bg-[#142034] text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all">
+            </div>
+            <button class="w-full min-h-[38px] mt-2 px-3 border border-[#2b3d55] rounded-md bg-[#19304c] hover:bg-[#244766] text-blue-100 text-sm font-bold text-left transition-colors" id="direct-chat-btn" hidden></button>
         </section>
-    </div>
 
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        <main class="flex-1 overflow-y-auto p-2" id="contact-list"></main>
+    </aside>
+
+    <!-- Chat Area -->
+    <section class="chat-container bg-appBg flex-1 flex flex-col h-full z-20">
+        <header class="bg-headBg min-h-[68px] flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
+            <div class="flex items-center gap-3">
+                <button class="back-btn w-10 h-10 rounded-md border border-line bg-btnBg hover:bg-[#3b4b61] text-gray-300 flex items-center justify-center transition-colors" id="back-btn" title="Артқа">
+                    <i class="fa-solid fa-arrow-left"></i>
+                </button>
+                <div class="w-10 h-10 rounded-md bg-btnBg flex items-center justify-center text-gray-200 shadow-sm" id="active-avatar">
+                    <i class="fa-regular fa-user"></i>
+                </div>
+                <div class="truncate">
+                    <div class="font-bold text-[17px] tracking-wide truncate" id="active-phone">Диалог</div>
+                    <div class="text-xs text-muted truncate" id="active-meta">WhatsApp оператор панелі</div>
+                </div>
+            </div>
+            <div class="hidden items-center gap-1.5 px-3 py-1.5 border border-teal-500/30 rounded-full bg-teal-800/20 text-teal-300 text-xs font-bold" id="operator-lock"></div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 flex flex-col space-y-4" id="messages">
+            <div class="h-full flex items-center justify-center text-center text-muted">
+                <div class="grid place-items-center gap-3 max-w-sm">
+                    <div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl">
+                        <i class="fa-regular fa-comments"></i>
+                    </div>
+                    <h2 class="text-lg font-bold text-white" id="select-title">Диалогты таңдаңыз</h2>
+                    <p class="text-sm" id="select-text">Клиент хатын ашқанда толық тарих осы жерде көрінеді.</p>
+                </div>
+            </div>
+        </main>
+
+        <footer class="p-4 bg-appBg border-t border-line flex items-end gap-3 shrink-0">
+            <textarea id="message-input" rows="1" disabled placeholder="Клиентке WhatsApp арқылы жауап..." class="flex-1 min-h-[46px] max-h-[132px] bg-inputBg text-gray-200 border border-inputBorder rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-teal-500/20 placeholder-gray-500/80 resize-none transition-all disabled:opacity-50"></textarea>
+            <button class="bg-operatorBubble hover:bg-teal-600 disabled:bg-[#2a3c55] disabled:text-[#7d91aa] disabled:cursor-not-allowed transition-colors w-[46px] h-[46px] rounded-md flex items-center justify-center shrink-0 shadow-[0_14px_30px_rgba(16,185,129,0.2)] disabled:shadow-none" id="send-btn" disabled title="Жіберу">
+                <i class="fa-regular fa-paper-plane text-white text-lg"></i>
+            </button>
+        </footer>
+    </section>
+
+    <!-- Toast Notification -->
+    <div class="fixed left-1/2 bottom-6 -translate-x-1/2 translate-y-24 z-50 max-w-[calc(100vw-32px)] px-4 py-2 border border-line rounded-md bg-[#111c2d] text-white shadow-[0_20px_60px_rgba(0,0,0,0.28)] opacity-0 transition-all duration-200 flex items-center gap-2" id="toast" role="status"></div>
 
     <script>
         const params = new URLSearchParams(window.location.search);
@@ -757,6 +170,7 @@
                 ...extra
             };
         }
+        
         const endpoints = {
             inbox: '/api/chat/inbox',
             history: '/api/chat/history',
@@ -890,9 +304,9 @@
 
         function showToast(text) {
             clearTimeout(toastTimer);
-            toast.textContent = text;
-            toast.classList.add('show');
-            toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+            toast.innerHTML = `<i class="fa-solid fa-circle-info text-blue-400"></i> ${escapeHtml(text)}`;
+            toast.classList.remove('translate-y-24', 'opacity-0');
+            toastTimer = setTimeout(() => toast.classList.add('translate-y-24', 'opacity-0'), 2400);
         }
 
         function escapeHtml(value) {
@@ -921,10 +335,6 @@
                 return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             }
         }
-
-        function userIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.8 20a7.2 7.2 0 0 1 14.4 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'; }
-        function checkIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m20 6-11 11-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
-        function xIconSvg() { return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>'; }
 
         function normalizePhone(value) { return String(value || '').replace(/\D/g, ''); }
         function searchPhoneCandidate() {
@@ -988,7 +398,13 @@
             const total = counts();
             for (const tab of document.querySelectorAll('.tab')) {
                 const key = tab.dataset.tab;
-                tab.classList.toggle('active', key === activeTab);
+                if(key === activeTab) {
+                    tab.classList.add('bg-[#31445d]', 'text-white', 'shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]');
+                    tab.classList.remove('text-muted', 'hover:bg-[#1a2638]');
+                } else {
+                    tab.classList.remove('bg-[#31445d]', 'text-white', 'shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]');
+                    tab.classList.add('text-muted', 'hover:bg-[#1a2638]');
+                }
                 tab.textContent = `${copy[lang].tabs[key]} ${total[key] ? total[key] : ''}`.trim();
             }
         }
@@ -996,22 +412,16 @@
         function emptyListMarkup() {
             const total = counts();
             const canOpenAll = !searchInput.value.trim() && activeTab === 'new' && total.all > 0;
-            const text = activeTab === 'archive'
-                ? t('emptyArchive')
-                : (canOpenAll ? t('emptyNew') : t('emptySearch'));
+            const text = activeTab === 'archive' ? t('emptyArchive') : (canOpenAll ? t('emptyNew') : t('emptySearch'));
             const action = canOpenAll
-                ? `<button class="empty-action" type="button" data-switch-tab="all">${escapeHtml(t('openAll'))}</button>`
+                ? `<button class="w-full mt-3 h-9 bg-[#19304c] hover:bg-[#244766] text-blue-100 rounded text-sm font-bold transition-colors" type="button" data-switch-tab="all">${escapeHtml(t('openAll'))}</button>`
                 : '';
 
             return `
-                <div class="empty">
-                    <div class="empty-box">
-                        <div class="empty-icon">
-                            <svg viewBox="0 0 24 24" fill="none"><path d="m21 21-4.35-4.35M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
-                        </div>
-                        <p>${escapeHtml(text)}</p>
-                        ${action}
-                    </div>
+                <div class="h-full flex flex-col items-center justify-center text-center text-muted p-4">
+                    <i class="fa-solid fa-inbox text-3xl mb-3 text-[#8aa3bf] opacity-50"></i>
+                    <p class="text-sm">${escapeHtml(text)}</p>
+                    ${action}
                 </div>`;
         }
 
@@ -1029,44 +439,45 @@
 
             listEl.innerHTML = items.map(chat => {
                 const phone = normalizePhone(chat.phone);
-                const active = activePhone === phone ? 'active' : '';
-                const unread = chat.unread ? 'unread' : '';
+                const isActive = activePhone === phone;
+                const isUnread = chat.unread;
                 const archived = isChatArchived(chat);
                 const actionDisabled = isResolving ? 'disabled' : '';
                 const displayName = String(chat.displayName || '').trim();
                 const title = displayName || `+${phone}`;
-                const phoneLine = displayName ? `<div class="contact-phone">+${escapeHtml(phone)}</div>` : '';
                 
+                let activeClass = isActive ? 'border-[#365274] bg-[#1a2a42]' : 'border-transparent hover:bg-[#152238]';
+                let avatarClass = isUnread ? 'bg-cyan-700 shadow-[0_0_0_4px_rgba(14,116,144,0.18)]' : 'bg-[#263a54]';
+                let previewClass = isUnread ? 'text-sky-300 font-bold' : 'text-[#9aacbf]';
+
                 const badges = [
-                    archived ? `<span class="badge gray">${escapeHtml(t('archiveBadge'))}</span>` : '',
-                    chat.unread ? `<span class="badge green">${escapeHtml(t('newBadge'))}</span>` : '',
-                    chat.hasOperator ? `<span class="badge orange">${escapeHtml(t('operatorBadge'))}</span>` : ''
+                    archived ? `<span class="px-2 py-0.5 rounded-full bg-slate-400/10 text-slate-300 text-[10px] font-bold">${escapeHtml(t('archiveBadge'))}</span>` : '',
+                    chat.unread ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 text-[10px] font-bold">${escapeHtml(t('newBadge'))}</span>` : '',
+                    chat.hasOperator ? `<span class="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 text-[10px] font-bold">${escapeHtml(t('operatorBadge'))}</span>` : ''
                 ].join('');
 
                 const actions = archived
                     ? `
-                        <div class="item-actions">
-                            <button class="chat-action restore" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('restoreTitle'))}" aria-label="${escapeHtml(t('restoreTitle'))}">${checkIconSvg()}</button>
-                            <button class="chat-action delete" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('deleteTitle'))}" aria-label="${escapeHtml(t('deleteTitle'))}">${xIconSvg()}</button>
+                        <div class="flex items-center gap-1.5 ml-2 shrink-0">
+                            <button class="w-8 h-8 rounded bg-emerald-500/10 text-emerald-200 border border-emerald-500/20 hover:bg-emerald-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('restoreTitle'))}"><i class="fa-solid fa-check"></i></button>
+                            <button class="w-8 h-8 rounded bg-red-500/10 text-red-200 border border-red-500/20 hover:bg-red-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('deleteTitle'))}"><i class="fa-solid fa-xmark"></i></button>
                         </div>`
                     : `
-                        <div class="item-actions">
-                            <button class="chat-action done" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('resolveTitle'))}" aria-label="${escapeHtml(t('resolveTitle'))}">${checkIconSvg()}</button>
+                        <div class="flex items-center gap-1.5 ml-2 shrink-0">
+                            <button class="w-8 h-8 rounded bg-emerald-500/10 text-emerald-200 border border-emerald-500/20 hover:bg-emerald-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('resolveTitle'))}"><i class="fa-solid fa-check"></i></button>
                         </div>`;
 
                 return `
-                    <article class="chat-item ${active} ${unread}" role="button" tabindex="0" data-phone="${escapeHtml(phone)}">
-                        <div class="avatar ${unread}">${userIconSvg()}</div>
-                        <div class="item-body">
-                            <div class="item-top">
-                                <div class="phone-wrap">
-                                    <div class="phone">${escapeHtml(title)}</div>
-                                    ${phoneLine}
-                                </div>
-                                <div class="time">${escapeHtml(formatTime(chat.lastAt))}</div>
+                    <article class="flex items-center p-3 mb-1.5 border rounded-lg cursor-pointer text-left transition-colors ${activeClass}" role="button" tabindex="0" data-phone="${escapeHtml(phone)}">
+                        <div class="w-11 h-11 rounded-md flex items-center justify-center text-white shrink-0 ${avatarClass} transition-all"><i class="fa-regular fa-user"></i></div>
+                        <div class="flex-1 min-w-0 ml-3">
+                            <div class="flex justify-between items-center mb-0.5">
+                                <div class="font-extrabold text-[15px] truncate">${escapeHtml(title)}</div>
+                                <div class="text-xs text-[#7890ab] font-bold shrink-0 ml-2">${escapeHtml(formatTime(chat.lastAt))}</div>
                             </div>
-                            <div class="preview">${escapeHtml(chat.lastText || t('noMessage'))}</div>
-                            <div class="badges">${badges}</div>
+                            ${displayName ? `<div class="text-[11px] font-bold text-muted truncate mt-0.5">+${escapeHtml(phone)}</div>` : ''}
+                            <div class="text-[13px] truncate mt-1 ${previewClass}">${escapeHtml(chat.lastText || t('noMessage'))}</div>
+                            <div class="flex flex-wrap gap-1.5 mt-2">${badges}</div>
                         </div>
                         ${actions}
                     </article>`;
@@ -1076,10 +487,7 @@
 
         function buildAudioHtml(item) {
             if (!item) return '';
-
             const type = String(item.type || item.mediaKind || '').toLowerCase();
-            
-            // Тек нақты аудио хаттарға ғана плеер шығарамыз
             if (type !== 'audio' && type !== 'ptt') return ''; 
 
             const rawData = String(item.mediaData || '').trim();
@@ -1087,19 +495,11 @@
 
             if (rawData) {
                 const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
-                return `
-                    <div class="audio-wrap">
-                        <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
-                    </div>
-                `;
+                return `<div class="w-full mt-2"><audio controls preload="metadata" src="${escapeHtml(src)}"></audio></div>`;
             }
 
             if (item.id) {
-                return `
-                    <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}">
-                        <audio class="audio-player" controls preload="none"></audio>
-                    </div>
-                `;
+                return `<div class="w-full mt-2" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}"><audio controls preload="none"></audio></div>`;
             }
 
             return '';
@@ -1109,22 +509,24 @@
             try {
                 const role = String(item.role || '').toLowerCase();
                 const isBot = role === 'model' || role === 'assistant';
-                
-                // direction 'inbound' немесе 'outgoing' бойынша рөлдерді нақты анықтау
                 const isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
                 const isOperator = isOutgoing || role === 'operator';
                 
-                let bubbleClass = 'user'; // Әдепкі бойынша клиент хаты
+                let bubbleClass = 'bg-userBubble text-gray-200 px-5 py-6 border border-gray-700/50 rounded-xl rounded-tl-sm shadow-sm text-right';
+                let wrapperClass = 'flex justify-start';
                 let labelHtml = '';
 
                 if (isBot && !isOutgoing) {
-                    bubbleClass = 'model';
-                    labelHtml = '<span class="bubble-label">AI Bot</span>';
+                    bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
+                    wrapperClass = 'flex justify-end';
+                    labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">AI Bot</div>';
                 } else if (isOperator) {
-                    bubbleClass = 'operator';
-                    labelHtml = '<span class="bubble-label">Operator</span>';
+                    bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
+                    wrapperClass = 'flex justify-end';
+                    labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>';
                 } else if (role === 'system') {
-                    bubbleClass = 'system';
+                    wrapperClass = 'flex justify-center w-full';
+                    bubbleClass = 'bg-yellow-600/20 text-yellow-500 border border-yellow-600/30 px-3 py-2 rounded-md text-sm text-center max-w-[90%]';
                 }
 
                 const text = escapeHtml(cleanText(item.text || item.body || ''));
@@ -1133,16 +535,19 @@
                 let content = '';
                 if (labelHtml) content += labelHtml;
                 if (audioHtml) content += audioHtml;
-                if (text) content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
+                if (text) content += audioHtml ? `<div class="mt-3 text-left">${text}</div>` : text;
 
                 if (!content) return '';
 
-                // Егер тек аудио болса және мәтін жоқ болса, арнайы 'audio-bubble' класы қосылады
-                const bubbleDivClass = (audioHtml && !text) ? 'bubble audio-bubble' : 'bubble';
+                if (audioHtml && !text) {
+                    bubbleClass = isOperator 
+                        ? 'bg-operatorBubble p-4 rounded-xl rounded-tr-sm shadow-sm w-[380px] max-w-full'
+                        : 'bg-userBubble p-4 border border-gray-700/50 rounded-xl rounded-tl-sm shadow-sm w-[380px] max-w-full';
+                }
 
                 return `
-                    <div class="row ${bubbleClass}">
-                        <div class="${bubbleDivClass}">
+                    <div class="${wrapperClass} w-full">
+                        <div class="${bubbleClass} min-w-[220px]">
                             ${content}
                         </div>
                     </div>
@@ -1155,65 +560,37 @@
 
         async function renderHistory(history) {
             if (!messagesEl) return;
-
             messagesEl.innerHTML = '';
-
             if (Array.isArray(history)) {
                 history.forEach(function(item) {
                     try {
-                        if (typeof buildMessageHtml === 'function') {
-                            var messageHtml = buildMessageHtml(item);
-                            if (messageHtml) {
-                                messagesEl.insertAdjacentHTML('beforeend', messageHtml);
-                            }
+                        var messageHtml = buildMessageHtml(item);
+                        if (messageHtml) {
+                            messagesEl.insertAdjacentHTML('beforeend', messageHtml);
                         }
-                    } catch (e) {
-                        console.error("Message render error:", e);
-                    }
+                    } catch (e) {}
                 });
             }
-
             scrollToBottomSafe(messagesEl);
-            if (typeof hydrateAudioPlayers === 'function') {
-                hydrateAudioPlayers();
-            }
+            if (typeof hydrateAudioPlayers === 'function') hydrateAudioPlayers();
         }
 
         async function hydrateAudioPlayers() {
-            const wrappers = messagesEl.querySelectorAll(
-                '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
-            );
-
+            const wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
             for (const wrapper of wrappers) {
                 const player = wrapper.querySelector('audio');
-                const messageId = String(
-                    wrapper.getAttribute('data-audio-id') || ''
-                ).trim();
-
+                const messageId = String(wrapper.getAttribute('data-audio-id') || '').trim();
                 if (!player || !messageId) continue;
-
                 if (player.getAttribute('src')) {
                     wrapper.setAttribute('data-audio-loaded', '1');
                     continue;
                 }
-
                 wrapper.setAttribute('data-audio-loaded', '1');
-
                 try {
-                    const result = await fetchJson(
-                        `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
-                    );
-
-                    const mediaType = String(result?.mediaType || 'audio/ogg')
-                        .split(';')[0]
-                        .replace(/[^\w/+.-]/g, '');
-
+                    const result = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`);
+                    const mediaType = String(result?.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
                     const src = normalizeAudioData(result?.mediaData, mediaType);
-
-                    if (!src) {
-                        throw new Error('AUDIO_DATA_EMPTY');
-                    }
-
+                    if (!src) throw new Error('AUDIO_DATA_EMPTY');
                     player.pause();
                     player.removeAttribute('src');
                     player.src = src;
@@ -1223,6 +600,11 @@
                     setTimeout(hydrateAudioPlayers, 3000);
                 }
             }
+        }
+        
+        function normalizeAudioData(data, type) {
+            if(!data) return null;
+            return data.startsWith('data:') ? data : `data:${type};base64,${data.replace(/\s+/g, '')}`;
         }
 
         function updateComposerState() {
@@ -1237,10 +619,7 @@
             const archived = phone ? isChatArchived(chats.find(c => c.phone === phone)) : false;
             const phoneText = phone ? `+${phone}` : t('dialog');
             document.getElementById('active-phone').textContent = phoneText;
-            document.getElementById('active-avatar').innerHTML = phone ? userIconSvg() : 'WA';
-            document.getElementById('active-meta').textContent = phone
-                ? (archived ? t('archiveMeta') : t('selectedMeta'))
-                : t('defaultMeta');
+            document.getElementById('active-meta').textContent = phone ? (archived ? t('archiveMeta') : t('selectedMeta')) : t('defaultMeta');
         }
 
         function applyLanguage() {
@@ -1248,7 +627,6 @@
             document.title = t('title');
             document.getElementById('operator-label').textContent = t('operatorLabel');
             document.getElementById('instance-title').textContent = copy[lang].instanceTitle(instanceId);
-            document.querySelector('.tabs').setAttribute('aria-label', t('tabList'));
             searchInput.placeholder = t('search');
             updateDirectChatButton();
             inputEl.placeholder = t('placeholder');
@@ -1261,7 +639,7 @@
             setActiveHeader(activePhone);
             renderList();
             if (!activePhone) {
-                messagesEl.innerHTML = `<div class="empty"><div class="empty-box"><div class="empty-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H13l-5 4v-4H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg></div><h2>${escapeHtml(t('selectTitle'))}</h2><p>${escapeHtml(t('selectText'))}</p></div></div>`;
+                messagesEl.innerHTML = `<div class="h-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
             }
             updateComposerState();
         }
@@ -1270,17 +648,10 @@
             const response = await fetch(`${apiBase}${url}`, {
                 credentials: 'same-origin',
                 cache: 'no-store',
-                headers: apiHeaders({
-                    Accept: 'application/json'
-                })
+                headers: apiHeaders({ Accept: 'application/json' })
             });
-
             const data = await response.json().catch(() => ({}));
-
-            if (!response.ok) {
-                throw new Error(data.error || `HTTP_${response.status}`);
-            }
-
+            if (!response.ok) throw new Error(data.error || `HTTP_${response.status}`);
             return data;
         }
 
@@ -1299,42 +670,17 @@
 
         async function loadInbox(force = false) {
             if (isInboxLoading && !force) return;
-
             isInboxLoading = true;
-
             try {
-                const result = await fetchJson(
-                    `${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`
-                );
-
-                const nextChats = Array.isArray(result?.items)
-                    ? result.items
-                    : Array.isArray(result?.chats)
-                        ? result.chats
-                        : [];
-
-                const nextSignature = JSON.stringify(
-                    nextChats.map(chat => [
-                        chat.phone,
-                        chat.updatedAt,
-                        chat.lastAt,
-                        chat.unread,
-                        chat.closed,
-                        chat.lastText
-                    ])
-                );
-
+                const result = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`);
+                const nextChats = Array.isArray(result?.items) ? result.items : Array.isArray(result?.chats) ? result.chats : [];
+                const nextSignature = JSON.stringify(nextChats.map(chat => [chat.phone, chat.updatedAt, chat.lastAt, chat.unread, chat.closed, chat.lastText]));
                 chats = nextChats;
-
                 if (nextSignature !== inboxSignature || force) {
                     inboxSignature = nextSignature;
                     renderList();
                 }
-
-                if (
-                    activePhone &&
-                    chats.some(chat => normalizePhone(chat.phone) === activePhone)
-                ) {
+                if (activePhone && chats.some(chat => normalizePhone(chat.phone) === activePhone)) {
                     await loadHistory(false);
                 }
             } finally {
@@ -1344,34 +690,11 @@
 
         async function loadHistory(force = false) {
             if (!activePhone || (isHistoryLoading && !force)) return;
-
             isHistoryLoading = true;
-
             try {
-                const result = await fetchJson(
-                    `${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`
-                );
-
-                const history = Array.isArray(result?.history)
-                    ? result.history
-                    : Array.isArray(result?.items)
-                        ? result.items
-                        : [];
-
-                const nextSignature = JSON.stringify(
-                    history.map(item => [
-                        item.id,
-                        item.createdAt,
-                        item.timestamp,
-                        item.direction,
-                        item.fromMe,
-                        item.text,
-                        item.body,
-                        item.type,
-                        item.mediaData
-                    ])
-                );
-
+                const result = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
+                const history = Array.isArray(result?.history) ? result.history : Array.isArray(result?.items) ? result.items : [];
+                const nextSignature = JSON.stringify(history.map(item => [item.id, item.createdAt, item.timestamp, item.direction, item.fromMe, item.text, item.body, item.type, item.mediaData]));
                 if (force || nextSignature !== historySignature) {
                     historySignature = nextSignature;
                     renderHistory(history);
@@ -1379,12 +702,6 @@
             } finally {
                 isHistoryLoading = false;
             }
-        }
-
-        function syncViewedState() {
-            if (!activePhone || Date.now() - lastViewSyncAt < 5000) return;
-            lastViewSyncAt = Date.now();
-            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).catch(() => {});
         }
 
         function setOperatorLockTtl(ttl) {
@@ -1396,8 +713,14 @@
         function renderOperatorLock() {
             if (!lockEl) return;
             const remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
-            lockEl.classList.toggle('show', Boolean(activePhone && remaining > 0));
-            lockEl.textContent = remaining > 0 ? `Оператор: ${remaining}с` : '';
+            if (activePhone && remaining > 0) {
+                lockEl.classList.remove('hidden');
+                lockEl.classList.add('flex');
+                lockEl.innerHTML = `<i class="fa-solid fa-lock text-[10px]"></i> Оператор: ${remaining}с`;
+            } else {
+                lockEl.classList.add('hidden');
+                lockEl.classList.remove('flex');
+            }
         }
 
         async function loadOperatorLock() {
@@ -1410,8 +733,7 @@
             try {
                 const data = await fetchJson(`${endpoints.lock}/${encodeURIComponent(instanceId)}/${encodeURIComponent(requestedPhone)}`);
                 if (activePhone === data.phone) setOperatorLockTtl(data.ttl || 0);
-            } catch (error) {
-            } finally {
+            } catch (error) {} finally {
                 isLockLoading = false;
             }
         }
@@ -1419,11 +741,8 @@
         function openChat(phone) {
             activePhone = normalizePhone(phone);
             if (!activePhone) return;
-
-            if (activeTab === 'new') {
-                activeTab = 'all';
-            }
-
+            if (activeTab === 'new') activeTab = 'all';
+            
             app.classList.add('chat-open');
             setActiveHeader(activePhone);
             inputEl.style.height = 'auto';
@@ -1434,15 +753,13 @@
                 chat.unread = false;
                 chat.viewed = true;
             }
-
             updateComposerState();
             historySignature = '';
             lastViewSyncAt = 0;
-            messagesEl.innerHTML = `<div class="empty"><p>${escapeHtml(t('loading'))}</p></div>`;
+            messagesEl.innerHTML = `<div class="h-full flex items-center justify-center text-muted"><p>${escapeHtml(t('loading'))}</p></div>`;
             renderList();
-            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' })
-                .then(loadInbox)
-                .catch(() => {});
+            
+            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).then(loadInbox).catch(() => {});
             loadHistory();
             loadOperatorLock();
             if (!isMobile()) inputEl.focus({ preventScroll: true });
@@ -1460,17 +777,13 @@
         async function runChatAction(action, phone) {
             const cleanPhone = normalizePhone(phone);
             if (!cleanPhone || isResolving) return;
-
             isResolving = true;
             updateComposerState();
-
             try {
                 await postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(cleanPhone)}`, { action });
-                
                 if (action === 'close') showToast(t('resolveDone'));
                 if (action === 'restore') showToast(t('restoreDone'));
                 if (action === 'delete') showToast(t('deleteDone'));
-
                 if (action === 'delete') {
                     chats = chats.filter(chat => normalizePhone(chat.phone) !== cleanPhone);
                 } else {
@@ -1478,7 +791,6 @@
                     if (chat) chat.closed = action === 'close' ? true : action === 'restore' ? false : chat.closed;
                 }
                 inboxSignature = '';
-
                 if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
                     activePhone = '';
                     app.classList.remove('chat-open');
@@ -1497,10 +809,18 @@
         async function sendMessage() {
             const text = inputEl.value.trim();
             if (!text || !activePhone || isSending) return;
-
             pendingText = text;
             isSending = true;
-            messagesEl.insertAdjacentHTML('beforeend', `<div class="row operator"><div class="bubble"><span class="bubble-label">Operator</span>${escapeHtml(text)}</div></div>`);
+            
+            // Add optimistic UI message exactly like the operator bubble in the Tailwind styling
+            messagesEl.insertAdjacentHTML('beforeend', `
+                <div class="flex justify-end w-full mb-4">
+                    <div class="bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm min-w-[220px]">
+                        <div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>
+                        ${escapeHtml(text)}
+                    </div>
+                </div>
+            `);
             scrollToBottomSafe(messagesEl);
             inputEl.value = '';
             inputEl.style.height = 'auto';
@@ -1511,16 +831,10 @@
                 isSending = false;
                 pendingText = '';
                 updateComposerState();
-                
                 const chat = chats.find(c => c.phone === activePhone);
-                if (chat) {
-                    chat.hasOperator = true;
-                    chat.unread = false;
-                }
-                
+                if (chat) { chat.hasOperator = true; chat.unread = false; }
                 setOperatorLockTtl(60);
                 activeTab = 'operator';
-
                 loadInbox();
                 loadHistory();
                 loadOperatorLock();
@@ -1533,11 +847,10 @@
             }
         }
 
-        document.querySelector('.tabs').addEventListener('click', event => {
+        document.querySelector('.tablist')?.addEventListener('click', event => {
             const button = event.target.closest('.tab');
             if (!button) return;
             activeTab = button.dataset.tab;
-            
             if (activePhone) {
                 const chat = chats.find(c => c.phone === activePhone);
                 const isArchived = isChatArchived(chat);
@@ -1550,6 +863,25 @@
             }
             renderList();
         });
+        
+        // Use generic event delegation for tabs because querySelector may miss dynamically bound ones initially
+        document.addEventListener('click', event => {
+            const tabBtn = event.target.closest('.tab');
+            if(tabBtn && tabBtn.parentElement.getAttribute('role') === 'tablist') {
+                 activeTab = tabBtn.dataset.tab;
+                 if (activePhone) {
+                    const chat = chats.find(c => c.phone === activePhone);
+                    const isArchived = isChatArchived(chat);
+                    if ((activeTab === 'archive' && !isArchived) || (activeTab !== 'archive' && isArchived)) {
+                        activePhone = '';
+                        closeChat();
+                        setActiveHeader('');
+                        messagesEl.innerHTML = '';
+                    }
+                }
+                renderList();
+            }
+        });
 
         listEl.addEventListener('click', event => {
             const switchButton = event.target.closest('[data-switch-tab]');
@@ -1558,14 +890,12 @@
                 renderList();
                 return;
             }
-
             const actionButton = event.target.closest('[data-chat-action]');
             if (actionButton) {
                 runChatAction(actionButton.dataset.chatAction, actionButton.dataset.phone);
                 return;
             }
-
-            const item = event.target.closest('.chat-item');
+            const item = event.target.closest('[data-phone]');
             if (item) openChat(item.dataset.phone);
         });
 
@@ -1613,7 +943,6 @@
         
         setInterval(() => {
             loadInbox();
-
             if (activePhone) {
                 loadHistory();
                 loadOperatorLock();
@@ -1621,7 +950,6 @@
         }, 3000);
 
         setInterval(renderOperatorLock, 1000);
-
     </script>
 </body>
 </html>
