@@ -2,177 +2,187 @@
 <html lang="kk">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Оператор чаты</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        appBg: '#0f141e',
-                        sidebarBg: '#0b111d',
-                        headBg: '#18212f',
-                        userBubble: '#1b2436',
-                        operatorBubble: '#168379',
-                        inputBg: '#0f141e',
-                        inputBorder: '#168379',
-                        btnBg: '#2c3e56',
-                        operatorLabel: '#7dd3fc',
-                        line: '#27374e',
-                        muted: '#8ca0ba',
+                        bgDark: '#0e1621',
+                        bgPanel: '#17212b',
+                        bgHover: '#202b36',
+                        bgInput: '#1c2733',
+                        textMain: '#f5f5f5',
+                        textMuted: '#8b9bb4',
+                        accent: '#2b5278',
+                        bubbleUser: '#182533',
+                        bubbleOp: '#2b5278',
+                        bubbleBot: '#1e3a5f',
+                        line: '#222e3a'
                     }
                 }
             }
         }
     </script>
     <style>
-        audio {
-            filter: invert(90%) hue-rotate(180deg) brightness(1.2);
-            height: 40px;
-            outline: none;
-            width: 100%;
-        }
-        audio::-webkit-media-controls-panel {
-            background-color: #f1f3f4;
-        }
-        ::-webkit-scrollbar { width: 6px; }
+        /* Скроллбардты әдемілеу */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #2c3e56; border-radius: 4px; }
-        
-        .chat-open .sidebar-container { transform: translateX(-100%); }
-        .chat-open .chat-container { transform: translateX(0); }
-        
-        @media (max-width: 840px) {
-            .sidebar-container, .chat-container {
-                position: absolute;
-                inset: 0;
-                width: 100%;
-                transition: transform 0.24s ease;
-            }
-            .chat-container { transform: translateX(100%); }
-            .back-btn { display: flex; }
+        ::-webkit-scrollbar-thumb { background: #3b4b5e; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5b6e; }
+
+        /* Аудио ойнатқышты қараңғы дизайнға бейімдеу */
+        audio {
+            height: 40px;
+            width: 100%;
+            min-width: 220px;
+            outline: none;
+            filter: invert(90%) hue-rotate(180deg) brightness(1.1) contrast(1.1);
+            border-radius: 20px;
         }
-        @media (min-width: 841px) {
-            .back-btn { display: none; }
-            .chat-container { transform: none !important; }
-            .sidebar-container { transform: none !important; }
+        audio::-webkit-media-controls-panel { background-color: #f1f3f4; }
+        audio::-webkit-media-controls-enclosure { border-radius: 20px; }
+
+        /* Мобильді ауысу (Transition) */
+        .sidebar-panel, .chat-panel { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        @media (max-width: 768px) {
+            .sidebar-panel { position: absolute; width: 100%; height: 100%; z-index: 10; }
+            .chat-panel { position: absolute; width: 100%; height: 100%; z-index: 20; transform: translateX(100%); }
+            .chat-open .sidebar-panel { transform: translateX(-30%); opacity: 0.5; }
+            .chat-open .chat-panel { transform: translateX(0); }
+            .back-btn { display: flex !important; }
         }
+
+        /* Мәтін енгізу өрісі (Textarea) */
+        textarea { resize: none; overflow-y: auto; }
+        textarea:focus { outline: none; }
     </style>
 </head>
-<body class="bg-appBg text-white h-screen overflow-hidden font-sans flex flex-col md:flex-row relative" id="app">
+<body class="bg-bgDark text-textMain h-[100dvh] overflow-hidden flex font-sans" id="app">
 
-    <!-- Sidebar -->
-    <aside class="sidebar-container bg-sidebarBg w-full md:w-[390px] h-full flex flex-col border-r border-line z-10 shrink-0">
-        <header class="bg-headBg/95 backdrop-blur-md min-h-[68px] flex items-center justify-between px-4 py-3 border-b border-line">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-md bg-teal-700 text-white flex items-center justify-center shadow-[0_12px_30px_rgba(16,185,129,0.2)]">
-                    <i class="fa-solid fa-headset"></i>
+    <!-- СИДБАР (Сол жақ панель) -->
+    <aside class="sidebar-panel bg-bgPanel w-full md:w-[380px] lg:w-[420px] flex flex-col border-r border-line shrink-0">
+        
+        <!-- Сидбар Басқы бөлігі -->
+        <header class="p-4 flex items-center justify-between border-b border-line shrink-0 bg-bgPanel/95 backdrop-blur-sm z-10">
+            <div class="flex items-center gap-3 min-w-0">
+                <div class="w-11 h-11 rounded-full bg-gradient-to-tr from-teal-500 to-emerald-400 flex items-center justify-center shadow-lg shrink-0">
+                    <i class="fa-solid fa-headset text-white text-lg"></i>
                 </div>
-                <div>
-                    <p class="text-muted text-[10px] font-bold uppercase flex items-center gap-1.5 mb-0.5">
-                        <span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]"></span>
-                        <span id="operator-label">Оператор чаты</span>
-                    </p>
-                    <h1 class="text-base font-extrabold truncate" id="instance-title">Кабинет</h1>
+                <div class="truncate">
+                    <h1 class="font-bold text-[16px] truncate" id="instance-title">Кабинет</h1>
+                    <div class="flex items-center gap-1.5 text-[11px] text-textMuted uppercase font-bold tracking-wider mt-0.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span id="operator-label">Оператор</span>
+                    </div>
                 </div>
             </div>
-            <div class="flex items-center gap-2">
-                <button class="w-10 h-10 rounded-md border border-line bg-[#0f1b2d] hover:bg-[#1d2b3f] text-xs font-black uppercase transition-colors" id="lang-toggle" data-lang-toggle title="Тілді ауыстыру">KZ</button>
-                <button class="w-10 h-10 rounded-md border border-line bg-btnBg hover:bg-[#3b4b61] text-gray-300 hover:text-white transition-colors flex items-center justify-center" id="refresh-btn" title="Жаңарту">
+            <div class="flex items-center gap-2 shrink-0">
+                <button id="lang-toggle" class="w-9 h-9 rounded-full bg-bgHover text-textMuted hover:text-white hover:bg-line transition-colors text-xs font-black">KZ</button>
+                <button id="refresh-btn" class="w-9 h-9 rounded-full bg-bgHover text-textMuted hover:text-white hover:bg-line transition-colors">
                     <i class="fa-solid fa-rotate-right"></i>
                 </button>
             </div>
         </header>
 
-        <section class="p-4 border-b border-line bg-[#111c2d]">
-            <div class="grid grid-cols-4 gap-1 p-1 border border-[#1f3048] rounded-md bg-[#0b1422]" role="tablist">
-                <button class="tab active bg-[#31445d] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-new" data-tab="new">Жаңа</button>
-                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-all" data-tab="all">Бәрі</button>
-                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-operator" data-tab="operator">Опер</button>
-                <button class="tab text-muted hover:bg-[#1a2638] h-9 rounded text-xs font-bold truncate transition-colors" id="tab-archive" data-tab="archive">Архив</button>
+        <!-- Фильтрлер мен Іздеу -->
+        <section class="p-3 border-b border-line shrink-0">
+            <!-- Іздеу -->
+            <div class="relative mb-3">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i class="fa-solid fa-magnifying-glass text-textMuted text-sm"></i>
+                </div>
+                <input type="text" id="search-input" autocomplete="off" placeholder="Іздеу..." class="w-full bg-bgInput text-sm text-textMain rounded-full pl-10 pr-4 py-2.5 border border-transparent focus:border-accent focus:ring-1 focus:ring-accent transition-all placeholder-textMuted">
             </div>
-            <div class="relative mt-4">
-                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"></i>
-                <input id="search-input" autocomplete="off" placeholder="Нөмір немесе мәтін бойынша іздеу" class="w-full h-11 pl-10 pr-3 border border-[#2b3d55] rounded-md bg-[#142034] text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all">
+            
+            <!-- Табтар -->
+            <div class="flex p-1 bg-bgInput rounded-lg gap-1" role="tablist">
+                <button class="tab active flex-1 py-1.5 text-xs font-bold rounded-md bg-accent text-white shadow-sm transition-all truncate" data-tab="new">Жаңа</button>
+                <button class="tab flex-1 py-1.5 text-xs font-bold rounded-md text-textMuted hover:text-white hover:bg-bgHover transition-all truncate" data-tab="all">Бәрі</button>
+                <button class="tab flex-1 py-1.5 text-xs font-bold rounded-md text-textMuted hover:text-white hover:bg-bgHover transition-all truncate" data-tab="operator">Опер</button>
+                <button class="tab flex-1 py-1.5 text-xs font-bold rounded-md text-textMuted hover:text-white hover:bg-bgHover transition-all truncate" data-tab="archive">Архив</button>
             </div>
-            <button class="w-full min-h-[38px] mt-2 px-3 border border-[#2b3d55] rounded-md bg-[#19304c] hover:bg-[#244766] text-blue-100 text-sm font-bold text-left transition-colors" id="direct-chat-btn" hidden></button>
+            <button id="direct-chat-btn" class="w-full mt-2 py-2 bg-bgHover hover:bg-line rounded-lg text-sm text-blue-400 font-bold hidden transition-colors"></button>
         </section>
 
+        <!-- Хаттар тізімі -->
         <main class="flex-1 overflow-y-auto p-2" id="contact-list"></main>
     </aside>
 
-    <!-- Chat Area -->
-    <section class="chat-container bg-appBg flex-1 flex flex-col h-full z-20">
-        <header class="bg-headBg min-h-[68px] flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
-            <div class="flex items-center gap-3">
-                <button class="back-btn w-10 h-10 rounded-md border border-line bg-btnBg hover:bg-[#3b4b61] text-gray-300 flex items-center justify-center transition-colors" id="back-btn" title="Артқа">
-                    <i class="fa-solid fa-arrow-left"></i>
+    <!-- НЕГІЗГІ ЧАТ АЙМАҒЫ -->
+    <section class="chat-panel bg-bgDark flex-1 flex flex-col min-w-0 shadow-[-10px_0_30px_rgba(0,0,0,0.3)] md:shadow-none">
+        
+        <!-- Чат Басқы бөлігі -->
+        <header class="p-3 md:p-4 flex items-center justify-between border-b border-line bg-bgPanel shrink-0">
+            <div class="flex items-center gap-3 min-w-0">
+                <button id="back-btn" class="back-btn hidden w-10 h-10 rounded-full hover:bg-bgHover items-center justify-center text-textMuted transition-colors shrink-0">
+                    <i class="fa-solid fa-arrow-left text-lg"></i>
                 </button>
-                <div class="w-10 h-10 rounded-md bg-btnBg flex items-center justify-center text-gray-200 shadow-sm" id="active-avatar">
-                    <i class="fa-regular fa-user"></i>
+                
+                <div class="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-white shrink-0" id="active-avatar">
+                    <i class="fa-solid fa-user"></i>
                 </div>
+                
                 <div class="truncate">
-                    <div class="font-bold text-[17px] tracking-wide truncate" id="active-phone">Диалог</div>
-                    <div class="text-xs text-muted truncate" id="active-meta">WhatsApp оператор панелі</div>
+                    <h2 class="font-bold text-base truncate" id="active-phone">Диалог таңдаңыз</h2>
+                    <div class="text-[12px] text-textMuted truncate" id="active-meta">Тарихты көру үшін сол жақтан таңдаңыз</div>
                 </div>
             </div>
-            <div class="hidden items-center gap-1.5 px-3 py-1.5 border border-teal-500/30 rounded-full bg-teal-800/20 text-teal-300 text-xs font-bold" id="operator-lock"></div>
+
+            <!-- 60 СЕКУНДТЫҚ ТАЙМЕР -->
+            <div id="operator-lock" class="hidden items-center gap-2 px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400 text-xs font-bold shrink-0 shadow-sm animate-pulse">
+            </div>
         </header>
 
-        <!-- Хаттар контейнері: flex flex-col қасиеттері арқылы mt-auto ішкі блокты төменге итереді -->
-        <main class="flex-1 overflow-y-auto p-4 flex flex-col" id="messages">
-            <div class="h-full w-full flex items-center justify-center text-center text-muted">
-                <div class="grid place-items-center gap-3 max-w-sm">
-                    <div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl">
-                        <i class="fa-regular fa-comments"></i>
+        <!-- Хаттар тарихы (Секіру багтары жойылған тұрақты контейнер) -->
+        <main class="flex-1 overflow-y-auto p-4 md:p-6" id="messages-container">
+            <div id="messages" class="flex flex-col justify-end min-h-full space-y-4">
+                <div class="m-auto flex flex-col items-center justify-center text-center text-textMuted opacity-60">
+                    <div class="w-16 h-16 rounded-full bg-bgHover flex items-center justify-center mb-4">
+                        <i class="fa-regular fa-comments text-3xl"></i>
                     </div>
-                    <h2 class="text-lg font-bold text-white" id="select-title">Диалогты таңдаңыз</h2>
-                    <p class="text-sm" id="select-text">Клиент хатын ашқанда толық тарих осы жерде көрінеді.</p>
+                    <p class="text-lg font-bold text-textMain" id="select-title">Чатты таңдаңыз</p>
+                    <p class="text-sm mt-1" id="select-text">Осы жерде толық хат алмасу тарихы шығады.</p>
                 </div>
             </div>
         </main>
 
-        <footer class="p-4 bg-appBg border-t border-line flex items-end gap-3 shrink-0">
-            <textarea id="message-input" rows="1" disabled placeholder="Клиентке WhatsApp арқылы жауап..." class="flex-1 min-h-[46px] max-h-[132px] bg-inputBg text-gray-200 border border-inputBorder rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-teal-500/20 placeholder-gray-500/80 resize-none transition-all disabled:opacity-50"></textarea>
-            <button class="bg-operatorBubble hover:bg-teal-600 disabled:bg-[#2a3c55] disabled:text-[#7d91aa] disabled:cursor-not-allowed transition-colors w-[46px] h-[46px] rounded-md flex items-center justify-center shrink-0 shadow-[0_14px_30px_rgba(16,185,129,0.2)] disabled:shadow-none" id="send-btn" disabled title="Жіберу">
-                <i class="fa-regular fa-paper-plane text-white text-lg"></i>
-            </button>
+        <!-- Мәтін жазу аймағы -->
+        <footer class="p-3 md:p-4 bg-bgPanel border-t border-line shrink-0">
+            <div class="max-w-4xl mx-auto flex items-end gap-2 relative">
+                <textarea id="message-input" rows="1" disabled placeholder="Жауап жазу..." class="flex-1 min-h-[44px] max-h-[120px] bg-bgInput text-textMain rounded-2xl py-3 px-4 focus:ring-1 focus:ring-accent border border-transparent focus:border-accent transition-all placeholder-textMuted disabled:opacity-50"></textarea>
+                <button id="send-btn" disabled class="w-11 h-11 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-bgHover disabled:text-textMuted text-white flex items-center justify-center shrink-0 transition-colors shadow-lg disabled:shadow-none">
+                    <i class="fa-solid fa-paper-plane mr-0.5"></i>
+                </button>
+            </div>
         </footer>
     </section>
 
-    <!-- Toast Notification -->
-    <div class="fixed left-1/2 bottom-6 -translate-x-1/2 translate-y-24 z-50 max-w-[calc(100vw-32px)] px-4 py-2 border border-line rounded-md bg-[#111c2d] text-white shadow-[0_20px_60px_rgba(0,0,0,0.28)] opacity-0 transition-all duration-200 flex items-center gap-2" id="toast" role="status"></div>
+    <!-- Хабарламалар (Toasts) -->
+    <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-full bg-gray-800 text-white text-sm font-bold shadow-2xl transition-all duration-300 transform -translate-y-20 opacity-0 flex items-center gap-2"></div>
 
     <script>
         const params = new URLSearchParams(window.location.search);
         const chatConfig = window.__CHAT_CONFIG__ || {};
         const instanceId = (params.get('instance') || chatConfig.instance || 'prestige').trim();
+        
         function sameOriginApiBase(value) {
             try {
                 const raw = String(value || '').replace(/\/+$/, '');
                 return raw && new URL(raw, window.location.href).origin === window.location.origin ? raw : '';
-            } catch (e) {
-                return '';
-            }
+            } catch (e) { return ''; }
         }
 
         const apiBase = sameOriginApiBase(chatConfig.apiBase);
         const chatToken = String(chatConfig.chatToken || '');
 
-        // Секірусіз тегіс түсіру үшін
-        function scrollToBottomSafe(messagesEl) {
-            setTimeout(() => {
-                messagesEl.scrollTop = messagesEl.scrollHeight;
-            }, 10);
-        }
-
         function apiHeaders(extra = {}) {
-            return {
-                ...(chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}),
-                ...extra
-            };
+            return { ...(chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}), ...extra };
         }
         
         const endpoints = {
@@ -187,13 +197,14 @@
 
         const app = document.getElementById('app');
         const listEl = document.getElementById('contact-list');
+        const messagesContainer = document.getElementById('messages-container');
         const messagesEl = document.getElementById('messages');
         const inputEl = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         const searchInput = document.getElementById('search-input');
         const directChatBtn = document.getElementById('direct-chat-btn');
         const toast = document.getElementById('toast');
-        const langToggles = Array.from(document.querySelectorAll('[data-lang-toggle]'));
+        const langToggles = Array.from(document.querySelectorAll('#lang-toggle'));
         const refreshBtn = document.getElementById('refresh-btn');
         const backBtn = document.getElementById('back-btn');
         const lockEl = document.getElementById('operator-lock');
@@ -204,86 +215,60 @@
                 operatorLabel: 'Оператор чаты',
                 instanceTitle: value => `${value.toUpperCase()} операторлары`,
                 langTitle: 'Тілді ауыстыру',
-                refresh: 'Жаңарту',
-                back: 'Артқа',
                 tabs: { new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
-                tabList: 'Диалог сүзгісі',
-                search: 'Нөмір немесе мәтін бойынша іздеу',
                 dialog: 'Диалог',
-                defaultMeta: 'WhatsApp оператор панелі',
-                selectedMeta: 'WhatsApp арқылы жауап беріледі',
-                selectTitle: 'Диалогты таңдаңыз',
-                selectText: 'Клиент хатын ашқанда толық тарих осы жерде көрінеді.',
+                defaultMeta: 'Тарихты көру үшін таңдаңыз',
+                selectedMeta: 'WhatsApp желісі',
+                selectTitle: 'Чатты таңдаңыз',
+                selectText: 'Осы жерде толық хат алмасу тарихы шығады.',
                 emptySearch: 'Нәтиже табылған жоқ',
-                emptyNew: 'Жаңа хат жоқ',
+                emptyNew: 'Жаңа хаттар жоқ',
                 emptyArchive: 'Архив бос',
-                openAll: 'Барлық диалогтарды ашу',
-                noHistory: 'Тарих бос',
-                loading: 'Тарих оқылуда...',
+                openAll: 'Бәрін ашу',
+                noHistory: 'Хабарламалар жоқ',
+                loading: 'Жүктелуде...',
                 noMessage: 'Хабар жоқ',
-                newBadge: 'жаңа',
-                operatorBadge: 'оператор',
-                botLabel: 'AI Bot',
-                systemDefault: 'Оператор қосылды',
-                placeholder: 'Клиентке WhatsApp арқылы жауап...',
-                resolve: 'Жаздым',
-                restore: 'Қайтару',
-                resolveTitle: 'Чатты аяқталды деп белгілеу',
-                restoreTitle: 'Чатты архивтен қайтару',
-                deleteTitle: 'Диалогты толық өшіру',
-                resolveDone: 'Чат аяқталды деп белгіленді',
-                restoreDone: 'Чат архивтен қайтарылды',
-                deleteDone: 'Диалог өшірілді',
-                resolveFailed: 'Чатты белгілеу мүмкін болмады',
-                archiveBadge: 'архив',
-                archiveMeta: 'Архивтегі диалог',
-                archivedPlaceholder: 'Алдымен чатты архивтен қайтарыңыз',
-                sendFailed: 'Хабар жіберілмеді',
-                directOpen: phone => `+${phone} нөміріне жазу`,
-                manualChat: 'Оператор ашқан диалог'
+                newBadge: 'Жаңа',
+                operatorBadge: 'Оператор',
+                botLabel: 'AI Бот',
+                systemDefault: 'Жүйелік хабар',
+                placeholder: 'Жауап жазу...',
+                archivedPlaceholder: 'Чат архивтелген',
+                resolveDone: 'Чат аяқталды',
+                restoreDone: 'Чат қайтарылды',
+                deleteDone: 'Өшірілді',
+                sendFailed: 'Жіберілмеді',
+                directOpen: phone => `+${phone} нөміріне жазу`
             },
             ru: {
                 title: 'Чат оператора',
                 operatorLabel: 'Чат оператора',
                 instanceTitle: value => `Операторы ${value.toUpperCase()}`,
                 langTitle: 'Сменить язык',
-                refresh: 'Обновить',
-                back: 'Назад',
                 tabs: { new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
-                tabList: 'Фильтр диалогов',
-                search: 'Поиск по номеру или тексту',
                 dialog: 'Диалог',
-                defaultMeta: 'Панель WhatsApp оператора',
-                selectedMeta: 'Ответ будет отправлен через WhatsApp',
-                selectTitle: 'Выберите диалог',
-                selectText: 'Когда вы откроете клиента, здесь появится полная история.',
+                defaultMeta: 'Выберите чат слева',
+                selectedMeta: 'Сеть WhatsApp',
+                selectTitle: 'Выберите чат',
+                selectText: 'Здесь появится история сообщений.',
                 emptySearch: 'Ничего не найдено',
-                emptyNew: 'Новых сообщений нет',
+                emptyNew: 'Нет новых',
                 emptyArchive: 'Архив пуст',
-                openAll: 'Открыть все диалоги',
-                noHistory: 'История пуста',
-                loading: 'История загружается...',
-                noMessage: 'Сообщений нет',
-                newBadge: 'новое',
-                operatorBadge: 'оператор',
-                botLabel: 'AI Bot',
-                systemDefault: 'Оператор подключился',
-                placeholder: 'Ответ клиенту через WhatsApp...',
-                resolve: 'Готово',
-                restore: 'Вернуть',
-                resolveTitle: 'Отметить чат завершенным',
-                restoreTitle: 'Вернуть чат из архива',
-                deleteTitle: 'Полностью удалить диалог',
-                resolveDone: 'Чат отмечен завершенным',
-                restoreDone: 'Чат возвращен из архива',
-                deleteDone: 'Диалог удален',
-                resolveFailed: 'Не удалось отметить чат',
-                archiveBadge: 'архив',
-                archiveMeta: 'Диалог в архиве',
-                archivedPlaceholder: 'Сначала верните чат из архива',
-                sendFailed: 'Сообщение не отправлено',
-                directOpen: phone => `Написать на +${phone}`,
-                manualChat: 'Диалог открыт оператором'
+                openAll: 'Открыть все',
+                noHistory: 'Нет сообщений',
+                loading: 'Загрузка...',
+                noMessage: 'Нет сообщений',
+                newBadge: 'Новое',
+                operatorBadge: 'Оператор',
+                botLabel: 'AI Бот',
+                systemDefault: 'Системное сообщение',
+                placeholder: 'Написать ответ...',
+                archivedPlaceholder: 'Чат в архиве',
+                resolveDone: 'Чат завершен',
+                restoreDone: 'Чат восстановлен',
+                deleteDone: 'Удалено',
+                sendFailed: 'Не отправлено',
+                directOpen: phone => `Написать +${phone}`
             }
         };
 
@@ -295,149 +280,77 @@
         let isSending = false;
         let isResolving = false;
         let pendingText = '';
-        let inboxSignature = '';
-        let historySignature = '';
         let isInboxLoading = false;
         let isHistoryLoading = false;
         let operatorLockUntil = 0;
         let isLockLoading = false;
-        let lastViewSyncAt = 0;
 
         function t(key) { return copy[lang][key] || copy.kk[key] || key; }
-        function isMobile() { return window.matchMedia('(max-width: 840px)').matches; }
-
-        function showToast(text) {
+        
+        function showToast(text, type = 'info') {
             clearTimeout(toastTimer);
-            toast.innerHTML = `<i class="fa-solid fa-circle-info text-blue-400"></i> ${escapeHtml(text)}`;
-            toast.classList.remove('translate-y-24', 'opacity-0');
-            toastTimer = setTimeout(() => toast.classList.add('translate-y-24', 'opacity-0'), 2400);
+            let icon = type === 'error' ? '<i class="fa-solid fa-circle-exclamation text-red-400"></i>' : '<i class="fa-solid fa-circle-check text-emerald-400"></i>';
+            toast.innerHTML = `${icon} <span>${escapeHtml(text)}</span>`;
+            toast.classList.remove('-translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('-translate-y-20', 'opacity-0');
+            }, 2500);
         }
 
         function escapeHtml(value) {
-            return String(value || '').replace(/[&<>"']/g, char => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
-            }[char]));
-        }
-
-        function cleanText(value) {
-            return String(value || '')
-                .replace(/\[System:[^\]]*\]/gi, '')
-                .replace(/\[Оператор:\s*/gi, '')
-                .replace(/\[ESCALATE_ADMIN\]/gi, '')
-                .replace(/\[menu_link_sent\]/gi, '')
-                .replace(/\]$/g, '')
-                .trim();
+            return String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
         }
 
         function formatTime(value) {
             const time = Number(value || 0);
-            if (!time || time < 100000000000) return '';
+            if (!time) return '';
             const date = new Date(time);
-            try {
-                return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' });
-            } catch (error) {
-                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            }
+            try { return date.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' }); } 
+            catch (e) { return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
         }
 
         function normalizePhone(value) { return String(value || '').replace(/\D/g, ''); }
-        function searchPhoneCandidate() {
-            const digits = normalizePhone(searchInput.value);
-            return digits.length >= 10 ? digits : '';
-        }
-
-        function updateDirectChatButton() {
-            const phone = searchPhoneCandidate();
-            const alreadyListed = phone && chats.some(chat => normalizePhone(chat.phone) === phone);
-            const shouldShow = Boolean(phone && !alreadyListed);
-            directChatBtn.hidden = !shouldShow;
-            if (shouldShow) directChatBtn.textContent = copy[lang].directOpen(phone);
-        }
-
-        function openDirectChatFromSearch() {
-            const phone = searchPhoneCandidate();
-            if (!phone) return;
-            const existing = chats.find(chat => normalizePhone(chat.phone) === phone);
-            if (!existing) {
-                chats = [{ phone, lastAt: Date.now(), lastText: t('manualChat'), unread: false, viewed: true, hasOperator: false, closed: false }, ...chats];
-            }
-            activeTab = 'all';
-            searchInput.value = '';
-            renderList();
-            openChat(phone);
+        
+        function scrollToBottom() {
+            // Тегіс әрі секірмейтін скролл
+            requestAnimationFrame(() => {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            });
         }
 
         function isChatArchived(chat) { return Boolean(chat && chat.closed); }
 
-        function counts() {
-            const active = chats.filter(chat => !isChatArchived(chat));
-            const archived = chats.filter(isChatArchived);
-            return {
-                new: active.filter(chat => chat.unread).length,
-                all: active.filter(chat => chat.viewed && !chat.hasOperator).length,
-                operator: active.filter(chat => chat.hasOperator).length,
-                archive: archived.length
-            };
-        }
-
-        function filteredChats() {
-            const query = searchInput.value.trim().toLowerCase();
-            return chats.filter(chat => {
-                const archived = isChatArchived(chat);
-                if (activeTab === 'archive' && !archived) return false;
-                if (activeTab !== 'archive' && archived) return false;
-                const isActiveChat = normalizePhone(chat.phone) === activePhone;
-                if (isActiveChat && !query) return true;
-                if (activeTab === 'new' && !chat.unread) return false;
-                if (activeTab === 'all' && (!chat.viewed || chat.hasOperator)) return false;
-                if (activeTab === 'operator' && !chat.hasOperator) return false;
-                if (!query) return true;
-                return String(chat.phone).includes(query)
-                    || String(chat.displayName || '').toLowerCase().includes(query)
-                    || String(chat.lastText || '').toLowerCase().includes(query);
+        function renderTabs() {
+            document.querySelectorAll('.tab').forEach(tab => {
+                const key = tab.dataset.tab;
+                if(key === activeTab) {
+                    tab.classList.add('bg-accent', 'text-white');
+                    tab.classList.remove('text-textMuted', 'hover:bg-bgHover');
+                } else {
+                    tab.classList.remove('bg-accent', 'text-white');
+                    tab.classList.add('text-textMuted', 'hover:bg-bgHover');
+                }
+                tab.textContent = copy[lang].tabs[key];
             });
         }
 
-        function renderTabs() {
-            const total = counts();
-            for (const tab of document.querySelectorAll('.tab')) {
-                const key = tab.dataset.tab;
-                if(key === activeTab) {
-                    tab.classList.add('bg-[#31445d]', 'text-white', 'shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]');
-                    tab.classList.remove('text-muted', 'hover:bg-[#1a2638]');
-                } else {
-                    tab.classList.remove('bg-[#31445d]', 'text-white', 'shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]');
-                    tab.classList.add('text-muted', 'hover:bg-[#1a2638]');
-                }
-                tab.textContent = `${copy[lang].tabs[key]} ${total[key] ? total[key] : ''}`.trim();
-            }
-        }
-
-        function emptyListMarkup() {
-            const total = counts();
-            const canOpenAll = !searchInput.value.trim() && activeTab === 'new' && total.all > 0;
-            const text = activeTab === 'archive' ? t('emptyArchive') : (canOpenAll ? t('emptyNew') : t('emptySearch'));
-            const action = canOpenAll
-                ? `<button class="w-full mt-3 h-9 bg-[#19304c] hover:bg-[#244766] text-blue-100 rounded text-sm font-bold transition-colors" type="button" data-switch-tab="all">${escapeHtml(t('openAll'))}</button>`
-                : '';
-
-            return `
-                <div class="h-full flex flex-col items-center justify-center text-center text-muted p-4">
-                    <i class="fa-solid fa-inbox text-3xl mb-3 text-[#8aa3bf] opacity-50"></i>
-                    <p class="text-sm">${escapeHtml(text)}</p>
-                    ${action}
-                </div>`;
-        }
-
         function renderList() {
-            const previousTop = listEl.scrollTop;
             renderTabs();
-            updateDirectChatButton();
-            const items = filteredChats();
+            const query = searchInput.value.trim().toLowerCase();
+            let items = chats.filter(chat => {
+                const archived = isChatArchived(chat);
+                if (activeTab === 'archive' && !archived) return false;
+                if (activeTab !== 'archive' && archived) return false;
+                if (activeTab === 'new' && !chat.unread) return false;
+                if (activeTab === 'operator' && !chat.hasOperator) return false;
+                if (!query) return true;
+                return String(chat.phone).includes(query) || String(chat.lastText || '').toLowerCase().includes(query);
+            });
 
             if (!items.length) {
-                listEl.innerHTML = emptyListMarkup();
-                listEl.scrollTop = previousTop;
+                listEl.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-textMuted p-4 opacity-50"><i class="fa-solid fa-inbox text-4xl mb-3"></i><p class="text-sm font-bold">${escapeHtml(t('emptySearch'))}</p></div>`;
                 return;
             }
 
@@ -446,289 +359,164 @@
                 const isActive = activePhone === phone;
                 const isUnread = chat.unread;
                 const archived = isChatArchived(chat);
-                const actionDisabled = isResolving ? 'disabled' : '';
-                const displayName = String(chat.displayName || '').trim();
-                const title = displayName || `+${phone}`;
                 
-                let activeClass = isActive ? 'border-[#365274] bg-[#1a2a42]' : 'border-transparent hover:bg-[#152238]';
-                let avatarClass = isUnread ? 'bg-cyan-700 shadow-[0_0_0_4px_rgba(14,116,144,0.18)]' : 'bg-[#263a54]';
-                let previewClass = isUnread ? 'text-sky-300 font-bold' : 'text-[#9aacbf]';
+                let activeClass = isActive ? 'bg-bgHover border-accent/50' : 'border-transparent hover:bg-bgHover/50';
+                let avatarClass = isUnread ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-line text-textMuted';
+                let previewClass = isUnread ? 'text-white font-bold' : 'text-textMuted';
 
                 const badges = [
-                    archived ? `<span class="px-2 py-0.5 rounded-full bg-slate-400/10 text-slate-300 text-[10px] font-bold">${escapeHtml(t('archiveBadge'))}</span>` : '',
-                    chat.unread ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 text-[10px] font-bold">${escapeHtml(t('newBadge'))}</span>` : '',
-                    chat.hasOperator ? `<span class="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 text-[10px] font-bold">${escapeHtml(t('operatorBadge'))}</span>` : ''
+                    archived ? `<span class="px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 text-[10px] font-bold uppercase">${escapeHtml(t('archiveBadge'))}</span>` : '',
+                    chat.unread ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase">${escapeHtml(t('newBadge'))}</span>` : '',
+                    chat.hasOperator ? `<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-bold uppercase">${escapeHtml(t('operatorBadge'))}</span>` : ''
                 ].join('');
 
                 const actions = archived
-                    ? `
-                        <div class="flex items-center gap-1.5 ml-2 shrink-0">
-                            <button class="w-8 h-8 rounded bg-emerald-500/10 text-emerald-200 border border-emerald-500/20 hover:bg-emerald-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="restore" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('restoreTitle'))}"><i class="fa-solid fa-check"></i></button>
-                            <button class="w-8 h-8 rounded bg-red-500/10 text-red-200 border border-red-500/20 hover:bg-red-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="delete" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('deleteTitle'))}"><i class="fa-solid fa-xmark"></i></button>
-                        </div>`
-                    : `
-                        <div class="flex items-center gap-1.5 ml-2 shrink-0">
-                            <button class="w-8 h-8 rounded bg-emerald-500/10 text-emerald-200 border border-emerald-500/20 hover:bg-emerald-500/20 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50" type="button" data-chat-action="close" data-phone="${escapeHtml(phone)}" ${actionDisabled} title="${escapeHtml(t('resolveTitle'))}"><i class="fa-solid fa-check"></i></button>
-                        </div>`;
+                    ? `<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="restore" data-phone="${phone}"><i class="fa-solid fa-arrow-rotate-left text-xs"></i></button>`
+                    : `<button class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition-colors" data-action="close" data-phone="${phone}"><i class="fa-solid fa-check text-xs"></i></button>`;
 
                 return `
-                    <article class="flex items-center p-3 mb-1.5 border rounded-lg cursor-pointer text-left transition-colors ${activeClass}" role="button" tabindex="0" data-phone="${escapeHtml(phone)}">
-                        <div class="w-11 h-11 rounded-md flex items-center justify-center text-white shrink-0 ${avatarClass} transition-all"><i class="fa-regular fa-user"></i></div>
+                    <div class="flex items-center p-3 mb-1.5 border rounded-xl cursor-pointer text-left transition-all ${activeClass}" data-phone="${phone}">
+                        <div class="w-12 h-12 rounded-full flex items-center justify-center text-white shrink-0 ${avatarClass} transition-all"><i class="fa-solid fa-user"></i></div>
                         <div class="flex-1 min-w-0 ml-3">
                             <div class="flex justify-between items-center mb-0.5">
-                                <div class="font-extrabold text-[15px] truncate">${escapeHtml(title)}</div>
-                                <div class="text-xs text-[#7890ab] font-bold shrink-0 ml-2">${escapeHtml(formatTime(chat.lastAt))}</div>
+                                <div class="font-bold text-[15px] text-textMain truncate">+${escapeHtml(phone)}</div>
+                                <div class="text-[11px] text-textMuted font-bold shrink-0 ml-2">${escapeHtml(formatTime(chat.lastAt))}</div>
                             </div>
-                            ${displayName ? `<div class="text-[11px] font-bold text-muted truncate mt-0.5">+${escapeHtml(phone)}</div>` : ''}
-                            <div class="text-[13px] truncate mt-1 ${previewClass}">${escapeHtml(chat.lastText || t('noMessage'))}</div>
-                            <div class="flex flex-wrap gap-1.5 mt-2">${badges}</div>
+                            <div class="text-[13px] truncate mt-0.5 ${previewClass}">${escapeHtml(chat.lastText || t('noMessage'))}</div>
+                            <div class="flex gap-1.5 mt-2">${badges}</div>
                         </div>
-                        ${actions}
-                    </article>`;
+                        <div class="ml-2 shrink-0 z-10 action-zone">${actions}</div>
+                    </div>`;
             }).join('');
-            listEl.scrollTop = previousTop;
         }
 
+        // АУДИО ОЙНАТҚЫШ (NATIVE, БАГСЫЗ)
         function buildAudioHtml(item) {
             if (!item) return '';
             const type = String(item.type || item.mediaKind || '').toLowerCase();
-            if (type !== 'audio' && type !== 'ptt') return ''; 
-
+            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '');
             const rawData = String(item.mediaData || '').trim();
-            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
-
+            const hasAudioMsg = Boolean(item.audioMessage || (item.data && item.data.message && item.data.message.audioMessage));
+            
+            if (type !== 'audio' && type !== 'ptt' && !hasAudioMsg && mediaType.indexOf('audio/') !== 0) return '';
+            
             if (rawData) {
                 const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
-                return `<div class="w-full mt-2"><audio controls preload="metadata" src="${escapeHtml(src)}"></audio></div>`;
+                return `<div class="mt-2"><audio controls controlsList="nodownload" preload="metadata" src="${escapeHtml(src)}"></audio></div>`;
             }
-
             if (item.id) {
-                return `<div class="w-full mt-2" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}"><audio controls preload="none"></audio></div>`;
+                // Серверден жүктеуді күтетін қаңқа
+                return `<div class="mt-2" data-audio-id="${escapeHtml(String(item.id))}"><audio controls controlsList="nodownload" preload="none"></audio></div>`;
             }
-
             return '';
         }
 
         function buildMessageHtml(item) {
             try {
                 const role = String(item.role || '').toLowerCase();
-                const isBot = role === 'model' || role === 'assistant';
                 const isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
-                const isOperator = isOutgoing || role === 'operator';
+                const isBot = role === 'model' || role === 'assistant';
+                const isOp = role === 'operator';
                 
-                let bubbleClass = 'bg-userBubble text-gray-200 px-5 py-6 border border-gray-700/50 rounded-xl rounded-tl-sm shadow-sm text-right';
-                let wrapperClass = 'flex justify-start w-full';
+                let wrapperCls = 'flex justify-start w-full';
+                let bubbleCls = 'bg-bubbleUser text-textMain rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
                 let labelHtml = '';
 
                 if (isBot && !isOutgoing) {
-                    bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
-                    wrapperClass = 'flex justify-end w-full';
-                    labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">AI Bot</div>';
-                } else if (isOperator) {
-                    bubbleClass = 'bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm';
-                    wrapperClass = 'flex justify-end w-full';
-                    labelHtml = '<div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>';
+                    wrapperCls = 'flex justify-end w-full';
+                    bubbleCls = 'bg-bubbleBot text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                    labelHtml = `<div class="text-[10px] font-bold text-blue-300 mb-1 uppercase tracking-wider">${t('botLabel')}</div>`;
+                } else if (isOutgoing || isOp) {
+                    wrapperCls = 'flex justify-end w-full';
+                    bubbleCls = 'bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm';
+                    labelHtml = isOp ? `<div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">${t('operatorBadge')}</div>` : '';
                 } else if (role === 'system') {
-                    wrapperClass = 'flex justify-center w-full';
-                    bubbleClass = 'bg-yellow-600/20 text-yellow-500 border border-yellow-600/30 px-3 py-2 rounded-md text-sm text-center max-w-[90%]';
+                    wrapperCls = 'flex justify-center w-full';
+                    bubbleCls = 'bg-gray-800 text-gray-400 rounded-lg px-3 py-1 text-xs text-center max-w-[90%] border border-gray-700';
                 }
 
-                const text = escapeHtml(cleanText(item.text || item.body || ''));
-                const audioHtml = buildAudioHtml(item);
+                let text = escapeHtml(cleanText(item.text || item.body || ''));
+                let audioHtml = buildAudioHtml(item);
+                let timeHtml = `<div class="text-[10px] text-white/50 text-right mt-1.5 float-right clear-both ml-3">${escapeHtml(formatTime(item.createdAt))}</div>`;
+
+                if (!text && !audioHtml && !labelHtml) return '';
                 
-                let content = '';
-                if (labelHtml) content += labelHtml;
-                if (audioHtml) content += audioHtml;
-                if (text) content += audioHtml ? `<div class="mt-3 text-left">${text}</div>` : text;
-
-                if (!content) return '';
-
+                // Тек аудио келсе, фонды мөлдір қылып, padding азайтамыз
                 if (audioHtml && !text) {
-                    bubbleClass = isOperator 
-                        ? 'bg-operatorBubble p-4 rounded-xl rounded-tr-sm shadow-sm w-[380px] max-w-full'
-                        : 'bg-userBubble p-4 border border-gray-700/50 rounded-xl rounded-tl-sm shadow-sm w-[380px] max-w-full';
+                    bubbleCls += ' !p-1 !bg-transparent !shadow-none';
                 }
 
                 return `
-                    <div class="${wrapperClass}">
-                        <div class="${bubbleClass} min-w-[220px]">
-                            ${content}
+                    <div class="${wrapperCls}">
+                        <div class="${bubbleCls}">
+                            ${labelHtml}
+                            <div class="text-[14px] leading-relaxed break-words">${text}</div>
+                            ${audioHtml}
+                            ${timeHtml}
                         </div>
-                    </div>
-                `;
-            } catch (e) {
-                console.error("Message build error:", e);
-                return '';
-            }
+                    </div>`;
+            } catch (e) { return ''; }
         }
 
         async function renderHistory(history) {
             if (!messagesEl) return;
+            const isScrolledNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop <= messagesContainer.clientHeight + 100;
             
-            // Егер қолданушы өзі жоғарыға қарай айналдырып қойған болса (scroll-up), секіртпеу үшін тексереміз
-            const isScrolledNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop <= messagesEl.clientHeight + 150;
-            
-            const htmlPieces = [];
-            if (Array.isArray(history)) {
-                history.forEach(function(item) {
-                    try {
-                        var messageHtml = buildMessageHtml(item);
-                        if (messageHtml) htmlPieces.push(messageHtml);
-                    } catch (e) {}
-                });
+            if (!history || !history.length) {
+                messagesEl.innerHTML = `<div class="m-auto text-textMuted text-sm">${t('noHistory')}</div>`;
+                return;
             }
 
-            // `mt-auto` класы бар враппер барлық хаттарды төменгі жағына итеріп, жабыстырып тұрады
-            messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${htmlPieces.join('')}</div>`;
+            const html = history.map(item => buildMessageHtml(item)).join('');
+            messagesEl.innerHTML = html;
             
-            if (isScrolledNearBottom) {
-                scrollToBottomSafe(messagesEl);
-            }
-            if (typeof hydrateAudioPlayers === 'function') hydrateAudioPlayers();
+            if (isScrolledNearBottom) scrollToBottom();
+            hydrateAudioPlayers();
         }
 
+        // Аудионы серверден жүктеп алу (Background)
         async function hydrateAudioPlayers() {
-            const wrappers = messagesEl.querySelectorAll('[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])');
-            for (const wrapper of wrappers) {
-                const player = wrapper.querySelector('audio');
-                const messageId = String(wrapper.getAttribute('data-audio-id') || '').trim();
-                if (!player || !messageId) continue;
-                if (player.getAttribute('src')) {
-                    wrapper.setAttribute('data-audio-loaded', '1');
-                    continue;
-                }
-                wrapper.setAttribute('data-audio-loaded', '1');
+            const placeholders = messagesEl.querySelectorAll('[data-audio-id]:not([data-loaded])');
+            for (const el of placeholders) {
+                const id = el.getAttribute('data-audio-id');
+                const player = el.querySelector('audio');
+                if (!id || !player) continue;
+                
+                el.setAttribute('data-loaded', '1');
                 try {
-                    const result = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`);
-                    const mediaType = String(result?.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
-                    const src = normalizeAudioData(result?.mediaData, mediaType);
-                    if (!src) throw new Error('AUDIO_DATA_EMPTY');
-                    player.pause();
-                    player.removeAttribute('src');
-                    player.src = src;
-                    player.load();
-                } catch (error) {
-                    wrapper.removeAttribute('data-audio-loaded');
-                    setTimeout(hydrateAudioPlayers, 3000);
+                    const res = await fetchJson(`${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(id)}`);
+                    if (res && res.mediaData) {
+                        const type = String(res.mediaType || 'audio/ogg').split(';')[0].replace(/[^\w/+.-]/g, '');
+                        player.src = res.mediaData.startsWith('data:') ? res.mediaData : `data:${type};base64,${res.mediaData.replace(/\s+/g, '')}`;
+                    }
+                } catch (e) {
+                    el.removeAttribute('data-loaded');
                 }
             }
         }
-        
-        function normalizeAudioData(data, type) {
-            if(!data) return null;
-            return data.startsWith('data:') ? data : `data:${type};base64,${data.replace(/\s+/g, '')}`;
-        }
 
-        function updateComposerState() {
+        function updateComposer() {
             const hasActive = Boolean(activePhone);
-            const archived = Boolean(activePhone) && isChatArchived(chats.find(c => c.phone === activePhone));
+            const archived = isChatArchived(chats.find(c => normalizePhone(c.phone) === activePhone));
             inputEl.disabled = !hasActive || isSending || archived;
             sendBtn.disabled = !hasActive || isSending || archived || !inputEl.value.trim();
             inputEl.placeholder = archived ? t('archivedPlaceholder') : t('placeholder');
         }
 
-        function setActiveHeader(phone) {
-            const archived = phone ? isChatArchived(chats.find(c => c.phone === phone)) : false;
-            const phoneText = phone ? `+${phone}` : t('dialog');
-            document.getElementById('active-phone').textContent = phoneText;
-            document.getElementById('active-meta').textContent = phone ? (archived ? t('archiveMeta') : t('selectedMeta')) : t('defaultMeta');
+        function setHeader() {
+            const chat = chats.find(c => normalizePhone(c.phone) === activePhone);
+            document.getElementById('active-phone').textContent = activePhone ? `+${activePhone}` : t('dialog');
+            document.getElementById('active-meta').textContent = activePhone ? (isChatArchived(chat) ? t('archiveMeta') : t('selectedMeta')) : t('defaultMeta');
         }
 
-        function applyLanguage() {
-            document.documentElement.lang = lang === 'ru' ? 'ru' : 'kk';
-            document.title = t('title');
-            document.getElementById('operator-label').textContent = t('operatorLabel');
-            document.getElementById('instance-title').textContent = copy[lang].instanceTitle(instanceId);
-            searchInput.placeholder = t('search');
-            updateDirectChatButton();
-            inputEl.placeholder = t('placeholder');
-            for (const button of langToggles) {
-                button.textContent = lang === 'kk' ? 'KZ' : 'RU';
-                button.title = t('langTitle');
-            }
-            refreshBtn.title = t('refresh');
-            backBtn.title = t('back');
-            setActiveHeader(activePhone);
-            renderList();
-            if (!activePhone) {
-                messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
-            }
-            updateComposerState();
-        }
-
-        async function fetchJson(url) {
-            const response = await fetch(`${apiBase}${url}`, {
-                credentials: 'same-origin',
-                cache: 'no-store',
-                headers: apiHeaders({ Accept: 'application/json' })
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || `HTTP_${response.status}`);
-            return data;
-        }
-
-        async function postJson(url, body) {
-            const response = await fetch(`${apiBase}${url}`, {
-                method: 'POST',
-                credentials: 'same-origin',
-                cache: 'no-store',
-                headers: apiHeaders({ 'content-type': 'application/json' }),
-                body: JSON.stringify(body)
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-            return data;
-        }
-
-        async function loadInbox(force = false) {
-            if (isInboxLoading && !force) return;
-            isInboxLoading = true;
-            try {
-                const result = await fetchJson(`${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`);
-                const nextChats = Array.isArray(result?.items) ? result.items : Array.isArray(result?.chats) ? result.chats : [];
-                const nextSignature = JSON.stringify(nextChats.map(chat => [chat.phone, chat.updatedAt, chat.lastAt, chat.unread, chat.closed, chat.lastText]));
-                chats = nextChats;
-                if (nextSignature !== inboxSignature || force) {
-                    inboxSignature = nextSignature;
-                    renderList();
-                }
-                if (activePhone && chats.some(chat => normalizePhone(chat.phone) === activePhone)) {
-                    await loadHistory(false);
-                }
-            } finally {
-                isInboxLoading = false;
-            }
-        }
-
-        async function loadHistory(force = false) {
-            if (!activePhone || (isHistoryLoading && !force)) return;
-            isHistoryLoading = true;
-            try {
-                const result = await fetchJson(`${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
-                const history = Array.isArray(result?.history) ? result.history : Array.isArray(result?.items) ? result.items : [];
-                const nextSignature = JSON.stringify(history.map(item => [item.id, item.createdAt, item.timestamp, item.direction, item.fromMe, item.text, item.body, item.type, item.mediaData]));
-                if (force || nextSignature !== historySignature) {
-                    historySignature = nextSignature;
-                    renderHistory(history);
-                }
-            } finally {
-                isHistoryLoading = false;
-            }
-        }
-
-        function setOperatorLockTtl(ttl) {
-            const seconds = Math.max(0, Math.ceil(Number(ttl) || 0));
-            operatorLockUntil = seconds > 0 ? Date.now() + seconds * 1000 : 0;
-            renderOperatorLock();
-        }
-
+        // 60 секундтық таймерді көрсету
         function renderOperatorLock() {
             if (!lockEl) return;
             const remaining = operatorLockUntil ? Math.max(0, Math.ceil((operatorLockUntil - Date.now()) / 1000)) : 0;
             if (activePhone && remaining > 0) {
                 lockEl.classList.remove('hidden');
                 lockEl.classList.add('flex');
-                lockEl.innerHTML = `<i class="fa-solid fa-lock text-[10px]"></i> Оператор: ${remaining}с`;
+                lockEl.innerHTML = `<i class="fa-solid fa-lock text-[10px]"></i> Бот үзілісі: ${remaining}с`;
             } else {
                 lockEl.classList.add('hidden');
                 lockEl.classList.remove('flex');
@@ -736,18 +524,26 @@
         }
 
         async function loadOperatorLock() {
-            if (!activePhone || isLockLoading) {
-                renderOperatorLock();
-                return;
-            }
-            isLockLoading = true;
-            const requestedPhone = activePhone;
+            if (!activePhone) return;
             try {
-                const data = await fetchJson(`${endpoints.lock}/${encodeURIComponent(instanceId)}/${encodeURIComponent(requestedPhone)}`);
-                if (activePhone === data.phone) setOperatorLockTtl(data.ttl || 0);
-            } catch (error) {} finally {
-                isLockLoading = false;
-            }
+                const data = await fetchJson(`${endpoints.lock}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`);
+                if (data.phone === activePhone) {
+                    operatorLockUntil = data.ttl > 0 ? Date.now() + (data.ttl * 1000) : 0;
+                    renderOperatorLock();
+                }
+            } catch (e) {}
+        }
+
+        // API сұраулары
+        // SOCKET.IO БАЙЛАНЫСЫ
+        const socket = io({ transports: ['websocket', 'polling'] });
+
+        function requestChats() {
+            if (socket.connected) socket.emit('request_active_chats', { instanceId, includeArchived: true });
+        }
+
+        function requestHistory() {
+            if (activePhone && socket.connected) socket.emit('request_chat_history', { instanceId, phone: activePhone });
         }
 
         function openChat(phone) {
@@ -756,23 +552,16 @@
             if (activeTab === 'new') activeTab = 'all';
             
             app.classList.add('chat-open');
-            setActiveHeader(activePhone);
+            setHeader();
+            updateComposerState();
+            inputEl.value = '';
             inputEl.style.height = 'auto';
             isSending = false;
+            isResolving = false;
             
-            const chat = chats.find(c => c.phone === activePhone);
-            if (chat) {
-                chat.unread = false;
-                chat.viewed = true;
-            }
-            updateComposerState();
-            historySignature = '';
-            lastViewSyncAt = 0;
-            messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-muted"><p>${escapeHtml(t('loading'))}</p></div>`;
+            messagesEl.innerHTML = `<div class="m-auto text-textMuted text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ${t('loading')}</div>`;
             renderList();
-            
-            postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { action: 'view' }).then(loadInbox).catch(() => {});
-            loadHistory();
+            requestHistory();
             loadOperatorLock();
             if (!isMobile()) inputEl.focus({ preventScroll: true });
         }
@@ -782,193 +571,305 @@
             activePhone = ''; 
             operatorLockUntil = 0; 
             renderOperatorLock(); 
-            setActiveHeader(''); 
+            setHeader(); 
             renderList(); 
         }
 
-        async function runChatAction(action, phone) {
-            const cleanPhone = normalizePhone(phone);
-            if (!cleanPhone || isResolving) return;
-            isResolving = true;
-            updateComposerState();
-            try {
-                await postJson(`${endpoints.action}/${encodeURIComponent(instanceId)}/${encodeURIComponent(cleanPhone)}`, { action });
-                if (action === 'close') showToast(t('resolveDone'));
-                if (action === 'restore') showToast(t('restoreDone'));
-                if (action === 'delete') showToast(t('deleteDone'));
-                if (action === 'delete') {
-                    chats = chats.filter(chat => normalizePhone(chat.phone) !== cleanPhone);
-                } else {
-                    const chat = chats.find(item => normalizePhone(item.phone) === cleanPhone);
-                    if (chat) chat.closed = action === 'close' ? true : action === 'restore' ? false : chat.closed;
-                }
-                inboxSignature = '';
-                if (activePhone === cleanPhone && (action === 'close' || action === 'delete')) {
-                    activePhone = '';
-                    app.classList.remove('chat-open');
-                    setActiveHeader('');
-                    messagesEl.innerHTML = '';
-                }
-                renderList();
-            } catch (err) {
-                showToast(t('resolveFailed'));
-            } finally {
-                isResolving = false;
-                loadInbox();
-            }
+        function ensureDesktopSelection() {
+            if (isMobile() || activePhone) return;
+            const firstVisible = filteredChats()[0];
+            if (firstVisible && firstVisible.phone) openChat(firstVisible.phone);
         }
 
-        async function sendMessage() {
+        function reconcileActiveChat() {
+            if (!activePhone) return;
+            let record = chats.find(c => normalizePhone(c.phone) === activePhone);
+            const visibleInCurrentTab = record && (
+                (activeTab === 'archive' && isChatArchived(record)) ||
+                (activeTab !== 'archive' && !isChatArchived(record))
+            );
+            if (visibleInCurrentTab) return;
+
+            activePhone = '';
+            app.classList.remove('chat-open');
+            isResolving = false;
+            setHeader();
+            messagesEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-center text-muted"><div class="grid place-items-center gap-3 max-w-sm"><div class="w-12 h-12 rounded-full bg-[#172338] text-[#8aa3bf] flex items-center justify-center text-xl"><i class="fa-regular fa-comments"></i></div><h2 class="text-lg font-bold text-white">${escapeHtml(t('selectTitle'))}</h2><p class="text-sm">${escapeHtml(t('selectText'))}</p></div></div>`;
+            updateComposerState();
+        }
+
+        function archiveChatInView(phone, closedAt = Date.now()) {
+            const cleanPhone = normalizePhone(phone);
+            chats = chats.map(chat => normalizePhone(chat.phone) === cleanPhone ? { ...chat, closed: true, closedAt } : chat);
+            if (activePhone === cleanPhone && activeTab !== 'archive') {
+                activePhone = '';
+                app.classList.remove('chat-open');
+                setHeader();
+                messagesEl.innerHTML = '';
+            }
+            isResolving = false;
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            renderList();
+            updateComposerState();
+            ensureDesktopSelection();
+        }
+
+        function restoreChatInView(phone) {
+            const cleanPhone = normalizePhone(phone);
+            chats = chats.map(chat => normalizePhone(chat.phone) === cleanPhone ? { ...chat, closed: false, closedAt: 0 } : chat);
+            if (activePhone === cleanPhone && activeTab === 'archive') {
+                activePhone = '';
+                app.classList.remove('chat-open');
+                setHeader();
+                messagesEl.innerHTML = '';
+            }
+            isResolving = false;
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            renderList();
+            updateComposerState();
+            ensureDesktopSelection();
+        }
+
+        function deleteChatFromView(phone) {
+            const cleanPhone = normalizePhone(phone);
+            chats = chats.filter(chat => normalizePhone(chat.phone) !== cleanPhone);
+            if (activePhone === cleanPhone) {
+                activePhone = '';
+                app.classList.remove('chat-open');
+                setHeader();
+                messagesEl.innerHTML = '';
+            }
+            isResolving = false;
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            renderList();
+            updateComposerState();
+            ensureDesktopSelection();
+        }
+
+        function actionChat(action, phone) {
+            const cleanPhone = normalizePhone(phone);
+            if (!cleanPhone || isResolving) return;
+
+            const record = chats.find(chat => normalizePhone(chat.phone) === cleanPhone);
+            if (action === 'delete' && !isChatArchived(record)) return;
+
+            const events = { close: 'operator_close_chat', restore: 'operator_restore_chat', delete: 'operator_delete_chat' };
+            const eventName = events[action];
+            if (!eventName) return;
+
+            isResolving = true;
+            renderList();
+            updateComposerState();
+            socket.emit(eventName, { instanceId, phone: cleanPhone });
+        }
+
+        function sendMessage() {
             const text = inputEl.value.trim();
             if (!text || !activePhone || isSending) return;
+            
             pendingText = text;
             isSending = true;
             
             const msgHtml = `
-                <div class="flex justify-end w-full">
-                    <div class="bg-operatorBubble text-white px-5 py-4 rounded-xl rounded-tr-sm shadow-sm min-w-[220px]">
-                        <div class="text-[11px] font-extrabold text-operatorLabel mb-2 uppercase tracking-wider">Operator</div>
-                        ${escapeHtml(text)}
+                <div class="flex justify-end w-full opacity-70">
+                    <div class="bg-bubbleOp text-textMain rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] sm:max-w-[75%] shadow-sm">
+                        <div class="text-[10px] font-bold text-emerald-300 mb-1 uppercase tracking-wider">Operator</div>
+                        <div class="text-[14px] leading-relaxed break-words">${escapeHtml(text)}</div>
                     </div>
-                </div>
-            `;
+                </div>`;
             
-            // Жаңа хатты wrapper-дің (mt-auto) ішіне қосамыз
             const wrapper = messagesEl.querySelector('.mt-auto');
-            if (wrapper) {
-                wrapper.insertAdjacentHTML('beforeend', msgHtml);
-            } else {
-                messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${msgHtml}</div>`;
-            }
+            if (wrapper) wrapper.insertAdjacentHTML('beforeend', msgHtml);
+            else messagesEl.innerHTML = `<div class="flex flex-col space-y-4 w-full mt-auto">${msgHtml}</div>`;
             
             scrollToBottomSafe(messagesEl);
             inputEl.value = '';
             inputEl.style.height = 'auto';
             updateComposerState();
 
-            try {
-                await postJson(`${endpoints.send}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`, { text });
-                isSending = false;
-                pendingText = '';
-                updateComposerState();
-                const chat = chats.find(c => c.phone === activePhone);
-                if (chat) { chat.hasOperator = true; chat.unread = false; }
-                setOperatorLockTtl(60);
-                activeTab = 'operator';
-                loadInbox();
-                loadHistory();
-                loadOperatorLock();
-            } catch (error) {
-                isSending = false;
-                if (pendingText && !inputEl.value.trim()) inputEl.value = pendingText;
-                pendingText = '';
-                showToast(t('sendFailed'));
-                updateComposerState();
-            }
+            socket.emit('operator_send_message', { instanceId, phone: activePhone, text });
+            
+            // 60 СЕКУНД ТАЙМЕР
+            operatorLockUntil = Date.now() + 60000;
+            renderOperatorLock();
         }
 
-        document.querySelector('.tablist')?.addEventListener('click', event => {
-            const button = event.target.closest('.tab');
-            if (!button) return;
-            activeTab = button.dataset.tab;
-            if (activePhone) {
-                const chat = chats.find(c => c.phone === activePhone);
-                const isArchived = isChatArchived(chat);
-                if ((activeTab === 'archive' && !isArchived) || (activeTab !== 'archive' && isArchived)) {
-                    activePhone = '';
-                    closeChat();
-                    setActiveHeader('');
-                    messagesEl.innerHTML = '';
-                }
-            }
-            renderList();
-        });
-        
-        document.addEventListener('click', event => {
-            const tabBtn = event.target.closest('.tab');
-            if(tabBtn && tabBtn.parentElement.getAttribute('role') === 'tablist') {
-                 activeTab = tabBtn.dataset.tab;
-                 if (activePhone) {
-                    const chat = chats.find(c => c.phone === activePhone);
-                    const isArchived = isChatArchived(chat);
-                    if ((activeTab === 'archive' && !isArchived) || (activeTab !== 'archive' && isArchived)) {
-                        activePhone = '';
-                        closeChat();
-                        setActiveHeader('');
-                        messagesEl.innerHTML = '';
-                    }
-                }
-                renderList();
-            }
-        });
-
-        listEl.addEventListener('click', event => {
-            const switchButton = event.target.closest('[data-switch-tab]');
-            if (switchButton) {
-                activeTab = switchButton.dataset.switchTab;
-                renderList();
+        // --- ОҚИҒАЛАРДЫ БАСҚАРУ ---
+        listEl.addEventListener('click', e => {
+            const actionBtn = e.target.closest('button[data-action]');
+            if (actionBtn) {
+                e.stopPropagation();
+                actionChat(actionBtn.dataset.action, actionBtn.dataset.phone);
                 return;
             }
-            const actionButton = event.target.closest('[data-chat-action]');
-            if (actionButton) {
-                runChatAction(actionButton.dataset.chatAction, actionButton.dataset.phone);
-                return;
-            }
-            const item = event.target.closest('[data-phone]');
+            const item = e.target.closest('[data-phone]');
             if (item) openChat(item.dataset.phone);
         });
 
-        searchInput.addEventListener('input', () => renderList());
-        searchInput.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            if (!searchPhoneCandidate()) return;
-            event.preventDefault();
-            openDirectChatFromSearch();
+        document.querySelector('[role="tablist"]').addEventListener('click', e => {
+            const tab = e.target.closest('.tab');
+            if (tab) {
+                activeTab = tab.dataset.tab;
+                reconcileActiveChat();
+                renderList();
+                ensureDesktopSelection();
+            }
+        });
+
+        searchInput.addEventListener('input', () => { reconcileActiveChat(); renderList(); ensureDesktopSelection(); });
+        searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                openDirectChatFromSearch();
+            }
         });
 
         directChatBtn.addEventListener('click', openDirectChatFromSearch);
-        refreshBtn.addEventListener('click', () => {
-            inboxSignature = '';
-            historySignature = '';
-            loadInbox();
-            loadHistory();
-        });
-        
         backBtn.addEventListener('click', closeChat);
         sendBtn.addEventListener('click', sendMessage);
-
-        for (const button of langToggles) button.addEventListener('click', () => {
-            lang = lang === 'kk' ? 'ru' : 'kk';
-            localStorage.setItem('operator_chat_lang', lang);
-            applyLanguage();
-        });
-
+        refreshBtn.addEventListener('click', requestChats);
+        
         inputEl.addEventListener('input', () => {
             inputEl.style.height = 'auto';
-            inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+            inputEl.style.height = `${Math.min(inputEl.scrollHeight, 120)}px`;
+            updateComposerState();
+        });
+        inputEl.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+        });
+
+        for (const button of langToggles) {
+            button.addEventListener('click', () => {
+                lang = lang === 'kk' ? 'ru' : 'kk';
+                localStorage.setItem('operator_chat_lang', lang);
+                applyLanguage();
+            });
+        }
+
+        // --- SOCKET.IO ТЫҢДАУШЫЛАРЫ ---
+        socket.on('connect', () => {
+            socket.emit('operator_join', instanceId);
+            requestChats();
+        });
+
+        socket.on('active_chats_list', payload => {
+            chats = Array.isArray(payload) ? payload : (payload && payload.chats ? payload.chats : []);
+            reconcileActiveChat();
+            setActiveHeader(activePhone);
+            renderList();
+            updateComposerState();
+            ensureDesktopSelection();
+        });
+
+        socket.on('chat_history_data', data => {
+            if (data && normalizePhone(data.phone) !== activePhone) return;
+            renderHistory(data ? data.history || [] : []);
             updateComposerState();
         });
 
-        inputEl.addEventListener('keydown', event => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-            }
+        socket.on('new_client_message', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            if (activeTab === 'operator' || activeTab === 'archive') activeTab = 'new';
+            requestChats();
+            if (activePhone === normalizePhone(data.phone)) requestHistory();
         });
 
+        socket.on('operator_message', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            requestChats();
+            if (activePhone === normalizePhone(data.phone)) requestHistory();
+        });
+
+        socket.on('operator_send_ok', data => {
+            isSending = false;
+            pendingText = '';
+            updateComposerState();
+            requestChats();
+            if (data && normalizePhone(data.phone) === activePhone) requestHistory();
+        });
+
+        socket.on('operator_send_error', data => {
+            isSending = false;
+            if (pendingText && !inputEl.value.trim()) {
+                inputEl.value = pendingText;
+                inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+            }
+            pendingText = '';
+            updateComposerState();
+            showToast(data && data.error === 'WHATSAPP_NOT_READY' ? t('whatsappNotReady') : t('sendFailed'), 'error');
+            requestHistory();
+        });
+
+        socket.on('chat_closed', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            archiveChatInView(normalizePhone(data.phone), Number((data && data.closedAt) || Date.now()));
+            showToast(t('resolveDone'));
+        });
+
+        socket.on('operator_close_ok', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            archiveChatInView(data.phone, Number((data && data.closedAt) || Date.now()));
+            requestChats();
+        });
+
+        socket.on('operator_close_error', () => {
+            isResolving = false;
+            renderList();
+            updateComposerState();
+            showToast(t('resolveFailed'), 'error');
+        });
+
+        socket.on('chat_restored', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            restoreChatInView(data.phone);
+            showToast(t('restoreDone'));
+        });
+
+        socket.on('operator_restore_ok', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            restoreChatInView(data.phone);
+            requestChats();
+        });
+
+        socket.on('operator_restore_error', () => {
+            isResolving = false;
+            renderList();
+            updateComposerState();
+            showToast(t('restoreFailed'), 'error');
+        });
+
+        socket.on('chat_deleted', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            deleteChatFromView(data.phone);
+            showToast(t('deleteDone'));
+        });
+
+        socket.on('operator_delete_ok', data => {
+            if (!data || data.instanceId !== instanceId) return;
+            deleteChatFromView(data.phone);
+            requestChats();
+        });
+
+        socket.on('operator_delete_error', () => {
+            isResolving = false;
+            renderList();
+            updateComposerState();
+            showToast(t('deleteFailed'), 'error');
+        });
+
+        socket.on('disconnect', () => showToast(t('disconnected'), 'error'));
+
+        // БАСТАПҚЫ ІСКЕ ҚОСУ
+        document.getElementById('instance-title').textContent = instanceId.toUpperCase();
         applyLanguage();
         updateComposerState();
-        loadInbox();
-        
-        setInterval(() => {
-            loadInbox();
-            if (activePhone) {
-                loadHistory();
-                loadOperatorLock();
-            }
-        }, 3000);
-
+        requestChats();
+        setInterval(requestChats, 8000);
         setInterval(renderOperatorLock, 1000);
+
     </script>
 </body>
 </html>
