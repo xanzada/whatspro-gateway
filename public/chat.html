@@ -1,3 +1,4 @@
+<!-- Бастапқы құрылым сақталды[cite: 3] -->
 <!doctype html>
 <html lang="kk">
 <head>
@@ -36,6 +37,7 @@
 
         button, input, textarea { font: inherit; }
         button { border: 0; cursor: pointer; }
+        
         .app {
             display: grid;
             grid-template-columns: 390px minmax(0, 1fr);
@@ -445,9 +447,10 @@
         .empty p { line-height: 1.5; }
 
         /* --- ЧАТТЫҢ НЕГІЗГІ ОРНАЛАСУЫ (WhatsApp/Telegram стилі) --- */
-.row {
+        .row {
             display: flex;
             margin: 0 0 12px;
+            width: 100%;
         }
 
         /* Клиент сол жақта */
@@ -455,11 +458,12 @@
         
         /* Оператор мен Бот оң жақта */
         .row.operator, .row.model { justify-content: flex-end; }
+        
         .row.system { justify-content: center; }
 
         .bubble {
-            max-width: min(680px, 78%);
-            padding: 11px 13px;
+            max-width: min(680px, 85%);
+            padding: 10px 14px;
             border-radius: var(--radius);
             border: 1px solid var(--line);
             color: #eaf1fb;
@@ -469,13 +473,9 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
         }
 
-        /* Клиент дизайны */
+        /* Дизайндар */
         .user .bubble { background: #162236; border-bottom-left-radius: 3px; }
-        
-        /* Бот дизайны */
         .model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-right-radius: 3px; }
-        
-        /* Оператор дизайны */
         .operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
         
         .system .bubble {
@@ -490,37 +490,41 @@
 
         .bubble-label {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 6px;
             color: #93c5fd;
             font-size: 11px;
             font-weight: 900;
             text-transform: uppercase;
+            opacity: 0.9;
+        }
+
+        /* Аудио элементтерінің реттелуі */
+        .audio-wrap {
+            display: block;
+            margin: 4px 0;
+            width: 100%;
+            min-width: 240px;
         }
 
         .audio-player {
             width: 100%;
-            max-width: 100%;
-            min-width: 0;
             height: 38px;
-            margin-top: 0;
+            border-radius: 6px;
+            outline: none;
             display: block;
         }
 
-        .audio-wrap {
-            display: grid;
-            margin-top: 8px;
+        /* Тек аудио ғана бар болса, төртбұрыштың көлемін жинақылау */
+        .bubble.audio-bubble {
+            padding: 8px;
+            width: min(340px, 90%);
         }
 
-        .audio-bubble {
-            width: min(360px, 86%);
-            max-width: min(360px, 86%);
+        @media (max-width: 520px) {
+            .row.user { padding-right: 10%; }
+            .row.operator, .row.model { padding-left: 10%; }
         }
 
-@media (max-width: 520px) {
-    .row.user { padding-right: 10%; }
-    .row.operator, .row.model { padding-left: 10%; }
-    .audio-wrap { width: 230px; }
-}
         .composer {
             position: sticky;
             bottom: 0;
@@ -611,7 +615,6 @@
             .filters { padding: 14px; }
             .list { padding: 6px; }
             .messages { padding: 16px 12px; }
-            .bubble { max-width: 86%; }
             .composer { padding-inline: 12px; }
             h1, .chat-phone { font-size: 18px; }
             .tab { font-size: 12px; }
@@ -643,7 +646,6 @@
             .head-actions { gap: 6px; }
             .lang-toggle, .icon-btn { width: 36px; height: 36px; min-width: 36px; font-size: 11px; }
             .messages { padding: 10px; font-size: 14px; }
-            .bubble { max-width: min(620px, 92%); padding: 9px 10px; font-size: 14px; line-height: 1.38; }
             .composer { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             textarea { min-height: 42px; padding: 10px 12px; font-size: 14px; }
             .send { width: 42px; height: 42px; }
@@ -746,7 +748,7 @@
         const chatToken = String(chatConfig.chatToken || '');
 
         function scrollToBottomSafe(messagesEl) {
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
         function apiHeaders(extra = {}) {
@@ -1025,8 +1027,6 @@
                 return;
             }
 
-
-
             listEl.innerHTML = items.map(chat => {
                 const phone = normalizePhone(chat.phone);
                 const active = activePhone === phone ? 'active' : '';
@@ -1073,154 +1073,157 @@
             }).join('');
             listEl.scrollTop = previousTop;
         }
- function buildAudioHtml(item) {
-    if (!item) return '';
 
-    const type = String(item.type || item.mediaKind || '').toLowerCase();
-    
-    // ҚАТАҢ ТЕКСЕРУ: Тек нақты аудио хаттарға ғана плеер шығарамыз. Мәтінге (сілтемелерге) өтпейді.
-    if (type !== 'audio' && type !== 'ptt') return ''; 
+        function buildAudioHtml(item) {
+            if (!item) return '';
 
-    const rawData = String(item.mediaData || '').trim();
-    const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
+            const type = String(item.type || item.mediaKind || '').toLowerCase();
+            
+            // Тек нақты аудио хаттарға ғана плеер шығарамыз
+            if (type !== 'audio' && type !== 'ptt') return ''; 
 
-    if (rawData) {
-        const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
-        return `
-            <div class="audio-wrap">
-                <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
-            </div>
-        `;
-    }
+            const rawData = String(item.mediaData || '').trim();
+            const mediaType = String(item.mediaType || 'audio/ogg').replace(/[^\w/+.-]/g, '') || 'audio/ogg';
 
-    if (item.id) {
-        return `
-            <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}">
-                <audio class="audio-player" controls preload="none"></audio>
-            </div>
-        `;
-    }
-
-    return '';
-}
-
-function buildMessageHtml(item) {
-    try {
-        const role = String(item.role || '').toLowerCase();
-        const isBot = role === 'model' || role === 'assistant';
-        const isOperator = item.direction === 'outgoing' || item.fromMe === true || role === 'operator';
-        
-        let bubbleClass = 'user';
-        let labelHtml = '';
-
-        if (isBot) {
-            bubbleClass = 'model';
-            labelHtml = '<span class="bubble-label">AI Bot</span>';
-        } else if (isOperator) {
-            bubbleClass = 'operator';
-            labelHtml = '<span class="bubble-label">Operator</span>';
-        } else if (role === 'system') {
-            bubbleClass = 'system';
-        }
-
-        const text = escapeHtml(cleanText(item.text || item.body || ''));
-        const audioHtml = buildAudioHtml(item);
-        
-        let content = '';
-        if (labelHtml) content += labelHtml;
-        if (audioHtml) content += audioHtml;
-        if (text) content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
-
-        if (!content) return '';
-
-        // ТҮЗЕТУ: Мәтін мен аудио бірігіп, төртбұрыш блокқа айналып кетпеуі үшін
-        // 'audio-bubble' класын тек ішінде мәтіні жоқ, таза аудио хаттарға ғана қолданамыз.
-        const bubbleDivClass = (audioHtml && !text) ? 'bubble audio-bubble' : 'bubble';
-
-        return `
-            <div class="row ${bubbleClass}">
-                <div class="${bubbleDivClass}">
-                    ${content}
-                </div>
-            </div>
-        `;
-    } catch (e) {
-        console.error("Message build error:", e);
-        return '';
-    }
-}
-
-
-async function renderHistory(history) {
-    if (!messagesEl) return;
-
-    messagesEl.innerHTML = '';
-
-    if (Array.isArray(history)) {
-        history.forEach(function(item) {
-            try {
-                if (typeof buildMessageHtml === 'function') {
-                    var messageHtml = buildMessageHtml(item);
-                    if (messageHtml) {
-                        messagesEl.insertAdjacentHTML('beforeend', messageHtml);
-                    }
-                }
-            } catch (e) {
-                console.error("Message render error:", e);
+            if (rawData) {
+                const src = rawData.startsWith('data:') ? rawData : `data:${mediaType};base64,${rawData.replace(/\s+/g, '')}`;
+                return `
+                    <div class="audio-wrap">
+                        <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
+                    </div>
+                `;
             }
-        });
-    }
 
-    scrollToBottomSafe(messagesEl);
-    if (typeof hydrateAudioPlayers === 'function') {
-        hydrateAudioPlayers();
-    }
-}
-async function hydrateAudioPlayers() {
-    const wrappers = messagesEl.querySelectorAll(
-        '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
-    );
+            if (item.id) {
+                return `
+                    <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id))}">
+                        <audio class="audio-player" controls preload="none"></audio>
+                    </div>
+                `;
+            }
 
-    for (const wrapper of wrappers) {
-        const player = wrapper.querySelector('audio');
-        const messageId = String(
-            wrapper.getAttribute('data-audio-id') || ''
-        ).trim();
-
-        if (!player || !messageId) continue;
-
-        if (player.getAttribute('src')) {
-            wrapper.setAttribute('data-audio-loaded', '1');
-            continue;
+            return '';
         }
 
-        wrapper.setAttribute('data-audio-loaded', '1');
+        function buildMessageHtml(item) {
+            try {
+                const role = String(item.role || '').toLowerCase();
+                const isBot = role === 'model' || role === 'assistant';
+                
+                // direction 'inbound' немесе 'outgoing' бойынша рөлдерді нақты анықтау
+                const isOutgoing = item.direction === 'outgoing' || item.fromMe === true;
+                const isOperator = isOutgoing || role === 'operator';
+                
+                let bubbleClass = 'user'; // Әдепкі бойынша клиент хаты
+                let labelHtml = '';
 
-        try {
-            const result = await fetchJson(
-                `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
+                if (isBot && !isOutgoing) {
+                    bubbleClass = 'model';
+                    labelHtml = '<span class="bubble-label">AI Bot</span>';
+                } else if (isOperator) {
+                    bubbleClass = 'operator';
+                    labelHtml = '<span class="bubble-label">Operator</span>';
+                } else if (role === 'system') {
+                    bubbleClass = 'system';
+                }
+
+                const text = escapeHtml(cleanText(item.text || item.body || ''));
+                const audioHtml = buildAudioHtml(item);
+                
+                let content = '';
+                if (labelHtml) content += labelHtml;
+                if (audioHtml) content += audioHtml;
+                if (text) content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
+
+                if (!content) return '';
+
+                // Егер тек аудио болса және мәтін жоқ болса, арнайы 'audio-bubble' класы қосылады
+                const bubbleDivClass = (audioHtml && !text) ? 'bubble audio-bubble' : 'bubble';
+
+                return `
+                    <div class="row ${bubbleClass}">
+                        <div class="${bubbleDivClass}">
+                            ${content}
+                        </div>
+                    </div>
+                `;
+            } catch (e) {
+                console.error("Message build error:", e);
+                return '';
+            }
+        }
+
+        async function renderHistory(history) {
+            if (!messagesEl) return;
+
+            messagesEl.innerHTML = '';
+
+            if (Array.isArray(history)) {
+                history.forEach(function(item) {
+                    try {
+                        if (typeof buildMessageHtml === 'function') {
+                            var messageHtml = buildMessageHtml(item);
+                            if (messageHtml) {
+                                messagesEl.insertAdjacentHTML('beforeend', messageHtml);
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Message render error:", e);
+                    }
+                });
+            }
+
+            scrollToBottomSafe(messagesEl);
+            if (typeof hydrateAudioPlayers === 'function') {
+                hydrateAudioPlayers();
+            }
+        }
+
+        async function hydrateAudioPlayers() {
+            const wrappers = messagesEl.querySelectorAll(
+                '[data-audio-wrapper][data-audio-id]:not([data-audio-loaded])'
             );
 
-            const mediaType = String(result?.mediaType || 'audio/ogg')
-                .split(';')[0]
-                .replace(/[^\w/+.-]/g, '');
+            for (const wrapper of wrappers) {
+                const player = wrapper.querySelector('audio');
+                const messageId = String(
+                    wrapper.getAttribute('data-audio-id') || ''
+                ).trim();
 
-            const src = normalizeAudioData(result?.mediaData, mediaType);
+                if (!player || !messageId) continue;
 
-            if (!src) {
-                throw new Error('AUDIO_DATA_EMPTY');
+                if (player.getAttribute('src')) {
+                    wrapper.setAttribute('data-audio-loaded', '1');
+                    continue;
+                }
+
+                wrapper.setAttribute('data-audio-loaded', '1');
+
+                try {
+                    const result = await fetchJson(
+                        `${endpoints.media}/${encodeURIComponent(instanceId)}/${encodeURIComponent(messageId)}`
+                    );
+
+                    const mediaType = String(result?.mediaType || 'audio/ogg')
+                        .split(';')[0]
+                        .replace(/[^\w/+.-]/g, '');
+
+                    const src = normalizeAudioData(result?.mediaData, mediaType);
+
+                    if (!src) {
+                        throw new Error('AUDIO_DATA_EMPTY');
+                    }
+
+                    player.pause();
+                    player.removeAttribute('src');
+                    player.src = src;
+                    player.load();
+                } catch (error) {
+                    wrapper.removeAttribute('data-audio-loaded');
+                    setTimeout(hydrateAudioPlayers, 3000);
+                }
             }
-
-            player.pause();
-            player.removeAttribute('src');
-            player.src = src;
-            player.load();
-        } catch (error) {
-            wrapper.removeAttribute('data-audio-loaded');
-            setTimeout(hydrateAudioPlayers, 3000);
         }
-    }
-}
 
         function updateComposerState() {
             const hasActive = Boolean(activePhone);
@@ -1263,23 +1266,23 @@ async function hydrateAudioPlayers() {
             updateComposerState();
         }
 
-       async function fetchJson(url) {
-    const response = await fetch(`${apiBase}${url}`, {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: apiHeaders({
-            Accept: 'application/json'
-        })
-    });
+        async function fetchJson(url) {
+            const response = await fetch(`${apiBase}${url}`, {
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: apiHeaders({
+                    Accept: 'application/json'
+                })
+            });
 
-    const data = await response.json().catch(() => ({}));
+            const data = await response.json().catch(() => ({}));
 
-    if (!response.ok) {
-        throw new Error(data.error || `HTTP_${response.status}`);
-    }
+            if (!response.ok) {
+                throw new Error(data.error || `HTTP_${response.status}`);
+            }
 
-    return data;
-}
+            return data;
+        }
 
         async function postJson(url, body) {
             const response = await fetch(`${apiBase}${url}`, {
@@ -1295,88 +1298,89 @@ async function hydrateAudioPlayers() {
         }
 
         async function loadInbox(force = false) {
-    if (isInboxLoading && !force) return;
+            if (isInboxLoading && !force) return;
 
-    isInboxLoading = true;
+            isInboxLoading = true;
 
-    try {
-        const result = await fetchJson(
-            `${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`
-        );
+            try {
+                const result = await fetchJson(
+                    `${endpoints.inbox}/${encodeURIComponent(instanceId)}?limit=500`
+                );
 
-        const nextChats = Array.isArray(result?.items)
-            ? result.items
-            : Array.isArray(result?.chats)
-                ? result.chats
-                : [];
+                const nextChats = Array.isArray(result?.items)
+                    ? result.items
+                    : Array.isArray(result?.chats)
+                        ? result.chats
+                        : [];
 
-        const nextSignature = JSON.stringify(
-            nextChats.map(chat => [
-                chat.phone,
-                chat.updatedAt,
-                chat.lastAt,
-                chat.unread,
-                chat.closed,
-                chat.lastText
-            ])
-        );
+                const nextSignature = JSON.stringify(
+                    nextChats.map(chat => [
+                        chat.phone,
+                        chat.updatedAt,
+                        chat.lastAt,
+                        chat.unread,
+                        chat.closed,
+                        chat.lastText
+                    ])
+                );
 
-        chats = nextChats;
+                chats = nextChats;
 
-        if (nextSignature !== inboxSignature || force) {
-            inboxSignature = nextSignature;
-            renderList();
+                if (nextSignature !== inboxSignature || force) {
+                    inboxSignature = nextSignature;
+                    renderList();
+                }
+
+                if (
+                    activePhone &&
+                    chats.some(chat => normalizePhone(chat.phone) === activePhone)
+                ) {
+                    await loadHistory(false);
+                }
+            } finally {
+                isInboxLoading = false;
+            }
         }
 
-        if (
-            activePhone &&
-            chats.some(chat => normalizePhone(chat.phone) === activePhone)
-        ) {
-            await loadHistory(false);
+        async function loadHistory(force = false) {
+            if (!activePhone || (isHistoryLoading && !force)) return;
+
+            isHistoryLoading = true;
+
+            try {
+                const result = await fetchJson(
+                    `${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`
+                );
+
+                const history = Array.isArray(result?.history)
+                    ? result.history
+                    : Array.isArray(result?.items)
+                        ? result.items
+                        : [];
+
+                const nextSignature = JSON.stringify(
+                    history.map(item => [
+                        item.id,
+                        item.createdAt,
+                        item.timestamp,
+                        item.direction,
+                        item.fromMe,
+                        item.text,
+                        item.body,
+                        item.type,
+                        item.mediaData
+                    ])
+                );
+
+                if (force || nextSignature !== historySignature) {
+                    historySignature = nextSignature;
+                    renderHistory(history);
+                }
+            } finally {
+                isHistoryLoading = false;
+            }
         }
-    } finally {
-        isInboxLoading = false;
-    }
-}
 
-       async function loadHistory(force = false) {
-    if (!activePhone || (isHistoryLoading && !force)) return;
-
-    isHistoryLoading = true;
-
-    try {
-        const result = await fetchJson(
-            `${endpoints.history}/${encodeURIComponent(instanceId)}/${encodeURIComponent(activePhone)}`
-        );
-
-        const history = Array.isArray(result?.history)
-            ? result.history
-            : Array.isArray(result?.items)
-                ? result.items
-                : [];
-
-        const nextSignature = JSON.stringify(
-            history.map(item => [
-                item.id,
-                item.createdAt,
-                item.timestamp,
-                item.direction,
-                item.fromMe,
-                item.text,
-                item.body,
-                item.type,
-                item.mediaData
-            ])
-        );
-
-        if (force || nextSignature !== historySignature) {
-            historySignature = nextSignature;
-            renderHistory(history);
-        }
-    } finally {
-        isHistoryLoading = false;
-    }
-}
         function syncViewedState() {
             if (!activePhone || Date.now() - lastViewSyncAt < 5000) return;
             lastViewSyncAt = Date.now();
@@ -1608,13 +1612,13 @@ async function hydrateAudioPlayers() {
         loadInbox();
         
         setInterval(() => {
-    loadInbox();
+            loadInbox();
 
-    if (activePhone) {
-        loadHistory();
-        loadOperatorLock();
-    }
-}, 3000);
+            if (activePhone) {
+                loadHistory();
+                loadOperatorLock();
+            }
+        }, 3000);
 
         setInterval(renderOperatorLock, 1000);
 
