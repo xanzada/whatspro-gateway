@@ -444,81 +444,107 @@
         .empty h2 { color: var(--text); font-size: 20px; }
         .empty p { line-height: 1.5; }
 
-        .row { display: flex; margin: 0 0 12px; }
-        .row.user { justify-content: flex-start; }
-        .row.model, .row.operator { justify-content: flex-end; }
-        .row.system { justify-content: center; }
-
-       .row { 
-    display: flex; 
-    margin: 0 0 12px; 
+        /* --- ЧАТТЫҢ НЕГІЗГІ ОРНАЛАСУЫ (WhatsApp/Telegram стилі) --- */
+.row {
+    display: flex;
+    width: 100%;
+    margin-bottom: 12px;
+    align-items: flex-end; /* Көпіршіктер төменнен тураланады */
 }
-.row.user { justify-content: flex-start; }
-.row.model, .row.operator { justify-content: flex-end; }
-.row.system { justify-content: center; }
 
+/* Клиент (сол жақта) */
+.row.user {
+    justify-content: flex-start;
+    padding-right: 15%;
+}
+
+/* Оператор/Бот (оң жақта) */
+.row.operator, .row.model {
+    justify-content: flex-end;
+    padding-left: 15%;
+}
+
+.row.system {
+    justify-content: center;
+    padding: 0 10%;
+}
+
+/* --- ХАТ КӨПІРШІКТЕРІ --- */
 .bubble {
-    max-width: min(680px, 78%);
-    padding: 11px 13px;
-    border-radius: var(--radius);
-    border: 1px solid var(--line);
-    color: #eaf1fb;
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 14.5px;
     line-height: 1.45;
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+    overflow-wrap: break-word;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-.user .bubble { background: #162236; border-bottom-left-radius: 3px; }
-.model .bubble { background: #10253a; border-color: rgba(59, 130, 246, .3); border-bottom-left-radius: 3px; }
-.operator .bubble { background: #0f766e; border-color: rgba(45, 212, 191, .25); border-bottom-right-radius: 3px; }
-
-.bubble:has(.audio-wrap) {
-    width: min(340px, calc(100vw - 32px));
-    max-width: min(340px, calc(100vw - 32px));
-    padding: 7px 9px;
+/* Клиент дизайны */
+.row.user .bubble {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-bottom-left-radius: 4px; /* WhatsApp бұрышы */
 }
 
+/* Оператор дизайны */
+.row.operator .bubble, .row.model .bubble {
+    background: #0f766e; /* Сіздің жасыл түсіңіз */
+    color: #ffffff;
+    border-bottom-right-radius: 4px; /* WhatsApp бұрышы */
+}
+
+.system .bubble {
+    background: rgba(245, 158, 11, .12);
+    border: 1px solid rgba(245, 158, 11, .28);
+    color: #fcd34d;
+    font-size: 13px;
+    text-align: center;
+    border-radius: 12px;
+}
+
+.bubble-label {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.row.user .bubble-label {
+    color: rgba(140, 160, 186, 0.8);
+}
+
+/* --- АУДИО ОЙНАТҚЫШ --- */
 .audio-wrap {
     display: block;
-    width: 100%;
-    min-width: 0;
+    width: 260px;
     max-width: 100%;
-    margin: 2px 0 0;
-    overflow: visible;
-    white-space: normal;
+    margin: 2px 0;
 }
 
 .audio-player {
-    display: block;
     width: 100%;
-    min-width: 250px;
-    max-width: 100%;
-    height: 42px;
-    margin: 0;
+    height: 40px;
     outline: none;
+    border-radius: 20px;
+}
+
+.bubble:has(.audio-wrap) {
+    padding: 8px;
 }
 
 @media (max-width: 520px) {
-    .bubble {
-        max-width: calc(100vw - 32px);
-        padding: 9px 10px;
-        font-size: 14px;
-        line-height: 1.38;
-    }
-
-    .bubble:has(.audio-wrap) {
-        width: calc(100vw - 32px);
-        max-width: calc(100vw - 32px);
-    }
-
-    .audio-player {
-        min-width: 0;
-        width: 100%;
-        height: 42px;
-    }
+    .row.user { padding-right: 10%; }
+    .row.operator, .row.model { padding-left: 10%; }
+    .audio-wrap { width: 230px; }
 }
-
         .composer {
             position: sticky;
             bottom: 0;
@@ -1071,125 +1097,71 @@
             }).join('');
             listEl.scrollTop = previousTop;
         }
-        function buildMessageHtml(item) {
-    var isOperator = item.direction === 'outgoing' || item.fromMe === true;
-    var bubbleClass = isOperator ? 'operator' : 'user';
-    var text = escapeHtml(cleanText(item.text || item.body || ''));
+ function buildAudioHtml(item) {
+    if (!item) return '';
+
+    const type = String(item.type || item.mediaKind || '').toLowerCase();
+    const mime = String(item.mediaType || '').toLowerCase();
     
-    // Аудионы тексеру
-    var audioHtml = buildAudioHtml(item);
+    // ҚАТАҢ ТЕКСЕРУ: Бұл нақты аудио ма? (Мәтіндік хаттарды өткізбейді)
+    const isActuallyAudio = type === 'audio' || type === 'ptt' || mime.startsWith('audio/') || Boolean(item.hasMedia && mime.startsWith('audio/'));
     
-    // Егер аудио болса, мәтінді оның астына қосамыз, әйтпесе жай мәтін
-    var content = audioHtml ? (audioHtml + (text ? '<br>' + text : '')) : text;
+    if (!isActuallyAudio) return ''; // Егер аудио болмаса, бос қайтарамыз (плеер шықпайды)
+
+    const rawData = String(item.mediaData || '').trim();
+    let src = '';
+
+    if (rawData) {
+        src = rawData.startsWith('data:') ? rawData : `data:${mime || 'audio/ogg'};base64,${rawData.replace(/\s+/g, '')}`;
+    }
+
+    if (src) {
+        return `
+            <div class="audio-wrap">
+                <audio class="audio-player" controls preload="metadata" src="${escapeHtml(src)}"></audio>
+            </div>
+        `;
+    }
 
     return `
-        <div class="row ${bubbleClass}">
-            <div class="bubble">
-                ${isOperator ? '<span class="bubble-label">Operator</span>' : ''}
-                ${content}
-            </div>
+        <div class="audio-wrap" data-audio-wrapper data-audio-id="${escapeHtml(String(item.id || ''))}">
+            <audio class="audio-player" controls preload="none"></audio>
         </div>
     `;
 }
 
- async function renderHistory(history) {
-    if (!messagesEl) return;
-
-    // Барлық ескі хаттарды тазалау
-    messagesEl.innerHTML = '';
-
-    // Әрбір хабарламаны экранға шығару
-    if (Array.isArray(history)) {
-        history.forEach(function(item) {
-            try {
-                // buildMessageHtml болмаса, қате шықпас үшін тексеру
-                if (typeof buildMessageHtml === 'function') {
-                    var messageHtml = buildMessageHtml(item);
-                    if (messageHtml) {
-                        messagesEl.insertAdjacentHTML('beforeend', messageHtml);
-                    }
-                }
-            } catch (e) {
-                console.error("Message render error:", e);
-            }
-        });
+function buildMessageHtml(item) {
+    const isOperator = item.direction === 'outgoing' || item.fromMe === true || item.role === 'operator' || item.role === 'model';
+    const bubbleClass = isOperator ? 'operator' : 'user';
+    const text = escapeHtml(cleanText(item.text || item.body || ''));
+    
+    const audioHtml = buildAudioHtml(item);
+    
+    let content = '';
+    
+    // 1. Оператор белгісі
+    if (isOperator) {
+        content += '<span class="bubble-label">Operator</span>';
+    }
+    
+    // 2. Аудио (тек бар болса ғана қосылады)
+    if (audioHtml) {
+        content += audioHtml;
+    }
+    
+    // 3. Мәтін
+    if (text) {
+        // Егер үстінде аудио болса, мәтінді аздап төмен түсіреміз
+        content += audioHtml ? `<div style="margin-top: 8px;">${text}</div>` : text;
     }
 
-    scrollToBottomSafe(messagesEl);
-    hydrateAudioPlayers();
-
-}
-
-function normalizeAudioData(value, mediaType = 'audio/ogg') {
-    let raw = String(value || '').trim();
-
-    if (!raw) return '';
-
-    raw = raw.replace(/\s+/g, '');
-
-    if (raw.startsWith('data:')) {
-        const commaIndex = raw.indexOf(',');
-        if (commaIndex < 0) return '';
-
-        const payload = raw.slice(commaIndex + 1);
-        if (!payload) return '';
-
-        return `data:${mediaType || 'audio/ogg'};base64,${payload}`;
-    }
-
-    if (raw.includes(',')) {
-        raw = raw.slice(raw.lastIndexOf(',') + 1);
-    }
-
-    return `data:${mediaType || 'audio/ogg'};base64,${raw}`;
-}
-
-function buildAudioHtml(item) {
-    if (!item) return '';
-
-    const mediaKind = String(item.mediaKind || item.type || '').toLowerCase();
-    const mediaType = String(item.mediaType || '')
-        .split(';')[0]
-        .replace(/[^\w/+.-]/g, '');
-
-    const hasAudioPayload = Boolean(
-        item.audioMessage ||
-        item.data?.message?.audioMessage
-    );
-
-    const isAudio =
-        mediaKind === 'audio' ||
-        mediaKind === 'ptt' ||
-        mediaType.startsWith('audio/') ||
-        hasAudioPayload;
-
-    if (!isAudio) return '';
-
-    const inlineData = String(item.mediaData || '').trim();
-
-    if (inlineData) {
-        const src = normalizeAudioData(inlineData, mediaType);
-
-        if (src) {
-            return `
-                <div class="audio-wrap">
-                    <audio
-                        class="audio-player"
-                        controls
-                        preload="metadata"
-                        src="${escapeHtml(src)}">
-                    </audio>
-                </div>
-            `;
-        }
-    }
+    if (!content) return '';
 
     return `
-        <div
-            class="audio-wrap"
-            data-audio-wrapper
-            data-audio-id="${escapeHtml(String(item.id || ''))}">
-            <audio class="audio-player" controls preload="none"></audio>
+        <div class="row ${bubbleClass}">
+            <div class="bubble">
+                ${content}
+            </div>
         </div>
     `;
 }
