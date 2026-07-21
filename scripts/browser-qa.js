@@ -35,7 +35,7 @@ fs.mkdirSync(outputDir, { recursive: true });
     ] }) });
     if (url.includes('/api/chat/operator-lock/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ttl: 42, expiresAt: Date.now() + 42000 }) });
     if (url.includes('/api/chat/events/')) return request.respond({ status: 200, contentType: 'text/event-stream', body: 'retry: 3000\n\n' });
-    if (url.includes('/api/chat/media/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ mimeType: 'audio/wav', base64: wav.toString('base64') }) });
+    if (url.includes('/api/chat/media/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, dataUri: `data:audio/wav;base64,${wav.toString('base64')}` }) });
     if (url.includes('/api/chat/send/')) {
       sendRequests += 1;
       return setTimeout(() => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, ttl: 60, expiresAt: Date.now() + 60000 }) }), 150);

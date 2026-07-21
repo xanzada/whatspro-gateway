@@ -300,12 +300,9 @@
         });
         if (!response.ok) throw new Error('MEDIA_' + response.status);
         var data = await response.json();
-        var mediaType = String(data.mimeType || 'audio/ogg').trim().toLowerCase();
-        var base64 = String(data.base64 || '').replace(/\s+/g, '');
-        if (!/^audio\/[a-z0-9][a-z0-9.+_-]*(?:\s*;\s*codecs=[a-z0-9._+-]+)?$/i.test(mediaType) || !base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-          throw new Error('INVALID_AUDIO_MEDIA');
-        }
-        bindAudio(wrapper, wrapper.querySelector('audio'), 'data:' + mediaType + ';base64,' + base64);
+        var dataUri = String(data.dataUri || '').trim();
+        if (!/^data:audio\/[a-z0-9][a-z0-9.+_-]*;base64,[A-Za-z0-9+/]*={0,2}$/i.test(dataUri)) throw new Error('INVALID_AUDIO_MEDIA');
+        bindAudio(wrapper, wrapper.querySelector('audio'), dataUri);
       } catch (error) {
         if (error.name === 'AbortError' || !wrapper.isConnected) return;
         if (attempt < 5) {

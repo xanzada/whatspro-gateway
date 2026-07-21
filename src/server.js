@@ -459,26 +459,20 @@ async function readInboxEntries(instanceId, limit) {
   return chatStore.readInbox(instanceId, limit);
 }
 
-function decodeStoredAudio(mediaData) {
-  const match = String(mediaData || '').trim().match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+function validateStoredAudioDataUri(mediaData) {
+  const dataUri = String(mediaData || '').trim();
+  const match = dataUri.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/i);
   if (!match) throw new Error('INVALID_MEDIA_DATA');
   const mediaType = String(match[1] || '').trim().toLowerCase();
   if (!/^audio\/[a-z0-9][a-z0-9.+_-]*$/.test(mediaType)) throw new Error('UNSUPPORTED_MEDIA_TYPE');
-  const base64 = String(match[2] || '').replace(/\s+/g, '');
-  if (!base64 || base64.length % 4 !== 0 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+  const base64 = match[2];
+  if (!base64 || base64.length % 4 !== 0 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4) {
     throw new Error('INVALID_MEDIA_DATA');
   }
-  const buffer = Buffer.from(base64, 'base64');
-  if (!buffer.length || buffer.length > MAX_MEDIA_BYTES || buffer.toString('base64') !== base64) {
-    throw new Error('INVALID_MEDIA_BUFFER');
-  }
-  return { mediaType, base64, buffer };
-}
-
-function playbackAudioType(mediaType) {
-  const value = String(mediaType || '').trim().toLowerCase();
-  if (value === 'audio/ogg' || value === 'audio/opus') return 'audio/ogg; codecs=opus';
-  return value || 'audio/ogg; codecs=opus';
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  const decodedBytes = (base64.length / 4) * 3 - padding;
+  if (decodedBytes <= 0 || decodedBytes > MAX_MEDIA_BYTES) throw new Error('INVALID_MEDIA_DATA');
+  return dataUri;
 }
 
 function remainingOperatorTtl(expiresAt, now = Date.now()) {
@@ -994,16 +988,15 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
             return res.status(404).json({ error: 'MEDIA_NOT_READY' });
         }
 
-        let decoded;
+        let dataUri;
         try {
-            decoded = decodeStoredAudio(mediaData);
+            dataUri = validateStoredAudioDataUri(mediaData);
         } catch (error) {
             const status = error.message === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : 422;
             return res.status(status).json({ error: error.message });
         }
-        const { mediaType, base64 } = decoded;
         res.set({ 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
-        return res.json({ mimeType: playbackAudioType(mediaType), base64 });
+        return res.json({ success: true, dataUri });
     } catch (error) {
         console.error(
             `[CHAT MEDIA] ${instanceId}/${messageId}:`,
@@ -1376,5 +1369,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, playbackAudioType }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, validateStoredAudioDataUri }
 };

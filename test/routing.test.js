@@ -74,7 +74,8 @@ test('chat routes and static assets serve the new operator UI', async t => {
 test('chat audio hydration uses validated JSON media as a Data URI', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   assert.match(source, /await response\.json\(\)/);
-  assert.match(source, /'data:' \+ mediaType \+ ';base64,' \+ base64/);
+  assert.match(source, /data\.dataUri/);
+  assert.match(source, /bindAudio\(wrapper, wrapper\.querySelector\('audio'\), dataUri\)/);
   assert.doesNotMatch(source, /response\.arrayBuffer\(\)|URL\.createObjectURL\(blob\)/);
   assert.match(source, /console\.error\('Audio play error:', error\)/);
 });

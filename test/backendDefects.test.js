@@ -65,18 +65,12 @@ test('base64 validation rejects malformed and oversized media as permanent failu
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
 });
 
-test('stored audio decoding is strict and preserves the binary payload', () => {
-  const bytes = Buffer.from('RIFF\u0000\u0001audio', 'binary');
-  const decoded = serverTest.decodeStoredAudio(`data:audio/wav;base64,${bytes.toString('base64')}`);
-  assert.equal(decoded.mediaType, 'audio/wav');
-  assert.equal(decoded.base64, bytes.toString('base64'));
-  assert.deepEqual(decoded.buffer, bytes);
-  assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg;base64,YWJj==='));
-  assert.throws(() => serverTest.decodeStoredAudio('data:image/png;base64,YWJj'));
-  assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg\r\nx-bad:value;base64,YWJj'));
-  assert.equal(serverTest.playbackAudioType('audio/ogg'), 'audio/ogg; codecs=opus');
-  assert.equal(serverTest.playbackAudioType('audio/ogg; codecs=opus'), 'audio/ogg; codecs=opus');
-  assert.equal(serverTest.playbackAudioType('audio/mpeg'), 'audio/mpeg');
+test('stored audio Data URIs are validated without binary decoding', () => {
+  const dataUri = 'data:audio/ogg;base64,T2dnUw==';
+  assert.equal(serverTest.validateStoredAudioDataUri(dataUri), dataUri);
+  assert.throws(() => serverTest.validateStoredAudioDataUri('data:audio/ogg;base64,YWJj==='));
+  assert.throws(() => serverTest.validateStoredAudioDataUri('data:image/png;base64,YWJj'));
+  assert.throws(() => serverTest.validateStoredAudioDataUri('data:audio/ogg\r\nx-bad:value;base64,YWJj'));
 });
 
 class FakeIdempotencyRedis {
