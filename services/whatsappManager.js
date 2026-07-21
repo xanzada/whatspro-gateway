@@ -8,12 +8,15 @@ const path = require('path');
 
 const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
-const { markOperatorActive } = require('./operatorLock');
-const { appendMessage, storeMedia, updateMessageReceipt } = require('./chatStore');
+const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
+const { appendMessage, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
+const localBotSends = new Map();
+const permanentMediaFailures = new Set();
 
 function isValidChatPhone(phone) {
     return /^\d{10,15}$/.test(String(phone || ''));
@@ -23,14 +26,139 @@ function chatMediaKey(instanceId, messageId) {
     return `chatwoot:media:${instanceId}:${messageId}`;
 }
 
-async function persistMessageMedia(instanceId, phone, msg) {
+function normalizeMediaMime(value) {
+    return String(value || '').split(';')[0].trim().toLowerCase();
+}
+
+function mediaMimeFrom(msg, media) {
+    return normalizeMediaMime(media?.mimetype || msg?.mimetype || msg?._data?.mimetype || msg?._data?.mediaData?.mimetype);
+}
+
+function isQualifiedAudio(msg, media) {
+    const type = String(msg?.type || '').trim().toLowerCase();
+    const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
+    return !isSystem && Boolean(msg?.hasMedia) && mediaMimeFrom(msg, media).startsWith('audio/');
+}
+
+function isAudioCandidate(msg) {
+    const hintedMime = mediaMimeFrom(msg);
+    return Boolean(msg?.hasMedia) && (hintedMime.startsWith('audio/') || ['audio', 'ptt'].includes(String(msg?.type || '').toLowerCase()));
+}
+
+function deliveryStatusFromAck(ack) {
+    const value = Number(ack);
+    if (value >= 3) return 'read';
+    if (value === 2) return 'delivered';
+    return 'sent';
+}
+
+function permanentMediaError(code) {
+    const error = new Error(code);
+    error.code = code;
+    error.permanent = true;
+    return error;
+}
+
+function validateAudioBase64(value) {
+    const base64 = String(value || '').replace(/\s+/g, '');
+    if (!base64 || base64.length % 4 !== 0 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+        throw permanentMediaError('MEDIA_BASE64_INVALID');
+    }
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    const decodedBytes = (base64.length / 4) * 3 - padding;
+    if (decodedBytes > MAX_MEDIA_BYTES) throw permanentMediaError('MEDIA_TOO_LARGE');
+    return base64;
+}
+
+function shouldRetryMediaError(error) {
+    return error?.permanent !== true;
+}
+
+function incrementLocalBotSend(key, expiresAt = Date.now() + 20000, redisMarked = false) {
+    const current = localBotSends.get(key);
+    const count = current && current.expiresAt > Date.now() ? current.count : 0;
+    const redisCount = current && current.expiresAt > Date.now() ? current.redisCount || 0 : 0;
+    localBotSends.set(key, {
+        count: count + 1,
+        redisCount: redisCount + Number(redisMarked),
+        expiresAt: Math.max(current?.expiresAt || 0, expiresAt)
+    });
+}
+
+function takeLocalBotSend(key, timestamp = Date.now()) {
+    const current = localBotSends.get(key);
+    if (!current || current.expiresAt <= timestamp || current.count <= 0) {
+        localBotSends.delete(key);
+        return { matched: false, redisMarked: false };
+    }
+    const redisMarked = (current.redisCount || 0) > 0;
+    if (current.count === 1) localBotSends.delete(key);
+    else localBotSends.set(key, {
+        ...current,
+        count: current.count - 1,
+        redisCount: Math.max(0, (current.redisCount || 0) - Number(redisMarked))
+    });
+    return { matched: true, redisMarked };
+}
+
+function consumeLocalBotSend(key, timestamp = Date.now()) {
+    return takeLocalBotSend(key, timestamp).matched;
+}
+
+function releaseLocalBotSend(key, redisMarked = false) {
+    const current = localBotSends.get(key);
+    if (!current) return;
+    if (current.count <= 1) localBotSends.delete(key);
+    else localBotSends.set(key, {
+        ...current,
+        count: current.count - 1,
+        redisCount: Math.max(0, (current.redisCount || 0) - Number(redisMarked))
+    });
+}
+
+async function hasAuthoritativeMessage(instanceId, phone, messageId) {
+    if (!redisClient.isOpen) return false;
+    return Number(await redisClient.sendCommand([
+        'SISMEMBER', `chatwoot:message-ids:${instanceId}:${phone}`, String(messageId || '')
+    ]).catch(() => 0)) === 1;
+}
+
+async function removeOrphanedMedia(instanceId, phone, messageId) {
+    if (!redisClient.isOpen) return;
+    await Promise.all([
+        redisClient.sendCommand(['DEL', chatMediaKey(instanceId, messageId)]).catch(() => 0),
+        redisClient.sendCommand(['SREM', `chatwoot:media-ids:${instanceId}:${phone}`, messageId]).catch(() => 0)
+    ]);
+}
+
+async function updatePersistedAudioMetadata(instanceId, phone, messageId, mediaType) {
+    if (!redisClient.isOpen) return false;
+    const key = `chatwoot:history:${instanceId}:${phone}`;
+    const rows = await redisClient.sendCommand(['LRANGE', key, '-500', '-1']).catch(() => []);
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+        let entry;
+        try { entry = JSON.parse(rows[index]); } catch { continue; }
+        if (String(entry?.id || '') !== messageId) continue;
+        entry.hasMedia = true;
+        entry.mediaType = mediaType;
+        entry.mediaKind = entry.mediaKind || entry.type || 'audio';
+        entry.pendingMedia = false;
+        await redisClient.sendCommand(['LSET', key, String(index), JSON.stringify(entry)]).catch(() => 0);
+        return true;
+    }
+    return false;
+}
+
+async function persistMessageMedia(instanceId, phone, msg, options = {}) {
     if (!msg?.hasMedia || !redisClient.isOpen) return null;
 
     const messageId = String(msg?.id?.id || '').trim();
 
     if (!messageId) {
-        throw new Error('MEDIA_MESSAGE_ID_MISSING');
+        throw permanentMediaError('MEDIA_MESSAGE_ID_MISSING');
     }
+
+    if (options.requireExistingChat && !await hasAuthoritativeMessage(instanceId, phone, messageId)) return null;
 
     const media = await msg.downloadMedia();
 
@@ -38,25 +166,27 @@ async function persistMessageMedia(instanceId, phone, msg) {
         throw new Error('MEDIA_DOWNLOAD_EMPTY');
     }
 
-    const mediaType = String(media.mimetype || 'audio/ogg')
-        .split(';')[0]
-        .trim()
-        .toLowerCase();
+    if (!isQualifiedAudio(msg, media)) throw permanentMediaError('MEDIA_NOT_AUDIO');
+    const mediaType = mediaMimeFrom(msg, media);
 
-    const base64 = String(media.data || '').replace(/\s+/g, '');
-
-    if (!base64) {
-        throw new Error('MEDIA_BASE64_EMPTY');
-    }
-
+    const base64 = validateAudioBase64(media.data);
     const decoded = Buffer.from(base64, 'base64');
-
-    if (!decoded.length) {
-        throw new Error('MEDIA_BASE64_INVALID');
-    }
+    if (!decoded.length) throw permanentMediaError('MEDIA_BASE64_INVALID');
 
     const mediaUrl = `data:${mediaType};base64,${base64}`;
     await storeMedia(instanceId, phone, messageId, base64, mediaType);
+    if (options.requireExistingChat && !await hasAuthoritativeMessage(instanceId, phone, messageId)) {
+        await removeOrphanedMedia(instanceId, phone, messageId);
+        return null;
+    }
+    if (options.publishReady) {
+        const updated = await updatePersistedAudioMetadata(instanceId, phone, messageId, mediaType);
+        if (!updated) {
+            await removeOrphanedMedia(instanceId, phone, messageId);
+            return null;
+        }
+        await publishChatEvent({ type: 'media.ready', instanceId, phone, messageId, mediaType });
+    }
 
     return {
         media: {
@@ -69,16 +199,15 @@ async function persistMessageMedia(instanceId, phone, msg) {
 }
 
 function scheduleMediaPersist(instanceId, phone, msg) {
-    const type = String(msg?.type || '').toLowerCase();
-    const isAudio = type === 'audio' || type === 'ptt';
-
-    if (!msg?.hasMedia || !isAudio) return;
+    if (!isAudioCandidate(msg)) return;
 
     const delays = [1000, 3000, 7000, 15000, 30000];
+    const failureKey = `${instanceId}:${phone}:${String(msg?.id?.id || '')}`;
 
     delays.forEach(delayMs => {
         setTimeout(async () => {
             try {
+                if (permanentMediaFailures.has(failureKey)) return;
                 const messageId = String(msg?.id?.id || '').trim();
 
                 if (!messageId || !redisClient.isOpen) return;
@@ -88,9 +217,18 @@ function scheduleMediaPersist(instanceId, phone, msg) {
                     .catch(() => 0);
 
                 if (Number(exists) === 1) return;
+                if (!await hasAuthoritativeMessage(instanceId, phone, messageId)) {
+                    permanentMediaFailures.add(failureKey);
+                    return;
+                }
 
-                await persistMessageMedia(instanceId, phone, msg);
+                const result = await persistMessageMedia(instanceId, phone, msg, { publishReady: true, requireExistingChat: true });
+                if (!result) permanentMediaFailures.add(failureKey);
             } catch (error) {
+                if (!shouldRetryMediaError(error)) {
+                    permanentMediaFailures.add(failureKey);
+                    return;
+                }
                 console.warn(
                     `[MEDIA RETRY] ${instanceId}: ${msg?.id?.id || '-'} ` +
                     `${error?.message || error}`
@@ -98,6 +236,8 @@ function scheduleMediaPersist(instanceId, phone, msg) {
             }
         }, delayMs);
     });
+    const cleanupTimer = setTimeout(() => permanentMediaFailures.delete(failureKey), delays[delays.length - 1] + 1000);
+    cleanupTimer.unref?.();
 }
 
 // Барлық активті сессиялар мен QR кодтарды жадыда сақтайтын объектілер
@@ -394,14 +534,35 @@ async function getContactPhoneFromMessage(msg) {
 }
 
 async function wasBotSending(instanceId, phone) {
-    if (!redisClient.isOpen || !phone) return false;
+    if (!phone) return false;
 
     const key = `bot_sending:${instanceId}:${phone}`;
-    const value = await redisClient.get(key).catch(() => '');
-    if (!value) return false;
+    const localMarker = takeLocalBotSend(key);
+    const localMatch = localMarker.matched;
+    if (!redisClient.isOpen) return localMatch;
+    const script = [
+        "local count = tonumber(redis.call('GET', KEYS[1]) or '0')",
+        "if count <= 0 then return 0 end",
+        "if count == 1 then redis.call('DEL', KEYS[1]) else redis.call('DECR', KEYS[1]) end",
+        'return 1'
+    ].join('\n');
+    const shouldConsumeRedis = !localMatch || localMarker.redisMarked;
+    const redisMatch = shouldConsumeRedis && Number(await redisClient.sendCommand(['EVAL', script, '1', key]).catch(() => 0)) === 1;
+    return localMatch || redisMatch;
+}
 
-    await redisClient.del(key).catch(() => {});
-    return true;
+async function releaseBotSending(marker) {
+    const key = typeof marker === 'string' ? marker : marker?.key;
+    if (!key) return;
+    releaseLocalBotSend(key, Boolean(marker?.redisMarked));
+    if (!redisClient.isOpen || (typeof marker === 'object' && !marker.redisMarked)) return;
+    const script = [
+        "local count = tonumber(redis.call('GET', KEYS[1]) or '0')",
+        "if count <= 0 then return 0 end",
+        "if count == 1 then redis.call('DEL', KEYS[1]) else redis.call('DECR', KEYS[1]) end",
+        'return 1'
+    ].join('\n');
+    await redisClient.sendCommand(['EVAL', script, '1', key]).catch(() => 0);
 }
 
 async function getOutgoingPhoneFromMessage(client, msg) {
@@ -425,11 +586,8 @@ async function getOutgoingPhoneFromMessage(client, msg) {
     return phone;
 }
 
-async function saveOperatorOutgoingHistory(instanceId, phone, text, source, messageId) {
-    if (!redisClient.isOpen || !isValidChatPhone(phone) || !text) return;
-
-    const createdAt = Date.now();
-    const entry = {
+function buildOperatorHistoryEntry(instanceId, phone, text, source, messageId, media = {}, createdAt = Date.now()) {
+    return {
         id: String(messageId || `${source}:${createdAt}:${phone}`),
         instanceId,
         phone,
@@ -438,14 +596,25 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source, mess
         role: 'operator',
         text,
         body: text,
-        type: 'chat',
+        type: media.hasMedia || media.pendingAudio ? 'audio' : 'chat',
+        hasMedia: Boolean(media.hasMedia),
+        mediaType: media.hasMedia ? media.mediaType : '',
+        mediaKind: media.hasMedia || media.pendingAudio ? (media.mediaKind || 'audio') : '',
+        pendingMedia: Boolean(media.pendingAudio && !media.hasMedia),
         createdAt,
         source,
         deliveryStatus: 'sent'
     };
+}
+
+async function saveOperatorOutgoingHistory(instanceId, phone, text, source, messageId, media = {}) {
+    if (!redisClient.isOpen || !isValidChatPhone(phone) || (!text && !media.hasMedia && !media.pendingAudio)) return null;
+
+    const entry = buildOperatorHistoryEntry(instanceId, phone, text, source, messageId, media);
 
     await appendMessage(instanceId, phone, entry, { state: 'operator' });
     await publishChatEvent({ type: 'history.append', instanceId, phone, message: entry });
+    return entry;
 }
 
 async function getContactInfoFromMessage(msg) {
@@ -670,20 +839,38 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
             const text = String(msg.body || '').trim();
             const phone = await getOutgoingPhoneFromMessage(client, msg);
-            if (!isValidChatPhone(phone) || !text) return;
+            if (!isValidChatPhone(phone)) return;
             if (await wasBotSending(instanceId, phone)) return;
 
             await markOperatorActive(instanceId, phone, 'whatsapp_app');
             if (redisClient.isOpen) {
-                await redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_agent', 'EX', '60']).catch(() => {});
+                await redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_agent', 'EX', String(OPERATOR_ACTIVE_SECONDS)]).catch(() => {});
             }
-            await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app', msg?.id?.id);
+            const audioCandidate = isAudioCandidate(msg);
+            const hintedMediaType = mediaMimeFrom(msg);
+            const hasAudioHint = isQualifiedAudio(msg, hintedMediaType ? { mimetype: hintedMediaType } : null);
+            await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app', msg?.id?.id, {
+                hasMedia: hasAudioHint,
+                pendingAudio: audioCandidate,
+                mediaType: hasAudioHint ? hintedMediaType : '',
+                mediaKind: audioCandidate ? String(msg.type || 'audio') : ''
+            });
+            if (audioCandidate) {
+                scheduleMediaPersist(instanceId, phone, msg);
+                try {
+                    await persistMessageMedia(instanceId, phone, msg, { publishReady: true, requireExistingChat: true });
+                } catch (error) {
+                    if (!shouldRetryMediaError(error)) {
+                        permanentMediaFailures.add(`${instanceId}:${phone}:${String(msg?.id?.id || '')}`);
+                    }
+                }
+            }
             await publishChatEvent({
                 type: 'lock.changed',
                 instanceId,
                 phone,
-                ttl: 60,
-                expiresAt: Date.now() + 60000
+                ttl: OPERATOR_ACTIVE_SECONDS,
+                expiresAt: Date.now() + OPERATOR_ACTIVE_SECONDS * 1000
             });
             console.log(`[OPERATOR LOCK] ${instanceId} -> ${phone}: direct WhatsApp reply activated handoff lock.`);
         } catch (error) {
@@ -698,7 +885,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             const messageId = String(msg?.id?.id || '').trim();
             if (!isValidChatPhone(phone) || !messageId) return;
 
-            const deliveryStatus = Number(ack) >= 3 ? 'read' : 'sent';
+            const deliveryStatus = deliveryStatusFromAck(ack);
             let updated = false;
             for (const retryDelay of [0, 200, 500, 1000, 2000]) {
                 if (retryDelay) await delay(retryDelay);
@@ -759,18 +946,24 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         scheduleMediaPersist(instanceId, cleanNumber, msg);
 
         let downloadedMedia = null;
-        if (msg.hasMedia && (msg.type === 'audio' || msg.type === 'ptt')) {
+        if (isAudioCandidate(msg)) {
             try {
                 downloadedMedia = (await persistMessageMedia(instanceId, cleanNumber, msg))?.media || null;
             } catch (error) {
+                if (!shouldRetryMediaError(error)) {
+                    permanentMediaFailures.add(`${instanceId}:${cleanNumber}:${String(msg?.id?.id || '')}`);
+                }
                 console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
             }
         }
 
+        const hintedMediaType = mediaMimeFrom(msg);
+        const effectiveMediaType = downloadedMedia?.mimetype || hintedMediaType;
+        const hasAudio = isQualifiedAudio(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
         const messagePayload = { conversation: msg.body };
         if (msg.hasMedia) {
             if (msg.type === 'image') messagePayload.imageMessage = { caption: msg.body };
-            else if (msg.type === 'audio' || msg.type === 'ptt') messagePayload.audioMessage = { mimetype: downloadedMedia?.mimetype || 'audio/ogg' };
+            else if (hasAudio) messagePayload.audioMessage = { mimetype: effectiveMediaType };
             else if (msg.type === 'video') messagePayload.videoMessage = {};
             else if (msg.type === 'document') messagePayload.documentMessage = { mimetype: 'application/pdf', caption: msg.body };
         }
@@ -788,9 +981,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 timestamp: Number(msg.timestamp || 0) ? Number(msg.timestamp) * 1000 : Date.now(),
                 fromMe: msg.fromMe,
                 type: msg.type,
-                hasMedia: msg.hasMedia,
+                hasMedia: hasAudio,
                 mediaData: downloadedMedia?.data || '',
-                mediaType: downloadedMedia?.mimetype || '',
+                mediaType: hasAudio ? effectiveMediaType : '',
                 mediaKind: msg.type,
                 body: msg.body || '',
                 pushName: msg._data?.notifyName || contactInfo.pushName || contactInfo.name || 'Client',
@@ -800,7 +993,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     normalizedPhone: cleanNumber,
                     senderPhone: cleanNumber,
                     mediaData: downloadedMedia?.data || '',
-                    mediaType: downloadedMedia?.mimetype || '',
+                    mediaType: hasAudio ? effectiveMediaType : '',
                     mediaKind: msg.type,
                     key: {
                         remoteJid: realSender,
@@ -814,6 +1007,15 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     isMyContact: Boolean(contactInfo.isMyContact)
                 }
             });
+            if (downloadedMedia && hasAudio) {
+                await publishChatEvent({
+                    type: 'media.ready',
+                    instanceId,
+                    phone: cleanNumber,
+                    messageId: String(msg.id.id),
+                    mediaType: effectiveMediaType
+                });
+            }
         } catch (error) {
             console.error(`❌ [ADAPTER ERROR] ${instanceId}:`, error);
         }
@@ -975,20 +1177,32 @@ async function getInstanceStatus(instanceId) {
 }
 
 async function markBotSending(instanceId, phone, chatId) {
-    if (!redisClient.isOpen) return;
-
     const cleanPhone = normalizePhoneFromCandidates([phone, chatId]);
-    if (!cleanPhone) return;
+    if (!cleanPhone) return null;
 
-    await redisClient.setEx(`bot_sending:${instanceId}:${cleanPhone}`, 20, '1').catch(() => {});
+    const key = `bot_sending:${instanceId}:${cleanPhone}`;
+    let redisMarked = false;
+    if (redisClient.isOpen) {
+        const script = "local count = redis.call('INCR', KEYS[1]); redis.call('EXPIRE', KEYS[1], ARGV[1]); return count";
+        redisMarked = Number(await redisClient.sendCommand(['EVAL', script, '1', key, '20']).catch(() => 0)) > 0;
+    }
+    incrementLocalBotSend(key, Date.now() + 20000, redisMarked);
+    return { key, redisMarked };
 }
 
 async function deliverWhatsAppText(client, instanceId, phone, text) {
     const chatId = toWhatsAppChatId(phone, jidMap);
     if (!chatId) return false;
 
-    await markBotSending(instanceId, phone, chatId);
-    const message = await client.sendMessage(chatId, text);
+    const markerKey = await markBotSending(instanceId, phone, chatId);
+    let message;
+    try {
+        message = await client.sendMessage(chatId, text);
+    } catch (error) {
+        await releaseBotSending(markerKey);
+        error.sendAttempted = true;
+        throw error;
+    }
     console.log(`📤 [SENT] ${instanceId} -> ${chatId}: Хат сәтті жіберілді.`);
     return {
         success: true,
@@ -1053,12 +1267,17 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
                 scheduleRestart(instanceId, 3000, 'queued_text_client_missing');
                 scheduleFlush(instanceId, 5000);
             }
-            return false;
+            return options.skipQueue ? { success: false, attempted: false } : false;
         }
 
-        return await deliverWhatsAppText(client, instanceId, phone, text);
+        const result = await deliverWhatsAppText(client, instanceId, phone, text);
+        return result || (options.skipQueue ? { success: false, attempted: false } : false);
     } catch (error) {
         console.error(`❌ [SEND ERROR] ${instanceId} -> ${phone}:`, error.message);
+        if (options.skipQueue) {
+            const attempted = error?.sendAttempted === true;
+            return { success: false, attempted, outcomeUnknown: attempted, error: error.message };
+        }
         if (!options.skipQueue) {
             queueOutgoingText(instanceId, phone, text, error.message);
             scheduleFlush(instanceId, 5000);
@@ -1068,6 +1287,7 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
 }
 // 📸 МЕДИА ЖІБЕРУ ФУНКЦИЯСЫ (Сурет, Аудио)
 async function sendMedia(instanceId, phone, base64Data, fileName, caption) {
+    let markerKey = '';
     try {
         const client = await getReadyClient(instanceId);
         if (!client) {
@@ -1076,7 +1296,7 @@ async function sendMedia(instanceId, phone, base64Data, fileName, caption) {
         }
         const chatId = toWhatsAppChatId(phone, jidMap);
         if (!chatId) return false;
-        await markBotSending(instanceId, phone, chatId);
+        markerKey = await markBotSending(instanceId, phone, chatId);
 
         // Base64 мәтінінен таза суретті бөліп алу (data:image/jpeg;base64,... дегенді алып тастау)
         let cleanBase64 = base64Data;
@@ -1095,6 +1315,7 @@ async function sendMedia(instanceId, phone, base64Data, fileName, caption) {
             ack: Number(message?.ack || 0)
         };
     } catch (error) {
+        await releaseBotSending(markerKey);
         console.error(`❌ [MEDIA ERROR] ${instanceId}:`, error.message);
         return false;
     }
@@ -1165,6 +1386,18 @@ module.exports = {
         isChromiumProfileLockError,
         isChromiumResourceError,
         isConnectedState,
+        isQualifiedAudio,
+        deliveryStatusFromAck,
+        MAX_MEDIA_BASE64_LENGTH,
+        validateAudioBase64,
+        shouldRetryMediaError,
+        incrementLocalBotSend,
+        consumeLocalBotSend,
+        releaseLocalBotSend,
+        clearLocalBotSends() {
+            localBotSends.clear();
+        },
+        buildOperatorHistoryEntry,
         queueOutgoingText,
         clearRestartTimer,
         scheduleFlush,

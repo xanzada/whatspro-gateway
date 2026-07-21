@@ -34,16 +34,19 @@
   }
 
   function isAudio(item) {
-    var type = String(item && (item.mediaKind || item.type) || '').toLowerCase();
-    var mime = String(item && item.mediaType || '').toLowerCase();
-    return type === 'audio' || type === 'ptt' || mime.indexOf('audio/') === 0 || Boolean(item && item.audioMessage);
+    var mime = String(item && item.mediaType || '').trim().toLowerCase();
+    var role = String(item && item.role || '').trim().toLowerCase();
+    var type = String(item && item.type || '').trim().toLowerCase();
+    var system = role === 'system' || ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].indexOf(type) >= 0;
+    return Boolean(item && !system && item.hasMedia === true && /^audio\//.test(mime));
   }
 
   function receiptState(item) {
     var ack = item && (item.ack != null ? item.ack : (item.ackStatus != null ? item.ackStatus : item.status));
-    if (typeof ack === 'number') return ack >= 3 ? 'read' : 'sent';
+    if (typeof ack === 'number') return ack >= 3 ? 'read' : ack >= 2 ? 'delivered' : 'sent';
     ack = String(ack == null ? '' : ack).toLowerCase();
-    return ['read', 'played', '3', '4'].indexOf(ack) >= 0 ? 'read' : 'sent';
+    if (['read', 'played', '3', '4'].indexOf(ack) >= 0) return 'read';
+    return ['delivered', '2'].indexOf(ack) >= 0 ? 'delivered' : 'sent';
   }
 
   function messageParts(item) {

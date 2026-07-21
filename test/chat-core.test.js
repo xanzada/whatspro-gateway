@@ -18,16 +18,26 @@ test('message roles enforce client left and bot/operator outgoing semantics', ()
 });
 
 test('text and audio are split into independent render parts', () => {
-  assert.deepEqual(core.messageParts({ id: 'm1', text: 'caption', type: 'ptt' }), [
+  assert.deepEqual(core.messageParts({ id: 'm1', text: 'caption', type: 'ptt', hasMedia: true, mediaType: 'audio/ogg; codecs=opus' }), [
     { kind: 'text', text: 'caption' },
     { kind: 'audio', id: 'm1' }
   ]);
-  assert.equal(core.messageParts({ mediaData: 'base64', type: 'audio' }).length, 0);
+  assert.deepEqual(core.messageParts({ id: 'link', text: 'https://example.com', type: 'audio', hasMedia: false, mediaType: 'audio/ogg' }), [
+    { kind: 'text', text: 'https://example.com' }
+  ]);
+  assert.deepEqual(core.messageParts({ id: 'preview', hasMedia: true, type: 'ptt', mediaType: 'text/html' }), []);
+  assert.equal(core.isAudio({ hasMedia: true, mediaType: 'audio/ogg' }), true);
+  assert.equal(core.isAudio({ hasMedia: false, mediaType: 'audio/ogg' }), false);
+  assert.equal(core.isAudio({ hasMedia: true, mediaType: 'video/mp4', audioMessage: true }), false);
+  assert.equal(core.isAudio({ role: 'system', hasMedia: true, mediaType: 'audio/ogg' }), false);
+  assert.equal(core.isAudio({ type: 'notification_template', hasMedia: true, mediaType: 'audio/ogg' }), false);
 });
 
-test('receipt state maps WhatsApp read ACKs to read', () => {
-  assert.equal(core.receiptState({ ack: 2 }), 'sent');
+test('receipt state maps WhatsApp ACK progression monotonically', () => {
+  assert.equal(core.receiptState({ ack: 1 }), 'sent');
+  assert.equal(core.receiptState({ ack: 2 }), 'delivered');
   assert.equal(core.receiptState({ ack: 3 }), 'read');
+  assert.equal(core.receiptState({ status: 'delivered' }), 'delivered');
   assert.equal(core.receiptState({ status: 'played' }), 'read');
 });
 

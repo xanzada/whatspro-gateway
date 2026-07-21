@@ -26,8 +26,10 @@ test('chat routes and static assets serve the new operator UI', async t => {
 
   for (const asset of ['/chat.js', '/chat-core.js']) {
     const response = await fetch(base + asset);
+    const source = await response.text();
     assert.equal(response.status, 200, asset);
     assert.match(response.headers.get('content-type') || '', /javascript/);
+    if (asset === '/chat.js') assert.doesNotMatch(source, /location\.assign\([^)]*returnTo/);
   }
 
   const legacy = await fetch(base + '/?instance=prestige', { redirect: 'manual' });
@@ -36,4 +38,35 @@ test('chat routes and static assets serve the new operator UI', async t => {
 
   const protectedApi = await fetch(base + '/api/chat/inbox/prestige');
   assert.equal(protectedApi.status, 401);
+
+  const invalidTenant = await fetch(base + '/chat.html?instance=%28bad%2Ceq%2Cfilter%29');
+  assert.equal(invalidTenant.status, 400);
+
+  const previousPassword = process.env.WHATSPRO_PASSWORD;
+  delete process.env.WHATSPRO_PASSWORD;
+  const defaultLogin = await fetch(base + '/api/whatspro/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'change-me' })
+  });
+  assert.equal(defaultLogin.status, 503);
+  if (previousPassword == null) delete process.env.WHATSPRO_PASSWORD;
+  else process.env.WHATSPRO_PASSWORD = previousPassword;
+
+  const previousToken = process.env.WHATSPRO_API_TOKEN;
+  process.env.WHATSPRO_API_TOKEN = 'routing-test-token';
+  t.after(() => {
+    if (previousToken == null) delete process.env.WHATSPRO_API_TOKEN;
+    else process.env.WHATSPRO_API_TOKEN = previousToken;
+  });
+  const apiHeaders = { authorization: 'Bearer routing-test-token', 'content-type': 'application/json' };
+  const badText = await fetch(base + '/api/send', {
+    method: 'POST', headers: apiHeaders,
+    body: JSON.stringify({ instanceId: 'prestige', phone: '77001234567', text: { unsafe: true } })
+  });
+  assert.equal(badText.status, 400);
+  const badMedia = await fetch(base + '/api/send', {
+    method: 'POST', headers: apiHeaders,
+    body: JSON.stringify({ instanceId: 'prestige', phone: '77001234567', media: { base64: 'not base64!' } })
+  });
+  assert.equal(badMedia.status, 400);
 });

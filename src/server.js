@@ -16,8 +16,7 @@ const {
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
-const { markOperatorActive, OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
-const { getTenantChatConfig } = require('../services/nocodbConfig');
+const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 
@@ -36,6 +35,150 @@ const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
 const sseConnections = new Map();
 let sseConnectionTotal = 0;
 const loginAttempts = new Map();
+const operatorEffectJobs = new Map();
+const sendCompletionJobs = new Map();
+const liveSendWalPaths = new Set();
+let walRecoveryComplete = false;
+const SEND_LEASE_TTL_SECONDS = 24 * 60 * 60;
+const SEND_RESULT_TTL_SECONDS = 24 * 60 * 60;
+const OPERATOR_EFFECT_OUTBOX_KEY = 'chatwoot:operator-effects-outbox';
+const SEND_WAL_DIR = path.resolve(process.env.WHATSPRO_SEND_WAL_DIR || path.join(process.cwd(), '.whatspro-send-wal'));
+
+function isValidSendRequestId(value) {
+  return /^[A-Za-z0-9_-]{8,128}$/.test(String(value || ''));
+}
+
+function createSendIdempotency(redis, options = {}) {
+  const now = options.now || Date.now;
+  const local = new Map();
+
+  function pruneLocal() {
+    const timestamp = now();
+    for (const [key, item] of local) if (item.expiresAt <= timestamp) local.delete(key);
+  }
+
+  function keyFor(instanceId, phone, requestId) {
+    return `chatwoot:send-idempotency:${instanceId}:${phone}:${requestId}`;
+  }
+
+  async function begin(instanceId, phone, requestId, payloadHash = '') {
+    if (!isValidSendRequestId(requestId)) throw new Error('INVALID_REQUEST_ID');
+    pruneLocal();
+    const key = keyFor(instanceId, phone, requestId);
+    const localExisting = local.get(key);
+    if (localExisting && localExisting.payloadHash !== payloadHash) return { acquired: false, conflict: true };
+    if (localExisting?.response) return { acquired: false, response: localExisting.response, effectData: localExisting.effectData };
+    if (localExisting) return { acquired: false, inProgress: true };
+    const token = `pending:${crypto.randomBytes(16).toString('hex')}`;
+    const pendingValue = `${token}:${payloadHash}`;
+    if (redis.isOpen) {
+      try {
+        const acquired = await redis.sendCommand(['SET', key, pendingValue, 'NX', 'EX', String(SEND_LEASE_TTL_SECONDS)]);
+        if (acquired === 'OK') {
+          local.set(key, { token, payloadHash, expiresAt: now() + SEND_LEASE_TTL_SECONDS * 1000 });
+          return { acquired: true, backend: 'redis', key, token, pendingValue, payloadHash };
+        }
+        const existing = String(await redis.sendCommand(['GET', key]) || '');
+        if (existing.startsWith('done:')) {
+          try {
+            const completed = JSON.parse(existing.slice(5));
+            if (completed.payloadHash !== payloadHash) return { acquired: false, conflict: true };
+            return { acquired: false, response: completed.response, effectKey: completed.effectKey || '' };
+          } catch { /* treat malformed value as busy */ }
+        }
+        if (!existing.endsWith(`:${payloadHash}`)) return { acquired: false, conflict: true };
+        return { acquired: false, inProgress: true };
+      } catch { /* Redis outage falls through to the process-local guard. */ }
+    }
+    local.set(key, { token, payloadHash, expiresAt: now() + SEND_LEASE_TTL_SECONDS * 1000 });
+    return { acquired: true, backend: 'local', key, token, pendingValue, payloadHash };
+  }
+
+  async function complete(lease, response, effectData = null) {
+    const current = local.get(lease.key);
+    if (current && current.token !== lease.token) return false;
+    const expiresAt = now() + SEND_RESULT_TTL_SECONDS * 1000;
+    local.set(lease.key, { token: lease.token, payloadHash: lease.payloadHash, response, effectData, expiresAt });
+    if (lease.backend === 'redis' && !redis.isOpen) {
+      const latest = local.get(lease.key);
+      if (latest?.token === lease.token) local.delete(lease.key);
+      return false;
+    }
+    if (lease.backend === 'redis') {
+      const effectKey = effectData?.effectKey || '';
+      const completed = `done:${JSON.stringify({ payloadHash: lease.payloadHash, response, effectKey })}`;
+      const script = effectKey
+        ? "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]); redis.call('SET', KEYS[2], ARGV[4], 'EX', ARGV[3]); redis.call('ZADD', KEYS[3], ARGV[5], KEYS[2]); return 1 end return 0"
+        : "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]); return 1 end return 0";
+      const commandArgs = effectKey
+        ? ['EVAL', script, '3', lease.key, effectKey, OPERATOR_EFFECT_OUTBOX_KEY, lease.pendingValue, completed, String(SEND_RESULT_TTL_SECONDS), JSON.stringify(effectData.payload), String(now())]
+        : ['EVAL', script, '1', lease.key, lease.pendingValue, completed, String(SEND_RESULT_TTL_SECONDS)];
+      const changed = await redis.sendCommand(commandArgs).catch(() => 0);
+      if (Number(changed) !== 1) {
+        const latest = local.get(lease.key);
+        if (latest?.token === lease.token) local.delete(lease.key);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function renew(lease) {
+    const current = local.get(lease.key);
+    if (!current || current.token !== lease.token || current.response) return false;
+    current.expiresAt = now() + SEND_LEASE_TTL_SECONDS * 1000;
+    if (lease.backend !== 'redis' || !redis.isOpen) return true;
+    const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('EXPIRE', KEYS[1], ARGV[2]) end return 0";
+    return Number(await redis.sendCommand(['EVAL', script, '1', lease.key, lease.pendingValue, String(SEND_LEASE_TTL_SECONDS)]).catch(() => 0)) === 1;
+  }
+
+  async function release(lease) {
+    if (!lease?.acquired) return;
+    const existing = local.get(lease.key);
+    if (existing?.token === lease.token) local.delete(lease.key);
+    if (lease.backend === 'redis' && redis.isOpen) {
+      const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0";
+      await redis.sendCommand(['EVAL', script, '1', lease.key, lease.pendingValue]).catch(() => {});
+    }
+  }
+
+  return { begin, complete, release, renew };
+}
+
+const sendIdempotency = createSendIdempotency(redisClient);
+
+function sendWalPath(leaseKey) {
+  return path.join(SEND_WAL_DIR, `${crypto.createHash('sha256').update(String(leaseKey)).digest('hex')}.json`);
+}
+
+async function writeSendWal(record) {
+  await fs.mkdir(SEND_WAL_DIR, { recursive: true, mode: 0o700 });
+  const target = sendWalPath(record.lease.key);
+  const temporary = `${target}.${process.pid}.tmp`;
+  const handle = await fs.open(temporary, 'w', 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(record), 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(temporary, target);
+  let directory;
+  try {
+    directory = await fs.open(SEND_WAL_DIR, 'r');
+    await directory.sync();
+  } catch (error) {
+    const unsupportedOnWindows = process.platform === 'win32' && ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM'].includes(error.code);
+    if (!unsupportedOnWindows) throw error;
+  } finally {
+    if (directory) await directory.close();
+  }
+  return target;
+}
+
+async function removeSendWal(walPath) {
+  if (walPath) await fs.unlink(walPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+}
 
 const configuredProxyHops = String(process.env.TRUST_PROXY_HOPS || '').trim();
 app.set('trust proxy', /^\d+$/.test(configuredProxyHops) ? Number(configuredProxyHops) : false);
@@ -124,10 +267,9 @@ function publicApiBase(req) {
 
 async function renderChatHtml(req, res) {
   const instance = String(req.query.instance || '').trim();
-  const tenant = await getTenantChatConfig(instance);
+  if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   const config = {
-    ...tenant,
-    instance: tenant.instance || instance,
+    instance,
     apiBase: publicApiBase(req),
     endpoints: {
       inbox: '/api/chat/inbox',
@@ -317,6 +459,139 @@ async function readInboxEntries(instanceId, limit) {
   return chatStore.readInbox(instanceId, limit);
 }
 
+function remainingOperatorTtl(expiresAt, now = Date.now()) {
+  return Math.max(0, Math.ceil((Number(expiresAt || 0) - now) / 1000));
+}
+
+async function applyOperatorSendEffects(data) {
+  if (!redisClient.isOpen) throw new Error('REDIS_NOT_CONNECTED');
+  const { instanceId, phone, entry, expiresAt } = data;
+  const remainingTtl = remainingOperatorTtl(expiresAt);
+  const stored = await chatStore.appendMessageOnce(instanceId, phone, entry, { state: 'operator' });
+  if (stored.stale) return;
+  if (remainingTtl > 0) {
+    const lockScript = [
+      "local deletedAt = tonumber(redis.call('GET', KEYS[1]) or '0')",
+      'if deletedAt >= tonumber(ARGV[1]) then return 0 end',
+      "redis.call('SET', KEYS[2], 'operator_panel', 'EX', ARGV[2])",
+      "redis.call('SET', KEYS[3], 'muted_by_operator_panel', 'EX', ARGV[2])",
+      'return 1'
+    ].join('\n');
+    const locked = Number(await redisClient.sendCommand(['EVAL', lockScript, '3', `chatwoot:deleted:${instanceId}:${phone}`,
+      operatorActiveKey(instanceId, phone), `mute:${instanceId}:${phone}`, String(entry.createdAt), String(remainingTtl)]));
+    if (locked !== 1) return;
+  }
+  const events = [publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state: 'operator' })];
+  if (remainingTtl > 0) events.push(publishChatEvent({ type: 'lock.changed', instanceId, phone, ttl: remainingTtl, expiresAt }));
+  await Promise.all(events);
+}
+
+async function loadOperatorEffect(effectKey) {
+  if (!effectKey || !redisClient.isOpen) return null;
+  const raw = await redisClient.sendCommand(['GET', effectKey]).catch(() => '');
+  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+async function clearOperatorEffect(effectKey) {
+  if (!effectKey || !redisClient.isOpen) return;
+  await Promise.all([
+    redisClient.sendCommand(['DEL', effectKey]).catch(() => 0),
+    redisClient.sendCommand(['ZREM', OPERATOR_EFFECT_OUTBOX_KEY, effectKey]).catch(() => 0)
+  ]);
+}
+
+function scheduleOperatorSendEffects(data, effectKey = '') {
+  const jobKey = `${data.instanceId}:${data.phone}:${data.entry.id}`;
+  if (operatorEffectJobs.has(jobKey)) return operatorEffectJobs.get(jobKey);
+  const retryDelays = [0, 100, 300, 1000, 3000, 5000, 10000, 20000];
+  const job = (async () => {
+    let lastError;
+    for (const waitMs of retryDelays) {
+      if (waitMs) await new Promise(resolve => setTimeout(resolve, waitMs));
+      try {
+        await applyOperatorSendEffects(data);
+        await clearOperatorEffect(effectKey);
+        return true;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    console.error(`[CHAT SEND SIDE EFFECT] ${data.instanceId}/${data.phone}:`, lastError?.message || lastError);
+    return false;
+  })().finally(() => operatorEffectJobs.delete(jobKey));
+  operatorEffectJobs.set(jobKey, job);
+  return job;
+}
+
+function scheduleSendCompletion(lease, response, effectData, walPath = '') {
+  if (sendCompletionJobs.has(lease.key)) return sendCompletionJobs.get(lease.key);
+  const deadline = Date.now() + SEND_LEASE_TTL_SECONDS * 1000;
+  const job = (async () => {
+    while (Date.now() < deadline) {
+      if (await sendIdempotency.complete(lease, response, effectData)) {
+        await removeSendWal(walPath);
+        scheduleOperatorSendEffects(effectData.payload, effectData.effectKey);
+        return true;
+      }
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, 2000);
+        timer.unref?.();
+      });
+    }
+    console.error(`[CHAT SEND] ${effectData.payload.instanceId}/${effectData.payload.phone}: durable completion deadline expired.`);
+    return false;
+  })().finally(() => sendCompletionJobs.delete(lease.key));
+  sendCompletionJobs.set(lease.key, job);
+  return job;
+}
+
+async function drainOperatorEffectOutbox() {
+  if (!redisClient.isOpen) return;
+  const effectKeys = await redisClient.sendCommand(['ZRANGE', OPERATOR_EFFECT_OUTBOX_KEY, '0', '99']).catch(() => []);
+  for (const effectKey of effectKeys) {
+    const data = await loadOperatorEffect(effectKey);
+    if (!data) await clearOperatorEffect(effectKey);
+    else scheduleOperatorSendEffects(data, effectKey);
+  }
+}
+
+async function recoverSendWal() {
+  if (!redisClient.isOpen) return;
+  const files = await fs.readdir(SEND_WAL_DIR).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
+  let ambiguousIntent = false;
+  for (const file of files.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+    const walPath = path.join(SEND_WAL_DIR, file);
+    let record;
+    try { record = JSON.parse(await fs.readFile(walPath, 'utf8')); } catch { continue; }
+    if (record?.phase === 'intent' && liveSendWalPaths.has(walPath)) continue;
+    if (record?.phase === 'intent') {
+      ambiguousIntent = true;
+      continue;
+    }
+    if (!record?.lease?.key || !record?.response || !record?.effectData?.effectKey) continue;
+    const current = String(await redisClient.sendCommand(['GET', record.lease.key]).catch(() => ''));
+    if (current.startsWith('done:')) {
+      await removeSendWal(walPath);
+      continue;
+    }
+    if (current === record.lease.pendingValue) {
+      scheduleSendCompletion(record.lease, record.response, record.effectData, walPath);
+      continue;
+    }
+    if (!current) {
+      const completed = `done:${JSON.stringify({ payloadHash: record.lease.payloadHash, response: record.response, effectKey: record.effectData.effectKey })}`;
+      const script = "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[2]); redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2]); return 1 end return 0";
+      const recovered = Number(await redisClient.sendCommand(['EVAL', script, '3', record.lease.key, record.effectData.effectKey,
+        OPERATOR_EFFECT_OUTBOX_KEY, completed, String(SEND_RESULT_TTL_SECONDS), JSON.stringify(record.effectData.payload), String(Date.now())]).catch(() => 0));
+      if (recovered === 1) {
+        await removeSendWal(walPath);
+        scheduleOperatorSendEffects(record.effectData.payload, record.effectData.effectKey);
+      }
+    }
+  }
+  if (ambiguousIntent) throw new Error('AMBIGUOUS_SEND_INTENT_REQUIRES_RECONCILIATION');
+}
+
 async function sweepExpiredChatIndexes() {
   if (!redisClient.isOpen) return;
   for await (const key of redisClient.scanIterator({ MATCH: 'chatwoot:expiry:*', COUNT: 100 })) {
@@ -373,7 +648,7 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
 // The operator shell is public so the canonical URL and its static assets can
 // always render. Data and mutation endpoints remain protected by
-// requireUiOrApi; chat.js redirects unauthenticated operators to login.
+// requireUiOrApi and surface their own authorization errors inside the frame.
 app.get('/chat.html', (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
@@ -404,6 +679,11 @@ app.get('/api/whatspro/session', (req, res) => {
 });
 
 app.post('/api/whatspro/login', (req, res) => {
+  const configuredUser = String(process.env.WHATSPRO_USER || 'admin');
+  const configuredPassword = String(process.env.WHATSPRO_PASSWORD || '');
+  if (configuredPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(configuredPassword.toLowerCase())) {
+    return res.status(503).json({ error: 'LOGIN_NOT_CONFIGURED' });
+  }
   const username = String(req.body?.username || '');
   const password = String(req.body?.password || '');
   if (username.length > 64 || password.length > 256) return res.status(400).json({ error: 'INVALID_CREDENTIALS' });
@@ -421,7 +701,7 @@ app.post('/api/whatspro/login', (req, res) => {
     res.set('Retry-After', String(Math.max(1, Math.ceil((attempt.resetAt - Date.now()) / 1000))));
     return res.status(429).json({ error: 'TOO_MANY_LOGIN_ATTEMPTS' });
   }
-  if (!safeEqual(username, process.env.WHATSPRO_USER || 'admin') || !safeEqual(password, process.env.WHATSPRO_PASSWORD || 'change-me')) {
+  if (!safeEqual(username, configuredUser) || !safeEqual(password, configuredPassword)) {
     attempt.count += 1;
     loginAttempts.set(attemptKey, attempt);
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
@@ -740,43 +1020,118 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
 app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = String(req.params.phone || '').replace(/\D/g, '');
-    const { text } = req.body || {};
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    const requestId = String(req.body?.requestId || '');
 
     if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
     if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
-    if (!text) return res.status(400).json({ error: 'TEXT_REQUIRED' });
+    if (!text || text.length > 4096) return res.status(400).json({ error: 'TEXT_REQUIRED' });
+    if (!isValidSendRequestId(requestId)) return res.status(400).json({ error: 'BAD_REQUEST_ID' });
+    if (!walRecoveryComplete) return res.status(503).json({ error: 'SEND_RECOVERY_NOT_READY' });
+    if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+    const operationStartedAt = Date.now();
 
-    const sendResult = await sendWhatsAppText(instanceId, phone, text);
-    const ok = Boolean(sendResult?.success || sendResult);
-    
-    if (ok) {
-        await Promise.all([
-            markOperatorActive(instanceId, phone, 'operator_panel'),
-            redisClient.isOpen ? redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_operator_panel', 'EX', String(OPERATOR_ACTIVE_SECONDS)]).catch(() => null) : Promise.resolve(null)
-        ]);
-        const saved = await saveChatHistoryEntry(instanceId, phone, {
-            id: sendResult?.messageId || `operator:${Date.now()}:${phone}`,
-            instanceId,
-            phone,
-            direction: 'outgoing',
-            fromMe: true,
-            role: 'operator',
-            text,
-            body: text,
-            type: 'chat',
-            deliveryStatus: 'sent',
-            source: 'operator_panel'
-        });
-        await publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: saved.id, state: 'operator' }).catch(() => {});
+    const effectDataFor = (response, deliveryStatus = 'sent') => ({
+      instanceId,
+      phone,
+      expiresAt: Date.now() + OPERATOR_ACTIVE_SECONDS * 1000,
+      entry: {
+        id: String(response?.messageId || `operator:${requestId}`),
+        instanceId,
+        phone,
+        direction: 'outgoing',
+        fromMe: true,
+        role: 'operator',
+        text,
+        body: text,
+        type: 'chat',
+        createdAt: operationStartedAt,
+        deliveryStatus,
+        source: 'operator_panel'
+      }
+    });
+
+    const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
+    const idempotencyKey = `chatwoot:send-idempotency:${instanceId}:${phone}:${requestId}`;
+    try {
+      const priorWal = JSON.parse(await fs.readFile(sendWalPath(idempotencyKey), 'utf8'));
+      if (priorWal?.phase === 'intent') return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
+    } catch (error) {
+      if (error.code !== 'ENOENT') return res.status(503).json({ error: 'SEND_RECOVERY_CORRUPT' });
+    }
+    const lease = await sendIdempotency.begin(instanceId, phone, requestId, payloadHash);
+    if (lease.acquired && lease.backend !== 'redis') {
+      await sendIdempotency.release(lease);
+      return res.status(503).json({ error: 'REDIS_IDEMPOTENCY_UNAVAILABLE' });
+    }
+    if (lease.conflict) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+    if (lease.response) {
+      const replayEffect = lease.effectData?.payload || await loadOperatorEffect(lease.effectKey);
+      if (replayEffect) scheduleOperatorSendEffects(replayEffect, lease.effectKey || lease.effectData?.effectKey || '');
+      return res.json({ ...lease.response, replayed: true });
+    }
+    if (!lease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
+
+    let walPath;
+    try {
+      walPath = await writeSendWal({ phase: 'intent', lease, instanceId, phone, text, operationStartedAt });
+      liveSendWalPaths.add(walPath);
+    } catch (error) {
+      await sendIdempotency.release(lease);
+      console.error(`[CHAT SEND WAL] ${instanceId}/${phone}:`, error?.message || error);
+      return res.status(507).json({ error: 'SEND_WAL_UNAVAILABLE' });
     }
 
-    const expiresAt = ok ? Date.now() + OPERATOR_ACTIVE_SECONDS * 1000 : 0;
-    res.status(ok ? 200 : 503).json({
-      success: Boolean(ok),
+    let sendResult;
+    const renewTimer = setInterval(() => sendIdempotency.renew(lease).catch(() => {}), 30000);
+    renewTimer.unref?.();
+    try {
+      sendResult = await sendWhatsAppText(instanceId, phone, text, { skipQueue: true });
+    } catch (error) {
+      liveSendWalPaths.delete(walPath);
+      walRecoveryComplete = false;
+      console.error(`[CHAT SEND] ${instanceId}/${phone}:`, error?.message || error);
+      return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
+    } finally {
+      clearInterval(renewTimer);
+    }
+    const ok = sendResult && typeof sendResult === 'object' ? sendResult.success === true : Boolean(sendResult);
+    if (!ok && sendResult?.outcomeUnknown) {
+      liveSendWalPaths.delete(walPath);
+      walRecoveryComplete = false;
+      return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
+    }
+    if (!ok) {
+      await sendIdempotency.release(lease);
+      await removeSendWal(walPath).catch(() => {});
+      liveSendWalPaths.delete(walPath);
+      return res.status(503).json({ success: false, messageId: '', ttl: 0, expiresAt: 0 });
+    }
+
+    const expiresAt = Date.now() + OPERATOR_ACTIVE_SECONDS * 1000;
+    const responsePayload = {
+      success: true,
       messageId: sendResult?.messageId || '',
-      ttl: ok ? OPERATOR_ACTIVE_SECONDS : 0,
+      ttl: OPERATOR_ACTIVE_SECONDS,
       expiresAt
-    });
+    };
+    const deliveryStatus = Number(sendResult?.ack) >= 3 ? 'read' : Number(sendResult?.ack) >= 2 ? 'delivered' : 'sent';
+    const effectPayload = effectDataFor(responsePayload, deliveryStatus);
+    const effectKey = `chatwoot:operator-effect:${instanceId}:${phone}:${requestId}`;
+    const effectData = { effectKey, payload: effectPayload };
+    try { walPath = await writeSendWal({ phase: 'accepted', lease, response: responsePayload, effectData }); }
+    catch (error) { console.error(`[CHAT SEND WAL] accepted-state update failed ${instanceId}/${phone}:`, error?.message || error); }
+    const completed = await sendIdempotency.complete(lease, responsePayload, effectData);
+    if (completed) {
+      await removeSendWal(walPath).catch(error => console.error('[CHAT SEND WAL] cleanup failed:', error.message));
+      liveSendWalPaths.delete(walPath);
+    }
+    if (!completed) console.error(`[CHAT SEND] ${instanceId}/${phone}: idempotency lease ownership was lost after WhatsApp accepted the message.`);
+    const effectsJob = completed
+      ? scheduleOperatorSendEffects(effectPayload, effectKey)
+      : scheduleSendCompletion(lease, responsePayload, effectData, walPath).finally(() => liveSendWalPaths.delete(walPath));
+    await Promise.race([effectsJob, new Promise(resolve => setTimeout(resolve, 1000))]);
+    res.status(completed ? 200 : 202).json({ ...responsePayload, persistencePending: !completed });
 });
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
@@ -852,7 +1207,12 @@ app.post('/api/wa/logout', requireUiOrApi, async (req, res) => {
 });
 
 app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
-  const { instanceId, phone, text, media } = req.body || {};
+  const { instanceId, phone } = req.body || {};
+  if (req.body?.text != null && typeof req.body.text !== 'string') return res.status(400).json({ error: 'INVALID_TEXT' });
+  const text = String(req.body?.text || '').trim();
+  if (text.length > 4096) return res.status(400).json({ error: 'TEXT_TOO_LONG' });
+  const media = req.body?.media;
+  if (media != null && (!media || typeof media !== 'object' || Array.isArray(media))) return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
   
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!phone) return res.status(400).json({ error: 'PHONE_REQUIRED' });
@@ -863,20 +1223,37 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
 
   let sendResult = { success: true };
+  let effectiveMediaType = '';
+  let audioMediaData = '';
   
   // 2-ӨЗГЕРІС: Медиа жіберу логикасын қауіпсіздендіру және cleanPhone қолдану
   if (media) {
-    if (media.base64) {
-      if (String(media.base64).length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 128) {
-        return res.status(413).json({ error: 'MEDIA_TOO_LARGE' });
-      }
-      sendResult = await sendMedia(instanceId, cleanPhone, media.base64, media.fileName || media.mimeType || 'file', media.caption || text || '');
-    } else {
-      console.warn(`[API:SEND] Warning: Media object received but missing 'base64' property for phone ${cleanPhone}`);
-      // Егер медиа қате болса, бірақ мәтін болса, құламай мәтінді жібереміз
-      if (text) sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
-      else return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
+    if (typeof media.base64 !== 'string') return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
+    if (media.caption != null && typeof media.caption !== 'string') return res.status(400).json({ error: 'INVALID_MEDIA_CAPTION' });
+    if (media.fileName != null && typeof media.fileName !== 'string') return res.status(400).json({ error: 'INVALID_MEDIA_FILENAME' });
+    if (media.mimeType != null && typeof media.mimeType !== 'string') return res.status(400).json({ error: 'INVALID_MEDIA_TYPE' });
+    const caption = String(media.caption || text || '').trim();
+    const fileName = String(media.fileName || 'file').trim();
+    const dataMatch = media.base64.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+    if (media.base64.includes(';base64,') && !dataMatch) return res.status(400).json({ error: 'INVALID_MEDIA_BASE64' });
+    const declaredMime = String(media.mimeType || '').split(';')[0].trim().toLowerCase();
+    const embeddedMime = String(dataMatch?.[1] || '').trim().toLowerCase();
+    const mimeType = declaredMime || embeddedMime;
+    if (declaredMime && embeddedMime && declaredMime !== embeddedMime) return res.status(400).json({ error: 'MEDIA_TYPE_MISMATCH' });
+    if (!mimeType) return res.status(400).json({ error: 'MEDIA_TYPE_REQUIRED' });
+    const encoded = String(dataMatch?.[2] || media.base64).replace(/\s+/g, '');
+    if (caption.length > 4096) return res.status(400).json({ error: 'MEDIA_CAPTION_TOO_LONG' });
+    if (!fileName || fileName.length > 128 || /[\\/\0-\x1f]/.test(fileName)) return res.status(400).json({ error: 'INVALID_MEDIA_FILENAME' });
+    if (mimeType && !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mimeType)) return res.status(400).json({ error: 'INVALID_MEDIA_TYPE' });
+    if (!encoded || encoded.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+      return res.status(encoded.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 ? 413 : 400).json({ error: 'INVALID_MEDIA_BASE64' });
     }
+    const decodedLength = Buffer.from(encoded, 'base64').length;
+    if (!decodedLength || decodedLength > MAX_MEDIA_BYTES) return res.status(decodedLength > MAX_MEDIA_BYTES ? 413 : 400).json({ error: 'INVALID_MEDIA_BASE64' });
+    const mediaPayload = mimeType ? `data:${mimeType};base64,${encoded}` : encoded;
+    effectiveMediaType = mimeType;
+    if (mimeType.startsWith('audio/')) audioMediaData = encoded;
+    sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption);
   } else if (text) {
     sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
   } else {
@@ -892,16 +1269,16 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
       direction: 'outgoing',
       fromMe: true,
       role: 'assistant',
-      text: text || '',
-      body: text || '',
-      type: media ? 'audio' : 'chat',
-      hasMedia: Boolean(media),
-      mediaData: (media && media.base64) ? media.base64 : '',
-      mediaType: (media && media.mimeType) ? media.mimeType : 'audio/ogg',
+      text,
+      body: text,
+      type: audioMediaData ? 'audio' : media ? 'media' : 'chat',
+      hasMedia: Boolean(audioMediaData),
+      mediaData: audioMediaData,
+      mediaType: audioMediaData ? effectiveMediaType : '',
       deliveryStatus: 'sent',
       source: 'api_send'
     });
-    await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved.id }).catch(() => {});
+    await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved?.id || sendResult?.messageId || '' }).catch(() => {});
   }
 
   res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
@@ -948,10 +1325,26 @@ async function boot() {
 
   await connectRedis();
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
+  try {
+    await recoverSendWal();
+    walRecoveryComplete = true;
+  } catch (error) {
+    walRecoveryComplete = false;
+    console.warn('[CHAT SEND WAL] initial recovery failed:', error.message);
+  }
+  await drainOperatorEffectOutbox().catch(error => console.warn('[CHAT EFFECTS] initial drain failed:', error.message));
   const expiryTimer = setInterval(() => {
     sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] sweep failed:', error.message));
   }, 60000);
   expiryTimer.unref();
+  const effectTimer = setInterval(() => {
+    recoverSendWal().then(() => { walRecoveryComplete = true; }).catch(error => {
+      walRecoveryComplete = false;
+      console.warn('[CHAT SEND WAL] recovery failed:', error.message);
+    });
+    drainOperatorEffectOutbox().catch(error => console.warn('[CHAT EFFECTS] drain failed:', error.message));
+  }, 5000);
+  effectTimer.unref();
   
   console.log('[WhatsPro] Сервер қосылды. Барлық сақталған сессиялар автоматты түрде іске қосылады...');
   try {
@@ -983,4 +1376,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, boot, renderChatHtml };
+module.exports = {
+  app,
+  boot,
+  renderChatHtml,
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl }
+};

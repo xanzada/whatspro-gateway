@@ -18,6 +18,8 @@ const keys = {
   viewed: instanceId => `chatwoot:viewed:${instanceId}`,
   media: (instanceId, messageId) => `chatwoot:media:${instanceId}:${messageId}`,
   mediaIds: (instanceId, phone) => `chatwoot:media-ids:${instanceId}:${phone}`,
+  messageIds: (instanceId, phone) => `chatwoot:message-ids:${instanceId}:${phone}`,
+  deleted: (instanceId, phone) => `chatwoot:deleted:${instanceId}:${phone}`,
   receipts: (instanceId, phone) => `chatwoot:receipts:${instanceId}:${phone}`,
   expiry: instanceId => `chatwoot:expiry:${instanceId}`,
   operator: (instanceId, phone) => `operator_active:${instanceId}:${phone}`,
@@ -113,7 +115,7 @@ function createChatStore(redis, options = {}) {
     const ids = await mediaIds(instanceId, phone, history);
     const chatKeys = [
       keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
-      keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.receipts(instanceId, phone)
+      keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.messageIds(instanceId, phone), keys.receipts(instanceId, phone)
     ];
     await Promise.all([
       command(['ZADD', keys.expiry(instanceId), String(now() + ttl * 1000), phone]),
@@ -155,12 +157,42 @@ function createChatStore(redis, options = {}) {
     await ensureInboxSortedSet(instanceId);
     await Promise.all([
       command(['RPUSH', keys.history(instanceId, phone), JSON.stringify(normalized)]),
+      normalized.id ? command(['SADD', keys.messageIds(instanceId, phone), String(normalized.id)]) : Promise.resolve(0),
       command(['ZADD', keys.inbox(instanceId), String(normalized.createdAt), phone])
     ]);
     if (options.state) await setState(instanceId, phone, options.state);
     const ttl = await ttlFor(instanceId, phone);
     await applyTtl(instanceId, phone, ttl);
     return normalized;
+  }
+
+  async function appendMessageOnce(instanceId, rawPhone, entry, options = {}) {
+    const phone = normalizePhone(rawPhone);
+    if (!isPhone(phone) || !entry?.id) throw new Error('INVALID_CHAT_MESSAGE');
+    const createdAt = Number(entry.createdAt || entry.timestamp || now());
+    const normalized = cleanEntry({ ...entry, instanceId, phone, createdAt }, now);
+    await ensureInboxSortedSet(instanceId);
+    const state = CHAT_STATES.has(options.state) ? options.state : await getState(instanceId, phone);
+    const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    const script = [
+      "local deletedAt = tonumber(redis.call('GET', KEYS[3]) or '0')",
+      'if deletedAt >= tonumber(ARGV[3]) then return -1 end',
+      "local inserted = redis.call('SADD', KEYS[2], ARGV[1])",
+      "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]) end",
+      "redis.call('ZADD', KEYS[4], ARGV[3], ARGV[4])",
+      "redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[6])",
+      "redis.call('ZADD', KEYS[6], ARGV[7], ARGV[4])",
+      "redis.call('EXPIRE', KEYS[1], ARGV[6])",
+      "redis.call('EXPIRE', KEYS[2], ARGV[6])",
+      "if ARGV[5] ~= 'archive' then redis.call('DEL', KEYS[7]); redis.call('SREM', KEYS[8], ARGV[4]) end",
+      'return inserted'
+    ].join('\n');
+    const result = Number(await command(['EVAL', script, '8', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
+      keys.deleted(instanceId, phone), keys.inbox(instanceId), keys.state(instanceId, phone), keys.expiry(instanceId),
+      keys.archiveMarker(instanceId, phone), keys.archive(instanceId), String(normalized.id), JSON.stringify(normalized),
+      String(normalized.createdAt), phone, state, String(ttl), String(now() + ttl * 1000)]));
+    if (result < 0) return { ...normalized, inserted: false, stale: true };
+    return { ...normalized, inserted: result === 1, stale: false };
   }
 
   async function getHistory(instanceId, rawPhone, limit = 1000) {
@@ -358,23 +390,28 @@ function createChatStore(redis, options = {}) {
     } else if (normalizedAction === 'delete') {
       const history = await getHistory(instanceId, phone, 5000);
       const ids = await mediaIds(instanceId, phone, history);
-      await Promise.all([
-        command(['DEL', keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
-          keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.receipts(instanceId, phone),
-          keys.operator(instanceId, phone), keys.mute(instanceId, phone)]),
-        command(['ZREM', keys.inbox(instanceId), phone], 0),
-        command(['ZREM', keys.viewed(instanceId), phone], 0),
-        command(['ZREM', keys.expiry(instanceId), phone], 0),
-        command(['SREM', keys.archive(instanceId), phone], 0),
-        ...ids.map(id => command(['DEL', keys.media(instanceId, id)], 0))
-      ]);
+      const deleteScript = [
+        "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
+        "for i = 2, 10 do redis.call('DEL', KEYS[i]) end",
+        "redis.call('ZREM', KEYS[11], ARGV[1])",
+        "redis.call('ZREM', KEYS[12], ARGV[1])",
+        "redis.call('ZREM', KEYS[13], ARGV[1])",
+        "redis.call('SREM', KEYS[14], ARGV[1])",
+        'return 1'
+      ].join('\n');
+      await command(['EVAL', deleteScript, '14', keys.deleted(instanceId, phone), keys.history(instanceId, phone),
+        keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone),
+        keys.mediaIds(instanceId, phone), keys.messageIds(instanceId, phone), keys.receipts(instanceId, phone),
+        keys.operator(instanceId, phone), keys.mute(instanceId, phone), keys.inbox(instanceId), keys.viewed(instanceId),
+        keys.expiry(instanceId), keys.archive(instanceId), phone, String(now()), String(ARCHIVE_TTL_SECONDS)]);
+      await Promise.all(ids.map(id => command(['DEL', keys.media(instanceId, id)], 0)));
     } else {
       throw new Error('INVALID_CHAT_ACTION');
     }
     return normalizedAction;
   }
 
-  return { appendMessage, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, keys };
+  return { appendMessage, appendMessageOnce, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, keys };
 }
 
 const chatStore = createChatStore(redisClient);
@@ -387,6 +424,7 @@ module.exports = {
   createChatStore,
   chatStore,
   appendMessage: chatStore.appendMessage,
+  appendMessageOnce: chatStore.appendMessageOnce,
   updateMessageReceipt: chatStore.updateMessageReceipt,
   storeMedia: chatStore.storeMedia,
   readMedia: chatStore.readMedia,

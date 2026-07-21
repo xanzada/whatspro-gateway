@@ -17,7 +17,6 @@
 
   var apiBase = safeApiBase(config.apiBase);
   var chatToken = String(config.chatToken || '');
-  var authRedirectStarted = false;
   var endpoints = Object.assign({
     inbox: '/api/chat/inbox', history: '/api/chat/history', send: '/api/chat/send',
     media: '/api/chat/media', lock: '/api/chat/operator-lock', action: '/api/chat/action',
@@ -70,7 +69,7 @@
     inboxBusy: false, historyBusy: false, inboxDirty: false, historyDirty: false, actionBusy: false, sending: false,
     inboxSignature: '', historySignature: '', lockUntil: 0,
     pollTimer: 0, lockTimer: 0, reconnectTimer: 0, eventAbort: null, eventFailures: 0,
-    eventRefreshTimer: 0, toastTimer: 0, mediaAbort: null, audioUrls: new Map()
+    eventRefreshTimer: 0, toastTimer: 0, mediaAbort: null, audioUrls: new Map(), retrySend: null
   };
 
   function t(key) { return dictionary[state.lang][key] == null ? key : dictionary[state.lang][key]; }
@@ -85,11 +84,6 @@
     }));
     var data = await response.json().catch(function () { return {}; });
     if (!response.ok) {
-      if (response.status === 401 && !authRedirectStarted) {
-        authRedirectStarted = true;
-        var returnTo = location.pathname + location.search;
-        location.assign('/?returnTo=' + encodeURIComponent(returnTo));
-      }
       throw new Error(data.error || 'HTTP_' + response.status);
     }
     return data;
@@ -206,8 +200,8 @@
 
   function renderReceipt(item, role) {
     if (role !== 'bot' && role !== 'operator') return '';
-    var read = core.receiptState({ ack: item.ack, ackStatus: item.ackStatus, status: item.deliveryStatus || item.status });
-    return '<span class="ticks ' + read + '" aria-label="' + read + '">' + (read === 'read' ? '✓✓' : '✓') + '</span>';
+    var receipt = core.receiptState({ ack: item.ack, ackStatus: item.ackStatus, status: item.deliveryStatus || item.status });
+    return '<span class="ticks ' + receipt + '" aria-label="' + receipt + '">' + (receipt === 'sent' ? '✓' : '✓✓') + '</span>';
   }
 
   function messageBubble(item, part) {
@@ -299,7 +293,7 @@
         });
         if (!response.ok) throw new Error('MEDIA_' + response.status);
         var blob = await response.blob();
-        if (!blob.size) throw new Error('EMPTY_MEDIA');
+        if (!blob.size || !/^audio\//i.test(blob.type || '')) throw new Error('INVALID_AUDIO_MEDIA');
         var url = URL.createObjectURL(blob); state.audioUrls.set(id, url);
         bindAudio(wrapper, wrapper.querySelector('audio'), url);
       } catch (error) {
@@ -415,11 +409,23 @@
   async function sendMessage() {
     var text = el.messageInput.value.trim();
     if (!text || !state.activePhone || state.sending) return;
-    var phone = state.activePhone; state.sending = true; el.messageInput.value = ''; updateComposer();
+    var phone = state.activePhone;
+    var retry = state.retrySend;
+    var requestId = retry && retry.phone === phone && retry.text === text ? retry.requestId
+      : (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    state.retrySend = { phone: phone, text: text, requestId: requestId };
+    state.sending = true;
+    el.messageInput.disabled = true;
+    el.sendBtn.disabled = true;
+    el.messageInput.value = '';
+    updateComposer();
     state.history.push({ id: 'pending-' + Date.now(), role: 'operator', source: 'operator_panel', direction: 'outgoing', text: text, createdAt: Date.now(), deliveryStatus: 'sent' });
     renderHistory(true);
     try {
-      var result = await postJson(endpoint('send', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), { text: text });
+      var result = await postJson(endpoint('send', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), { text: text, requestId: requestId });
+      state.retrySend = null;
       var lockResult = result && (result.lock || result);
       setLock(lockResult && (lockResult.expiresAt || lockResult.ttl) ? lockResult : { ttl: 60 });
       state.historySignature = ''; state.inboxSignature = '';
@@ -498,11 +504,29 @@
     el.sendBtn.addEventListener('click', sendMessage);
     el.messageInput.addEventListener('input', function () { el.messageInput.style.height = 'auto'; el.messageInput.style.height = Math.min(120, el.messageInput.scrollHeight) + 'px'; updateComposer(); });
     el.messageInput.addEventListener('keydown', function (event) { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } });
+    el.messageInput.addEventListener('focus', function () { setTimeout(syncVisualViewport, 0); });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncVisualViewport);
+      window.visualViewport.addEventListener('scroll', syncVisualViewport);
+    }
+    window.addEventListener('resize', syncVisualViewport);
+    window.addEventListener('orientationchange', syncVisualViewport);
     window.addEventListener('beforeunload', function () { revokeAudioUrls(); if (state.eventAbort) state.eventAbort.abort(); });
   }
 
+  function syncVisualViewport() {
+    var viewport = window.visualViewport;
+    var height = viewport ? viewport.height : window.innerHeight;
+    var top = viewport ? viewport.offsetTop : 0;
+    document.documentElement.style.setProperty('--app-height', Math.max(1, Math.round(height)) + 'px');
+    document.documentElement.style.setProperty('--app-top', Math.max(0, Math.round(top)) + 'px');
+    if (document.activeElement === el.messageInput) {
+      requestAnimationFrame(function () { el.messageInput.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
+    }
+  }
+
   function start() {
-    renderStaticText(); bindEvents(); renderTabs(); renderHeader(); emptyChat(); refreshAll(false); connectEvents();
+    syncVisualViewport(); renderStaticText(); bindEvents(); renderTabs(); renderHeader(); emptyChat(); refreshAll(false); connectEvents();
     state.pollTimer = setInterval(function () { loadInbox(false); if (state.activePhone) { loadHistory(false, false); loadLock(); } }, 5000);
     state.lockTimer = setInterval(renderLock, 250);
   }

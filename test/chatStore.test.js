@@ -72,6 +72,35 @@ class FakeRedis {
     if (command === 'SMEMBERS') return value?.type === 'set' ? [...value.value] : [];
     if (command === 'SISMEMBER') return value?.type === 'set' && value.value.has(args[2]) ? 1 : 0;
     if (command === 'RENAME') { this.data.set(args[2], value); this.data.delete(key); return 'OK'; }
+    if (command === 'EVAL' && args[2] === '14') {
+      const deletedKey = args[3]; const member = args[17]; const deletedAt = args[18]; const ttl = Number(args[19]);
+      this.data.set(deletedKey, { type: 'string', value: deletedAt }); this.expires.set(deletedKey, ttl);
+      for (const item of args.slice(4, 13)) { this.data.delete(item); this.expires.delete(item); }
+      for (const item of args.slice(13, 16)) this.data.get(item)?.value?.delete(member);
+      this.data.get(args[16])?.value?.delete(member);
+      return 1;
+    }
+    if (command === 'EVAL' && args[2] === '8' && args[1].includes("SADD")) {
+      const historyKey = args[3]; const idsKey = args[4]; const deletedKey = args[5];
+      const messageId = args[11]; const json = args[12]; const createdAt = Number(args[13]);
+      if (Number(this.data.get(deletedKey)?.value || 0) >= createdAt) return -1;
+      const ids = this.data.get(idsKey) || { type: 'set', value: new Set() };
+      const inserted = !ids.value.has(messageId);
+      if (inserted) {
+        ids.value.add(messageId); this.data.set(idsKey, ids);
+        const history = this.data.get(historyKey) || { type: 'list', value: [] };
+        history.value.push(json); this.data.set(historyKey, history);
+      }
+      const phone = args[14]; const state = args[15]; const ttl = Number(args[16]);
+      const inbox = this.data.get(args[6]) || { type: 'zset', value: new Map() };
+      inbox.value.set(phone, createdAt); this.data.set(args[6], inbox);
+      this.data.set(args[7], { type: 'string', value: state }); this.expires.set(args[7], ttl);
+      const expiry = this.data.get(args[8]) || { type: 'zset', value: new Map() };
+      expiry.value.set(phone, Number(args[17])); this.data.set(args[8], expiry);
+      this.expires.set(historyKey, ttl); this.expires.set(idsKey, ttl);
+      if (state !== 'archive') { this.data.delete(args[9]); this.data.get(args[10])?.value?.delete(phone); }
+      return inserted ? 1 : 0;
+    }
     throw new Error(`Unsupported command ${command}`);
   }
 
@@ -188,4 +217,24 @@ test('receipts are monotonic and cannot recreate a deleted chat', async () => {
   await store.applyAction('acme', '77001234567', 'delete');
   assert.equal(await store.updateMessageReceipt('acme', '77001234567', 'out1', 'read'), false);
   assert.equal(redis.data.has('chatwoot:receipts:acme:77001234567'), false);
+});
+
+test('idempotent operator append repairs metadata and respects delete tombstones', async () => {
+  let now = 1_700_000_000_000;
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => now });
+  const entry = { id: 'operator-1', text: 'sent once', role: 'operator', createdAt: now };
+  assert.equal((await store.appendMessageOnce('acme', '77001234567', entry, { state: 'operator' })).inserted, true);
+  redis.data.delete(store.keys.inbox('acme'));
+  redis.expires.delete(store.keys.history('acme', '77001234567'));
+  assert.equal((await store.appendMessageOnce('acme', '77001234567', entry, { state: 'operator' })).inserted, false);
+  assert.equal(redis.data.get(store.keys.inbox('acme')).value.has('77001234567'), true);
+  assert.equal(redis.expires.get(store.keys.history('acme', '77001234567')), STANDARD_TTL_SECONDS);
+
+  now += 1000;
+  await store.applyAction('acme', '77001234567', 'delete');
+  assert.equal(redis.data.get(store.keys.deleted('acme', '77001234567'))?.value, String(now));
+  assert.equal(redis.data.has(store.keys.messageIds('acme', '77001234567')), false);
+  const stale = await store.appendMessageOnce('acme', '77001234567', entry, { state: 'operator' });
+  assert.equal(stale.stale, true);
 });

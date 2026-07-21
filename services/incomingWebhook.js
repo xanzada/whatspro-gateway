@@ -79,8 +79,13 @@ async function shouldSkipOpenBot(payload = {}) {
 
 function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const body = String(payload.body || payload.text || payload.data?.message?.conversation || '').trim();
-  const mediaData = String(payload.mediaData || payload.data?.mediaData || '').trim();
-  const mediaType = String(payload.mediaType || payload.data?.mediaType || '').trim();
+  const rawMediaData = String(payload.mediaData || payload.data?.mediaData || '').trim();
+  const rawMediaType = String(payload.mediaType || payload.data?.mediaType || '').split(';')[0].trim().toLowerCase();
+  const type = String(payload.type || '').trim().toLowerCase();
+  const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
+  const hasAudio = !isSystem && Boolean(payload.hasMedia) && rawMediaType.startsWith('audio/');
+  const mediaData = hasAudio ? rawMediaData : '';
+  const mediaType = hasAudio ? rawMediaType : '';
   const mediaKind = String(payload.mediaKind || payload.type || '').trim();
   const contactName = String(payload.contactName || payload.data?.contactName || payload.contact?.name || payload.data?.contact?.name || '').trim();
   return {
@@ -92,7 +97,7 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
     body,
     text: body,
     type: payload.type || 'chat',
-    hasMedia: Boolean(payload.hasMedia),
+    hasMedia: hasAudio,
     mediaData,
     mediaType,
     mediaKind,
@@ -170,4 +175,10 @@ async function forwardIncomingWhatsAppMessage(payload) {
   };
 }
 
-module.exports = { forwardIncomingWhatsAppMessage, getOpenBotWebhookUrl, getOpenBotWebhookToken, saveIncomingMessage };
+module.exports = {
+  forwardIncomingWhatsAppMessage,
+  getOpenBotWebhookUrl,
+  getOpenBotWebhookToken,
+  saveIncomingMessage,
+  __test: { buildHistoryEntry }
+};
