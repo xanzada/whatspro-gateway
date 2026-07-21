@@ -267,7 +267,7 @@
     }
     play.addEventListener('click', function () {
       el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
-      if (audio.paused) audio.play().catch(function () { sync(); }); else audio.pause();
+      if (audio.paused) audio.play().catch(function (error) { console.error('Audio play error:', error); sync(); }); else audio.pause();
     });
     seek.addEventListener('input', function () { if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value) / 1000 * audio.duration; });
     speed.addEventListener('click', function () {
@@ -295,10 +295,10 @@
           credentials: 'same-origin', cache: 'no-store', headers: headers({ Accept: 'audio/*' }), signal: signal
         });
         if (!response.ok) throw new Error('MEDIA_' + response.status);
-        var blob = await response.blob();
-        var mediaType = (blob.type || response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
-        if (!blob.size || !/^audio\//i.test(mediaType)) throw new Error('INVALID_AUDIO_MEDIA');
-        if (blob.type !== mediaType) blob = new Blob([blob], { type: mediaType });
+        var buffer = await response.arrayBuffer();
+        var mediaType = String(response.headers.get('content-type') || 'audio/ogg; codecs=opus').trim().toLowerCase();
+        if (!buffer.byteLength || !/^audio\//i.test(mediaType)) throw new Error('INVALID_AUDIO_MEDIA');
+        var blob = new Blob([buffer], { type: mediaType });
         var url = URL.createObjectURL(blob); state.audioUrls.set(id, url);
         bindAudio(wrapper, wrapper.querySelector('audio'), url);
       } catch (error) {

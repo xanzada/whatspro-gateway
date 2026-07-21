@@ -463,7 +463,7 @@ function decodeStoredAudio(mediaData) {
   const match = String(mediaData || '').trim().match(/^data:([^;,]+);base64,([\s\S]+)$/i);
   if (!match) throw new Error('INVALID_MEDIA_DATA');
   const mediaType = String(match[1] || '').trim().toLowerCase();
-  if (!mediaType.startsWith('audio/')) throw new Error('UNSUPPORTED_MEDIA_TYPE');
+  if (!/^audio\/[a-z0-9][a-z0-9.+_-]*$/.test(mediaType)) throw new Error('UNSUPPORTED_MEDIA_TYPE');
   const base64 = String(match[2] || '').replace(/\s+/g, '');
   if (!base64 || base64.length % 4 !== 0 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
     throw new Error('INVALID_MEDIA_DATA');
@@ -473,6 +473,12 @@ function decodeStoredAudio(mediaData) {
     throw new Error('INVALID_MEDIA_BUFFER');
   }
   return { mediaType, buffer };
+}
+
+function playbackAudioType(mediaType) {
+  const value = String(mediaType || '').trim().toLowerCase();
+  if (value === 'audio/ogg' || value === 'audio/opus') return 'audio/ogg; codecs=opus';
+  return value || 'audio/ogg; codecs=opus';
 }
 
 function resolveByteRange(header, size) {
@@ -1016,10 +1022,11 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
             return res.status(status).json({ error: error.message });
         }
         const { mediaType, buffer } = decoded;
+        const contentType = playbackAudioType(mediaType);
         const range = resolveByteRange(req.get('range'), buffer.length);
 
         res.set({
-            'Content-Type': mediaType,
+            'Content-Type': contentType,
             'Accept-Ranges': 'bytes',
             'Content-Disposition': 'inline',
             'Cache-Control': 'private, max-age=3600',
@@ -1405,5 +1412,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, resolveByteRange }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, playbackAudioType, resolveByteRange }
 };

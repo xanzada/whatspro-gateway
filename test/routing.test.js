@@ -70,3 +70,10 @@ test('chat routes and static assets serve the new operator UI', async t => {
   });
   assert.equal(badMedia.status, 400);
 });
+
+test('chat audio hydration constructs a typed Blob from an ArrayBuffer', async () => {
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
+  assert.match(source, /await response\.arrayBuffer\(\)/);
+  assert.match(source, /new Blob\(\[buffer\], \{ type: mediaType \}\)/);
+  assert.match(source, /console\.error\('Audio play error:', error\)/);
+});

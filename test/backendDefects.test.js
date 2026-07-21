@@ -72,6 +72,10 @@ test('stored audio decoding is strict and preserves the binary payload', () => {
   assert.deepEqual(decoded.buffer, bytes);
   assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg;base64,YWJj==='));
   assert.throws(() => serverTest.decodeStoredAudio('data:image/png;base64,YWJj'));
+  assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg\r\nx-bad:value;base64,YWJj'));
+  assert.equal(serverTest.playbackAudioType('audio/ogg'), 'audio/ogg; codecs=opus');
+  assert.equal(serverTest.playbackAudioType('audio/ogg; codecs=opus'), 'audio/ogg; codecs=opus');
+  assert.equal(serverTest.playbackAudioType('audio/mpeg'), 'audio/mpeg');
 });
 
 test('audio byte ranges support normal, open and suffix requests', () => {
