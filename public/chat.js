@@ -57,6 +57,7 @@
   };
 
   var el = {};
+  var eventsBound = false;
   ['app', 'instance-title', 'lang-btn', 'refresh-btn', 'search-input', 'tabs', 'direct-chat', 'contact-list',
     'back-btn', 'active-name', 'active-meta', 'operator-lock', 'lock-seconds', 'archive-btn', 'delete-btn',
     'messages-viewport', 'messages', 'message-input', 'send-btn', 'toast'].forEach(function (id) {
@@ -519,6 +520,8 @@
   }
 
   function bindEvents() {
+    if (eventsBound) return;
+    eventsBound = true;
     el.messages.addEventListener('click', handleAudioPlayClick);
     el.contactList.addEventListener('click', function (event) { var item = event.target.closest('[data-phone]'); if (item) openChat(item.dataset.phone); });
     el.tabs.addEventListener('click', function (event) {

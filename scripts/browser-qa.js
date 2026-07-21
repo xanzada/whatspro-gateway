@@ -83,10 +83,18 @@ fs.mkdirSync(outputDir, { recursive: true });
     const src = document.querySelector('.audio-player audio')?.src || '';
     return src.includes('/api/chat/media/') && src.includes('token=qa-media-token') && src.includes('fmt=mp4');
   });
+  await page.evaluate(() => { window.__qaOriginalPlayButton = document.querySelector('.audio-play'); });
+  await page.click('#lang-btn');
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.audio-play');
+    const src = button?.closest('.audio-player')?.querySelector('audio')?.src || '';
+    return button && button !== window.__qaOriginalPlayButton && src.includes('/api/chat/media/');
+  });
   const audioClick = await page.evaluate(async () => {
     const button = document.querySelector('.audio-play');
     const audio = button.closest('.audio-player').querySelector('audio');
     const cursor = getComputedStyle(button).cursor;
+    const rerendered = button !== window.__qaOriginalPlayButton && !window.__qaOriginalPlayButton.isConnected;
 
     window.__audioPlayCalls = 0;
     window.__audioPlayTarget = null;
@@ -103,13 +111,14 @@ fs.mkdirSync(outputDir, { recursive: true });
     return {
       disabled: button.disabled,
       cursor,
+      rerendered,
       directCalls,
       directTarget,
       nestedCalls: window.__audioPlayCalls,
       nestedTarget: window.__audioPlayTarget === audio
     };
   });
-  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || audioClick.directCalls !== 1 || !audioClick.directTarget || audioClick.nestedCalls !== 1 || !audioClick.nestedTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
+  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || !audioClick.rerendered || audioClick.directCalls !== 1 || !audioClick.directTarget || audioClick.nestedCalls !== 1 || !audioClick.nestedTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
   if (!consoleMessages.some(message => message.includes('PLAY BUTTON CLICKED')) || !consoleMessages.some(message => message.includes('CALLING AUDIO PLAY'))) throw new Error('AUDIO_CLICK_LOGS');
   if (!mediaRequestUrl.includes('token=qa-media-token') || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
   const layout = await page.evaluate(() => {
