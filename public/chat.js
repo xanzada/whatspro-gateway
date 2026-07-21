@@ -295,14 +295,9 @@
   async function loadAudio(wrapper, signal, attempt) {
       var id = wrapper.dataset.audioId;
       try {
-        var response = await fetch(endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id)), {
-          credentials: 'same-origin', cache: 'no-store', headers: headers({ Accept: 'application/json' }), signal: signal
-        });
-        if (!response.ok) throw new Error('MEDIA_' + response.status);
-        var data = await response.json();
-        var dataUri = String(data.dataUri || '').trim();
-        if (!/^data:audio\/[a-z0-9][a-z0-9.+_-]*;base64,[A-Za-z0-9+/]*={0,2}$/i.test(dataUri)) throw new Error('INVALID_AUDIO_MEDIA');
-        bindAudio(wrapper, wrapper.querySelector('audio'), dataUri);
+        if (signal.aborted) return;
+        var mediaUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
+        bindAudio(wrapper, wrapper.querySelector('audio'), mediaUrl);
       } catch (error) {
         if (error.name === 'AbortError' || !wrapper.isConnected) return;
         if (attempt < 5) {

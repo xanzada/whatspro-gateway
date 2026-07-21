@@ -71,21 +71,18 @@ test('chat routes and static assets serve the new operator UI', async t => {
   assert.equal(badMedia.status, 400);
 });
 
-test('chat audio hydration uses validated JSON media as a Data URI', async () => {
+test('chat audio hydration delegates playback and ranges to the native media URL', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
-  assert.match(source, /await response\.json\(\)/);
-  assert.match(source, /data\.dataUri/);
-  assert.match(source, /bindAudio\(wrapper, wrapper\.querySelector\('audio'\), dataUri\)/);
-  assert.doesNotMatch(source, /response\.arrayBuffer\(\)|URL\.createObjectURL\(blob\)/);
+  const hydration = source.slice(source.indexOf('async function loadAudio'), source.indexOf('async function loadInbox'));
+  assert.match(hydration, /bindAudio\(wrapper, wrapper\.querySelector\('audio'\), mediaUrl\)/);
+  assert.doesNotMatch(hydration, /response\.blob\(\)|response\.arrayBuffer\(\)|response\.json\(\)|URL\.createObjectURL/);
   assert.match(source, /console\.error\('Audio play error:', error\)/);
 });
 
-test('chat media route returns the raw Redis Data URI without binary conversion', async () => {
+test('chat media route delegates to the compliant file handler', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
   const route = source.slice(source.indexOf("app.get('/api/chat/media/:instanceId/:messageId'"), source.indexOf("app.post('/api/chat/send/:instanceId/:phone'"));
-  assert.match(route, /redisClient\.sendCommand\(\['GET', chatMediaKey\(instanceId, messageId\)\]\)\.catch\(\(\) => ''\)/);
-  assert.match(route, /res\.json\(\{ success: true, dataUri: mediaData \}\)/);
-  assert.doesNotMatch(route, /Buffer\.from|Content-Length|Accept-Ranges/);
+  assert.match(route, /serveChatMedia\(req, res\)/);
 });
 
 test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings', async () => {

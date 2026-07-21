@@ -19,6 +19,7 @@ const { normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
+const { createChatMediaHandler } = require('../services/chatMedia');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -948,6 +949,10 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
   res.json({ success: true, instanceId, phone, history });
 });
 
+const serveChatMedia = createChatMediaHandler({
+    readMedia: (instanceId, messageId) => redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '')
+});
+
 app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const messageId = String(req.params.messageId || '').trim();
@@ -964,23 +969,7 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
         return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
     }
 
-    try {
-        const mediaData = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '');
-
-        if (!mediaData) {
-            res.set('Retry-After', '3');
-            return res.status(404).json({ error: 'MEDIA_NOT_READY' });
-        }
-
-        return res.json({ success: true, dataUri: mediaData });
-    } catch (error) {
-        console.error(
-            `[CHAT MEDIA] ${instanceId}/${messageId}:`,
-            error?.stack || error?.message || error
-        );
-
-        return res.status(500).json({ error: 'MEDIA_READ_FAILED' });
-    }
+    return serveChatMedia(req, res);
 });
 app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
