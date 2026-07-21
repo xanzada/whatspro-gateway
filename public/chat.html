@@ -84,7 +84,8 @@
     .audio-bubble { width:min(370px,82%); }
     .audio-player { display:grid; grid-template-columns:40px minmax(90px,1fr) 34px 38px; align-items:center; gap:8px; }
     .audio-player audio { display:none; }
-    .audio-play { width:40px; height:40px; border:0; border-radius:50%; background:#eef3f7; color:#182533; }
+    .audio-play { position:relative; pointer-events:auto; z-index:2; width:40px; height:40px; border:0; border-radius:50%; background:#eef3f7; color:#182533; cursor:pointer; touch-action:manipulation; }
+    .audio-play > * { pointer-events:none; }
     .audio-seek { width:100%; accent-color:#fff; cursor:pointer; }
     .audio-duration { color:#d7e1ec; font-size:11px; font-variant-numeric:tabular-nums; }
     .audio-speed { padding:5px 3px; border:0; border-radius:10px; background:#ffffff20; color:#fff; font-size:11px; font-weight:800; }

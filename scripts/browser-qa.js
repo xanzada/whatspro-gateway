@@ -26,10 +26,12 @@ fs.mkdirSync(outputDir, { recursive: true });
     };
   });
   const consoleErrors = [];
+  const consoleMessages = [];
   let sendRequests = 0;
   let mediaRequestUrl = '';
   const wav = Buffer.from('UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=', 'base64');
   page.on('console', message => {
+    consoleMessages.push(message.text());
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   await page.setRequestInterception(true);
@@ -85,11 +87,30 @@ fs.mkdirSync(outputDir, { recursive: true });
     const button = document.querySelector('.audio-play');
     const audio = button.closest('.audio-player').querySelector('audio');
     const cursor = getComputedStyle(button).cursor;
+
+    window.__audioPlayCalls = 0;
+    window.__audioPlayTarget = null;
     button.click();
     await Promise.resolve();
-    return { disabled: button.disabled, cursor, calls: window.__audioPlayCalls, exactTarget: window.__audioPlayTarget === audio };
+    const directCalls = window.__audioPlayCalls;
+    const directTarget = window.__audioPlayTarget === audio;
+
+    window.__audioPlayCalls = 0;
+    window.__audioPlayTarget = null;
+    button.innerHTML = '<svg viewBox="0 0 10 10"><path d="M1 1 L9 5 L1 9 Z"></path></svg>';
+    button.querySelector('path').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    return {
+      disabled: button.disabled,
+      cursor,
+      directCalls,
+      directTarget,
+      nestedCalls: window.__audioPlayCalls,
+      nestedTarget: window.__audioPlayTarget === audio
+    };
   });
-  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || audioClick.calls !== 1 || !audioClick.exactTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
+  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || audioClick.directCalls !== 1 || !audioClick.directTarget || audioClick.nestedCalls !== 1 || !audioClick.nestedTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
+  if (!consoleMessages.some(message => message.includes('PLAY BUTTON CLICKED')) || !consoleMessages.some(message => message.includes('CALLING AUDIO PLAY'))) throw new Error('AUDIO_CLICK_LOGS');
   if (!mediaRequestUrl.includes('token=qa-media-token') || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();

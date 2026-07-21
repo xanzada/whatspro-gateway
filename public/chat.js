@@ -256,21 +256,25 @@
   }
 
   function handleAudioPlayClick(event) {
-    var button = event.target.closest('.audio-play');
+    var target = event.target && event.target.nodeType === 1 ? event.target : event.target && event.target.parentElement;
+    var button = target && target.closest('.audio-play');
     if (!button || !el.messages.contains(button)) return;
+    console.log('PLAY BUTTON CLICKED', event.target);
     var wrapper = button.closest('.audio-player');
     var audio = wrapper && wrapper.querySelector('audio');
     if (!audio) return;
     event.preventDefault();
+    event.stopPropagation();
     el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
     if (!audio.paused) return audio.pause();
     try {
+      console.log('CALLING AUDIO PLAY', audio);
       var playback = audio.play();
       if (playback && typeof playback.catch === 'function') {
-        playback.catch(function (error) { console.error('Audio play error:', error); });
+        playback.catch(function (error) { console.error('Play Promise failed:', error); });
       }
     } catch (error) {
-      console.error('Audio play error:', error);
+      console.error('Play Promise failed:', error);
     }
   }
 
