@@ -76,6 +76,9 @@ test('chat audio hydration delegates playback and ranges to the native media URL
   const hydration = source.slice(source.indexOf('async function loadAudio'), source.indexOf('async function loadInbox'));
   assert.match(hydration, /bindAudio\(wrapper, wrapper\.querySelector\('audio'\), mediaUrl\)/);
   assert.doesNotMatch(hydration, /response\.blob\(\)|response\.arrayBuffer\(\)|response\.json\(\)|URL\.createObjectURL/);
+  const audioTemplate = source.slice(source.indexOf("content = '<div class=\"audio-player\""), source.indexOf("'<button class=\"audio-speed\""));
+  assert.doesNotMatch(audioTemplate, /\sdisabled(?:\s|>)/);
+  assert.match(source, /el\.messages\.addEventListener\('click', handleAudioPlayClick\)/);
   assert.match(source, /console\.error\('Audio play error:', error\)/);
 });
 

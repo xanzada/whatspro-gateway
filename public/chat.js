@@ -216,7 +216,7 @@
     if (part.kind === 'text') content = '<div class="message-text">' + core.escapeHtml(part.text) + '</div>';
     if (part.kind === 'audio') {
       content = '<div class="audio-player" data-audio-id="' + core.escapeHtml(part.id) + '" aria-busy="true"><audio preload="auto" playsinline></audio>' +
-        '<button class="audio-play" type="button" disabled aria-label="' + core.escapeHtml(t('play')) + '"><i class="fa-solid fa-play"></i></button>' +
+        '<button class="audio-play" type="button" aria-label="' + core.escapeHtml(t('play')) + '"><i class="fa-solid fa-play"></i></button>' +
         '<input class="audio-seek" type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="audio-duration">0:00</span>' +
         '<button class="audio-speed" type="button">1x</button></div>';
     }
@@ -255,6 +255,25 @@
     return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
   }
 
+  function handleAudioPlayClick(event) {
+    var button = event.target.closest('.audio-play');
+    if (!button || !el.messages.contains(button)) return;
+    var wrapper = button.closest('.audio-player');
+    var audio = wrapper && wrapper.querySelector('audio');
+    if (!audio) return;
+    event.preventDefault();
+    el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
+    if (!audio.paused) return audio.pause();
+    try {
+      var playback = audio.play();
+      if (playback && typeof playback.catch === 'function') {
+        playback.catch(function (error) { console.error('Audio play error:', error); });
+      }
+    } catch (error) {
+      console.error('Audio play error:', error);
+    }
+  }
+
   function bindAudio(wrapper, audio, objectUrl) {
     var play = wrapper.querySelector('.audio-play');
     var seek = wrapper.querySelector('.audio-seek');
@@ -269,10 +288,6 @@
       play.innerHTML = '<i class="fa-solid fa-' + (audio.paused ? 'play' : 'pause') + '"></i>';
       play.setAttribute('aria-label', audio.paused ? t('play') : t('pause'));
     }
-    play.addEventListener('click', function () {
-      el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
-      if (audio.paused) audio.play().catch(function (error) { console.error('Audio play error:', error); sync(); }); else audio.pause();
-    });
     seek.addEventListener('input', function () { if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value) / 1000 * audio.duration; });
     speed.addEventListener('click', function () {
       var rates = [1, 1.5, 2]; var next = rates[(rates.indexOf(audio.playbackRate) + 1) % rates.length];
@@ -485,6 +500,7 @@
   }
 
   function bindEvents() {
+    el.messages.addEventListener('click', handleAudioPlayClick);
     el.contactList.addEventListener('click', function (event) { var item = event.target.closest('[data-phone]'); if (item) openChat(item.dataset.phone); });
     el.tabs.addEventListener('click', function (event) {
       var tab = event.target.closest('[data-tab]'); if (!tab) return;

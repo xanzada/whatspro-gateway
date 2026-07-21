@@ -10,6 +10,15 @@ fs.mkdirSync(outputDir, { recursive: true });
 (async () => {
   const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    window.__audioPlayCalls = 0;
+    window.__audioPlayTarget = null;
+    HTMLMediaElement.prototype.play = function () {
+      window.__audioPlayCalls += 1;
+      window.__audioPlayTarget = this;
+      return Promise.resolve();
+    };
+  });
   const consoleErrors = [];
   let sendRequests = 0;
   const wav = Buffer.from('UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=', 'base64');
@@ -59,6 +68,15 @@ fs.mkdirSync(outputDir, { recursive: true });
   await page.click('.contact-item');
   await page.waitForSelector('.message-row.operator');
   await page.waitForFunction(() => document.querySelector('.audio-player audio')?.src.includes('/api/chat/media/'));
+  const audioClick = await page.evaluate(async () => {
+    const button = document.querySelector('.audio-play');
+    const audio = button.closest('.audio-player').querySelector('audio');
+    const cursor = getComputedStyle(button).cursor;
+    button.click();
+    await Promise.resolve();
+    return { disabled: button.disabled, cursor, calls: window.__audioPlayCalls, exactTarget: window.__audioPlayTarget === audio };
+  });
+  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || audioClick.calls !== 1 || !audioClick.exactTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();
     const operator = document.querySelector('.message-row.operator .bubble').getBoundingClientRect();
@@ -96,7 +114,7 @@ fs.mkdirSync(outputDir, { recursive: true });
   if (overflow || keyboardLayout.composerBottom > keyboardLayout.viewportBottom + 1) throw new Error('MOBILE_LAYOUT');
   await page.screenshot({ path: path.join(outputDir, 'chat-mobile-active.png'), fullPage: true });
 
-  process.stdout.write(`${JSON.stringify({ contactText, layout, overflow, keyboardLayout, sendRequests, consoleErrors })}\n`);
+  process.stdout.write(`${JSON.stringify({ contactText, layout, audioClick, overflow, keyboardLayout, sendRequests, consoleErrors })}\n`);
   await browser.close();
 })().catch(error => {
   console.error(error);
