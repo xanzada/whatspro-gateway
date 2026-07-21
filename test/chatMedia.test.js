@@ -110,6 +110,21 @@ test('media endpoint serves valid Ogg Opus with compliant byte ranges and browse
   assert.equal(Number(partial.headers.get('content-length')), 28);
   assert.deepEqual(partialBody, fixture.subarray(0, 28));
 
+  const fallback = await fetch(`${url}?fmt=mp4`);
+  const fallbackBody = Buffer.from(await fallback.arrayBuffer());
+  assert.equal(fallback.status, 200);
+  assert.match(fallback.headers.get('content-type') || '', /^audio\/mp4\b/);
+  assert.equal(fallback.headers.get('accept-ranges'), 'bytes');
+  assert.equal(Number(fallback.headers.get('content-length')), fallbackBody.length);
+  assert.ok(fallbackBody.length > 32);
+  assert.equal(fallbackBody.subarray(4, 8).toString('ascii'), 'ftyp');
+
+  const fallbackPartial = await fetch(`${url}?fmt=mp4`, { headers: { Range: 'bytes=0-15' } });
+  assert.equal(fallbackPartial.status, 206);
+  assert.equal(fallbackPartial.headers.get('accept-ranges'), 'bytes');
+  assert.equal(Number(fallbackPartial.headers.get('content-length')), 16);
+  assert.deepEqual(Buffer.from(await fallbackPartial.arrayBuffer()), fallbackBody.subarray(0, 16));
+
   const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -132,7 +147,7 @@ test('media endpoint serves valid Ogg Opus with compliant byte ranges and browse
       audio.addEventListener('error', () => { clearTimeout(timer); resolve({ ok: false, code: audio.error && audio.error.code }); }, { once: true });
       audio.load();
     });
-  }, url);
+  }, `${url}?fmt=mp4`);
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.ok(Number.isFinite(result.duration) && result.duration > 0);
 });

@@ -13,6 +13,12 @@ fs.mkdirSync(outputDir, { recursive: true });
   await page.evaluateOnNewDocument(() => {
     window.__audioPlayCalls = 0;
     window.__audioPlayTarget = null;
+    localStorage.setItem('token_key', 'qa-media-token');
+    const nativeCanPlayType = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (type) {
+      if (String(type).toLowerCase().includes('audio/ogg')) return '';
+      return nativeCanPlayType.call(this, type);
+    };
     HTMLMediaElement.prototype.play = function () {
       window.__audioPlayCalls += 1;
       window.__audioPlayTarget = this;
@@ -21,6 +27,7 @@ fs.mkdirSync(outputDir, { recursive: true });
   });
   const consoleErrors = [];
   let sendRequests = 0;
+  let mediaRequestUrl = '';
   const wav = Buffer.from('UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=', 'base64');
   page.on('console', message => {
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -44,7 +51,10 @@ fs.mkdirSync(outputDir, { recursive: true });
     ] }) });
     if (url.includes('/api/chat/operator-lock/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ttl: 42, expiresAt: Date.now() + 42000 }) });
     if (url.includes('/api/chat/events/')) return request.respond({ status: 200, contentType: 'text/event-stream', body: 'retry: 3000\n\n' });
-    if (url.includes('/api/chat/media/')) return request.respond({ status: 200, contentType: 'audio/wav', headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(wav.length) }, body: wav });
+    if (url.includes('/api/chat/media/')) {
+      mediaRequestUrl = url;
+      return request.respond({ status: 200, contentType: 'audio/wav', headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(wav.length) }, body: wav });
+    }
     if (url.includes('/api/chat/send/')) {
       sendRequests += 1;
       return setTimeout(() => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, ttl: 60, expiresAt: Date.now() + 60000 }) }), 150);
@@ -67,7 +77,10 @@ fs.mkdirSync(outputDir, { recursive: true });
   await page.screenshot({ path: path.join(outputDir, 'chat-desktop-list.png'), fullPage: true });
   await page.click('.contact-item');
   await page.waitForSelector('.message-row.operator');
-  await page.waitForFunction(() => document.querySelector('.audio-player audio')?.src.includes('/api/chat/media/'));
+  await page.waitForFunction(() => {
+    const src = document.querySelector('.audio-player audio')?.src || '';
+    return src.includes('/api/chat/media/') && src.includes('token=qa-media-token') && src.includes('fmt=mp4');
+  });
   const audioClick = await page.evaluate(async () => {
     const button = document.querySelector('.audio-play');
     const audio = button.closest('.audio-player').querySelector('audio');
@@ -77,6 +90,7 @@ fs.mkdirSync(outputDir, { recursive: true });
     return { disabled: button.disabled, cursor, calls: window.__audioPlayCalls, exactTarget: window.__audioPlayTarget === audio };
   });
   if (audioClick.disabled || audioClick.cursor === 'not-allowed' || audioClick.calls !== 1 || !audioClick.exactTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
+  if (!mediaRequestUrl.includes('token=qa-media-token') || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();
     const operator = document.querySelector('.message-row.operator .bubble').getBoundingClientRect();

@@ -237,6 +237,12 @@ function hasApiToken(req) {
   return expected && safeEqual(incoming, expected);
 }
 
+function hasChatMediaToken(req) {
+  const expected = process.env.WHATSPRO_API_TOKEN || '';
+  const incoming = String(req.headers['x-chat-token'] || '') || String(req.query?.token || '');
+  return Boolean(expected && incoming && safeEqual(incoming, expected));
+}
+
 function requireApi(req, res, next) {
   if (hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
@@ -244,6 +250,11 @@ function requireApi(req, res, next) {
 
 function requireUiOrApi(req, res, next) {
   if (hasApiToken(req) || readSession(req)) return next();
+  return res.status(401).json({ error: 'AUTH_REQUIRED' });
+}
+
+function requireChatMediaAuth(req, res, next) {
+  if (hasApiToken(req) || hasChatMediaToken(req) || readSession(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
@@ -953,7 +964,7 @@ const serveChatMedia = createChatMediaHandler({
     readMedia: (instanceId, messageId) => redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '')
 });
 
-app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const messageId = String(req.params.messageId || '').trim();
 
@@ -1334,5 +1345,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken }
 };

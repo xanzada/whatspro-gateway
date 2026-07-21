@@ -280,6 +280,12 @@
     var duration = wrapper.querySelector('.audio-duration');
     var speed = wrapper.querySelector('.audio-speed');
     audio.src = objectUrl;
+    audio.addEventListener('error', function () {
+      console.error('Audio failed to load', {
+        code: audio.error && audio.error.code,
+        src: String(audio.currentSrc || audio.src || '').replace(/([?&]token=)[^&]+/i, '$1[redacted]')
+      });
+    });
     function sync() {
       var total = Number.isFinite(audio.duration) ? audio.duration : 0;
       var current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
@@ -311,8 +317,17 @@
       var id = wrapper.dataset.audioId;
       try {
         if (signal.aborted) return;
+        var audio = wrapper.querySelector('audio');
+        var mediaToken = chatToken;
+        if (!mediaToken) {
+          try { mediaToken = String(localStorage.getItem('token_key') || ''); } catch (_) {}
+        }
+        var query = new URLSearchParams();
+        if (mediaToken) query.set('token', mediaToken);
+        if (!audio.canPlayType('audio/ogg; codecs="opus"')) query.set('fmt', 'mp4');
         var mediaUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
-        bindAudio(wrapper, wrapper.querySelector('audio'), mediaUrl);
+        if (query.toString()) mediaUrl += '?' + query.toString();
+        bindAudio(wrapper, audio, mediaUrl);
       } catch (error) {
         if (error.name === 'AbortError' || !wrapper.isConnected) return;
         if (attempt < 5) {

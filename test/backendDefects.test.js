@@ -144,3 +144,16 @@ test('operator effect repair preserves the original lock expiry', () => {
   assert.equal(serverTest.remainingOperatorTtl(160_000, 100_000), 60);
   assert.equal(serverTest.remainingOperatorTtl(99_000, 100_000), 0);
 });
+
+test('media authentication accepts the existing header and route query fallback', () => {
+  const previous = process.env.WHATSPRO_API_TOKEN;
+  process.env.WHATSPRO_API_TOKEN = 'media-test-token';
+  try {
+    assert.equal(serverTest.hasChatMediaToken({ headers: { 'x-chat-token': 'media-test-token' }, query: {} }), true);
+    assert.equal(serverTest.hasChatMediaToken({ headers: {}, query: { token: 'media-test-token' } }), true);
+    assert.equal(serverTest.hasChatMediaToken({ headers: {}, query: { token: 'wrong' } }), false);
+  } finally {
+    if (previous == null) delete process.env.WHATSPRO_API_TOKEN;
+    else process.env.WHATSPRO_API_TOKEN = previous;
+  }
+});

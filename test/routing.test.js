@@ -74,17 +74,24 @@ test('chat routes and static assets serve the new operator UI', async t => {
 test('chat audio hydration delegates playback and ranges to the native media URL', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   const hydration = source.slice(source.indexOf('async function loadAudio'), source.indexOf('async function loadInbox'));
-  assert.match(hydration, /bindAudio\(wrapper, wrapper\.querySelector\('audio'\), mediaUrl\)/);
+  assert.match(hydration, /bindAudio\(wrapper, audio, mediaUrl\)/);
   assert.doesNotMatch(hydration, /response\.blob\(\)|response\.arrayBuffer\(\)|response\.json\(\)|URL\.createObjectURL/);
+  assert.match(hydration, /canPlayType\('audio\/ogg; codecs="opus"'\)/);
+  assert.match(hydration, /query\.set\('fmt', 'mp4'\)/);
+  assert.match(hydration, /localStorage\.getItem\('token_key'\)/);
+  assert.match(hydration, /query\.set\('token', mediaToken\)/);
   const audioTemplate = source.slice(source.indexOf("content = '<div class=\"audio-player\""), source.indexOf("'<button class=\"audio-speed\""));
   assert.doesNotMatch(audioTemplate, /\sdisabled(?:\s|>)/);
   assert.match(source, /el\.messages\.addEventListener\('click', handleAudioPlayClick\)/);
   assert.match(source, /console\.error\('Audio play error:', error\)/);
+  assert.match(source, /console\.error\('Audio failed to load'/);
+  assert.match(source, /code: audio\.error && audio\.error\.code/);
 });
 
 test('chat media route delegates to the compliant file handler', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
   const route = source.slice(source.indexOf("app.get('/api/chat/media/:instanceId/:messageId'"), source.indexOf("app.post('/api/chat/send/:instanceId/:phone'"));
+  assert.match(route, /requireChatMediaAuth/);
   assert.match(route, /serveChatMedia\(req, res\)/);
 });
 
