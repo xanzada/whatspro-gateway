@@ -60,13 +60,19 @@ function permanentMediaError(code) {
 }
 
 function validateAudioBase64(value) {
-    const base64 = String(value || '').replace(/\s+/g, '');
+    const raw = String(value || '').trim();
+    const dataUrl = raw.match(/^data:audio\/[^;,]+(?:;[^;,]+)*;base64,([\s\S]+)$/i);
+    const base64 = String(dataUrl ? dataUrl[1] : raw).replace(/\s+/g, '');
     if (!base64 || base64.length % 4 !== 0 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
         throw permanentMediaError('MEDIA_BASE64_INVALID');
     }
     const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
     const decodedBytes = (base64.length / 4) * 3 - padding;
     if (decodedBytes > MAX_MEDIA_BYTES) throw permanentMediaError('MEDIA_TOO_LARGE');
+    const decoded = Buffer.from(base64, 'base64');
+    if (!decoded.length || decoded.toString('base64') !== base64) {
+        throw permanentMediaError('MEDIA_BASE64_INVALID');
+    }
     return base64;
 }
 

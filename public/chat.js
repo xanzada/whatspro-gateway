@@ -211,8 +211,8 @@
     var content = '';
     if (part.kind === 'text') content = '<div class="message-text">' + core.escapeHtml(part.text) + '</div>';
     if (part.kind === 'audio') {
-      content = '<div class="audio-player" data-audio-id="' + core.escapeHtml(part.id) + '"><audio preload="metadata"></audio>' +
-        '<button class="audio-play" type="button" aria-label="' + core.escapeHtml(t('play')) + '"><i class="fa-solid fa-play"></i></button>' +
+      content = '<div class="audio-player" data-audio-id="' + core.escapeHtml(part.id) + '" aria-busy="true"><audio preload="auto" playsinline></audio>' +
+        '<button class="audio-play" type="button" disabled aria-label="' + core.escapeHtml(t('play')) + '"><i class="fa-solid fa-play"></i></button>' +
         '<input class="audio-seek" type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="audio-duration">0:00</span>' +
         '<button class="audio-speed" type="button">1x</button></div>';
     }
@@ -256,7 +256,7 @@
     var seek = wrapper.querySelector('.audio-seek');
     var duration = wrapper.querySelector('.audio-duration');
     var speed = wrapper.querySelector('.audio-speed');
-    audio.src = objectUrl; audio.load();
+    audio.src = objectUrl;
     function sync() {
       var total = Number.isFinite(audio.duration) ? audio.duration : 0;
       var current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
@@ -267,14 +267,17 @@
     }
     play.addEventListener('click', function () {
       el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
-      if (audio.paused) audio.play().catch(function () {}); else audio.pause();
+      if (audio.paused) audio.play().catch(function () { sync(); }); else audio.pause();
     });
     seek.addEventListener('input', function () { if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value) / 1000 * audio.duration; });
     speed.addEventListener('click', function () {
       var rates = [1, 1.5, 2]; var next = rates[(rates.indexOf(audio.playbackRate) + 1) % rates.length];
       audio.playbackRate = next; speed.textContent = next + 'x';
     });
-    ['loadedmetadata', 'durationchange', 'timeupdate', 'play', 'pause', 'ended'].forEach(function (event) { audio.addEventListener(event, sync); });
+    ['loadedmetadata', 'loadeddata', 'canplay', 'durationchange', 'timeupdate', 'play', 'pause', 'ended'].forEach(function (event) { audio.addEventListener(event, sync); });
+    play.disabled = false;
+    wrapper.removeAttribute('aria-busy');
+    audio.load();
     sync();
   }
 
@@ -293,7 +296,9 @@
         });
         if (!response.ok) throw new Error('MEDIA_' + response.status);
         var blob = await response.blob();
-        if (!blob.size || !/^audio\//i.test(blob.type || '')) throw new Error('INVALID_AUDIO_MEDIA');
+        var mediaType = (blob.type || response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+        if (!blob.size || !/^audio\//i.test(mediaType)) throw new Error('INVALID_AUDIO_MEDIA');
+        if (blob.type !== mediaType) blob = new Blob([blob], { type: mediaType });
         var url = URL.createObjectURL(blob); state.audioUrls.set(id, url);
         bindAudio(wrapper, wrapper.querySelector('audio'), url);
       } catch (error) {

@@ -459,6 +459,42 @@ async function readInboxEntries(instanceId, limit) {
   return chatStore.readInbox(instanceId, limit);
 }
 
+function decodeStoredAudio(mediaData) {
+  const match = String(mediaData || '').trim().match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+  if (!match) throw new Error('INVALID_MEDIA_DATA');
+  const mediaType = String(match[1] || '').trim().toLowerCase();
+  if (!mediaType.startsWith('audio/')) throw new Error('UNSUPPORTED_MEDIA_TYPE');
+  const base64 = String(match[2] || '').replace(/\s+/g, '');
+  if (!base64 || base64.length % 4 !== 0 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error('INVALID_MEDIA_DATA');
+  }
+  const buffer = Buffer.from(base64, 'base64');
+  if (!buffer.length || buffer.length > MAX_MEDIA_BYTES || buffer.toString('base64') !== base64) {
+    throw new Error('INVALID_MEDIA_BUFFER');
+  }
+  return { mediaType, buffer };
+}
+
+function resolveByteRange(header, size) {
+  if (!header) return { status: 200, start: 0, end: size - 1 };
+  const match = String(header).trim().match(/^bytes=(\d*)-(\d*)$/i);
+  if (!match || (!match[1] && !match[2]) || size <= 0) return { status: 416 };
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return { status: 416 };
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || start > end) return { status: 416 };
+    end = Math.min(end, size - 1);
+  }
+  return { status: 206, start, end };
+}
+
 function remainingOperatorTtl(expiresAt, now = Date.now()) {
   return Math.max(0, Math.ceil((Number(expiresAt || 0) - now) / 1000));
 }
@@ -972,42 +1008,31 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
             return res.status(404).json({ error: 'MEDIA_NOT_READY' });
         }
 
-        const raw = String(mediaData).trim();
-        const match = raw.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
-
-        if (!match) {
-            return res.status(422).json({ error: 'INVALID_MEDIA_DATA' });
+        let decoded;
+        try {
+            decoded = decodeStoredAudio(mediaData);
+        } catch (error) {
+            const status = error.message === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : 422;
+            return res.status(status).json({ error: error.message });
         }
-
-        const mediaType = String(match[1] || 'audio/ogg')
-            .trim()
-            .toLowerCase();
-
-        if (!mediaType.startsWith('audio/')) {
-            return res.status(415).json({ error: 'UNSUPPORTED_MEDIA_TYPE' });
-        }
-
-        const base64 = String(match[2] || '').replace(/\s+/g, '');
-
-        if (!base64 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-            return res.status(422).json({ error: 'EMPTY_MEDIA_DATA' });
-        }
-
-        const buffer = Buffer.from(base64, 'base64');
-
-        if (!buffer.length || buffer.length > MAX_MEDIA_BYTES) {
-            return res.status(422).json({ error: 'INVALID_MEDIA_BUFFER' });
-        }
+        const { mediaType, buffer } = decoded;
+        const range = resolveByteRange(req.get('range'), buffer.length);
 
         res.set({
             'Content-Type': mediaType,
-            'Content-Length': String(buffer.length),
+            'Accept-Ranges': 'bytes',
             'Content-Disposition': 'inline',
             'Cache-Control': 'private, max-age=3600',
             'X-Content-Type-Options': 'nosniff'
         });
-
-        return res.status(200).send(buffer);
+        if (range.status === 416) {
+            res.set({ 'Content-Range': `bytes */${buffer.length}`, 'Content-Length': '0' });
+            return res.status(416).end();
+        }
+        const body = range.status === 206 ? buffer.subarray(range.start, range.end + 1) : buffer;
+        res.set('Content-Length', String(body.length));
+        if (range.status === 206) res.set('Content-Range', `bytes ${range.start}-${range.end}/${buffer.length}`);
+        return res.status(range.status).send(body);
     } catch (error) {
         console.error(
             `[CHAT MEDIA] ${instanceId}/${messageId}:`,
@@ -1380,5 +1405,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, resolveByteRange }
 };

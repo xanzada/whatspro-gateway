@@ -57,11 +57,30 @@ test('empty native audio creates a durable placeholder for deferred metadata', (
 
 test('base64 validation rejects malformed and oversized media as permanent failures', () => {
   assert.equal(whatsappTest.validateAudioBase64('YWJj'), 'YWJj');
+  assert.equal(whatsappTest.validateAudioBase64('data:audio/ogg;base64, YWJj\n'), 'YWJj');
   for (const value of ['not base64!', 'A'.repeat(whatsappTest.MAX_MEDIA_BASE64_LENGTH + 4)]) {
     assert.throws(() => whatsappTest.validateAudioBase64(value), error => error.permanent === true);
   }
   assert.equal(whatsappTest.shouldRetryMediaError(Object.assign(new Error('bad'), { permanent: true })), false);
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
+});
+
+test('stored audio decoding is strict and preserves the binary payload', () => {
+  const bytes = Buffer.from('RIFF\u0000\u0001audio', 'binary');
+  const decoded = serverTest.decodeStoredAudio(`data:audio/wav;base64,${bytes.toString('base64')}`);
+  assert.equal(decoded.mediaType, 'audio/wav');
+  assert.deepEqual(decoded.buffer, bytes);
+  assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg;base64,YWJj==='));
+  assert.throws(() => serverTest.decodeStoredAudio('data:image/png;base64,YWJj'));
+});
+
+test('audio byte ranges support normal, open and suffix requests', () => {
+  assert.deepEqual(serverTest.resolveByteRange('', 10), { status: 200, start: 0, end: 9 });
+  assert.deepEqual(serverTest.resolveByteRange('bytes=2-5', 10), { status: 206, start: 2, end: 5 });
+  assert.deepEqual(serverTest.resolveByteRange('bytes=6-', 10), { status: 206, start: 6, end: 9 });
+  assert.deepEqual(serverTest.resolveByteRange('bytes=-3', 10), { status: 206, start: 7, end: 9 });
+  assert.deepEqual(serverTest.resolveByteRange('bytes=20-30', 10), { status: 416 });
+  assert.deepEqual(serverTest.resolveByteRange('bytes=0-1,4-5', 10), { status: 416 });
 });
 
 class FakeIdempotencyRedis {
