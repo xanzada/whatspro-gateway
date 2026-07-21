@@ -472,33 +472,13 @@ function decodeStoredAudio(mediaData) {
   if (!buffer.length || buffer.length > MAX_MEDIA_BYTES || buffer.toString('base64') !== base64) {
     throw new Error('INVALID_MEDIA_BUFFER');
   }
-  return { mediaType, buffer };
+  return { mediaType, base64, buffer };
 }
 
 function playbackAudioType(mediaType) {
   const value = String(mediaType || '').trim().toLowerCase();
   if (value === 'audio/ogg' || value === 'audio/opus') return 'audio/ogg; codecs=opus';
   return value || 'audio/ogg; codecs=opus';
-}
-
-function resolveByteRange(header, size) {
-  if (!header) return { status: 200, start: 0, end: size - 1 };
-  const match = String(header).trim().match(/^bytes=(\d*)-(\d*)$/i);
-  if (!match || (!match[1] && !match[2]) || size <= 0) return { status: 416 };
-  let start;
-  let end;
-  if (!match[1]) {
-    const suffix = Number(match[2]);
-    if (!Number.isSafeInteger(suffix) || suffix <= 0) return { status: 416 };
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(match[1]);
-    end = match[2] ? Number(match[2]) : size - 1;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || start > end) return { status: 416 };
-    end = Math.min(end, size - 1);
-  }
-  return { status: 206, start, end };
 }
 
 function remainingOperatorTtl(expiresAt, now = Date.now()) {
@@ -1021,25 +1001,9 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
             const status = error.message === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : 422;
             return res.status(status).json({ error: error.message });
         }
-        const { mediaType, buffer } = decoded;
-        const contentType = playbackAudioType(mediaType);
-        const range = resolveByteRange(req.get('range'), buffer.length);
-
-        res.set({
-            'Content-Type': contentType,
-            'Accept-Ranges': 'bytes',
-            'Content-Disposition': 'inline',
-            'Cache-Control': 'private, max-age=3600',
-            'X-Content-Type-Options': 'nosniff'
-        });
-        if (range.status === 416) {
-            res.set({ 'Content-Range': `bytes */${buffer.length}`, 'Content-Length': '0' });
-            return res.status(416).end();
-        }
-        const body = range.status === 206 ? buffer.subarray(range.start, range.end + 1) : buffer;
-        res.set('Content-Length', String(body.length));
-        if (range.status === 206) res.set('Content-Range', `bytes ${range.start}-${range.end}/${buffer.length}`);
-        return res.status(range.status).send(body);
+        const { mediaType, base64 } = decoded;
+        res.set({ 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+        return res.json({ mimeType: playbackAudioType(mediaType), base64 });
     } catch (error) {
         console.error(
             `[CHAT MEDIA] ${instanceId}/${messageId}:`,
@@ -1412,5 +1376,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, playbackAudioType, resolveByteRange }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, decodeStoredAudio, playbackAudioType }
 };

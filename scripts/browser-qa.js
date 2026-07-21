@@ -21,6 +21,7 @@ fs.mkdirSync(outputDir, { recursive: true });
     const url = request.url();
     if (url.includes('/api/chat/inbox/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [
       { phone: '77001234567', displayName: 'Айдана', lastText: 'Сәлеметсіз бе', lastAt: Date.now(), state: 'new' },
+      { phone: '77761234956', displayName: 'Телефон іздеу', lastText: 'Ішінара сәйкестік', lastAt: Date.now() - 30000, state: 'new' },
       { phone: '77007654321', displayName: 'Бекзат', lastText: 'Оператор жауап берді', lastAt: Date.now() - 60000, state: 'operator' },
       { phone: '77001112233', lastText: 'Оқылған чат', lastAt: Date.now() - 120000, state: 'all' },
       { phone: '77009998877', displayName: 'Архив', lastText: 'Сақталған', lastAt: Date.now() - 180000, state: 'archive' }
@@ -34,7 +35,7 @@ fs.mkdirSync(outputDir, { recursive: true });
     ] }) });
     if (url.includes('/api/chat/operator-lock/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ttl: 42, expiresAt: Date.now() + 42000 }) });
     if (url.includes('/api/chat/events/')) return request.respond({ status: 200, contentType: 'text/event-stream', body: 'retry: 3000\n\n' });
-    if (url.includes('/api/chat/media/')) return request.respond({ status: 200, contentType: 'audio/wav', body: wav });
+    if (url.includes('/api/chat/media/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ mimeType: 'audio/wav', base64: wav.toString('base64') }) });
     if (url.includes('/api/chat/send/')) {
       sendRequests += 1;
       return setTimeout(() => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, ttl: 60, expiresAt: Date.now() + 60000 }) }), 150);
@@ -48,10 +49,16 @@ fs.mkdirSync(outputDir, { recursive: true });
   await page.waitForSelector('.contact-item');
   const contactText = await page.$eval('.contact-item', element => element.innerText);
   if (!contactText.includes('Айдана') || !contactText.includes('+77001234567') || !contactText.includes('Сәлеметсіз бе')) throw new Error('CONTACT_HIERARCHY');
+  for (const query of ['776', '8776', '4956']) {
+    await page.$eval('#search-input', (input, value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }, query);
+    const matchedPhone = await page.$eval('.contact-item', element => element.dataset.phone);
+    if (matchedPhone !== '77761234956') throw new Error(`PHONE_SEARCH_${query}`);
+  }
+  await page.$eval('#search-input', input => { input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.screenshot({ path: path.join(outputDir, 'chat-desktop-list.png'), fullPage: true });
   await page.click('.contact-item');
   await page.waitForSelector('.message-row.operator');
-  await page.waitForFunction(() => document.querySelector('.audio-player audio')?.src.startsWith('blob:'));
+  await page.waitForFunction(() => document.querySelector('.audio-player audio')?.src.startsWith('data:audio/wav;base64,'));
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();
     const operator = document.querySelector('.message-row.operator .bubble').getBoundingClientRect();
@@ -61,11 +68,11 @@ fs.mkdirSync(outputDir, { recursive: true });
       ticks: document.querySelector('.message-row.operator .ticks')?.textContent,
       deliveredTicks: document.querySelector('.ticks.delivered')?.textContent,
       audioPlayers: document.querySelectorAll('.audio-player').length,
-      audioBlob: document.querySelector('.audio-player audio')?.src.startsWith('blob:'),
+      audioDataUri: document.querySelector('.audio-player audio')?.src.startsWith('data:audio/wav;base64,'),
       lock: document.querySelector('#lock-seconds').textContent
     };
   });
-  if (!(layout.clientLeft < layout.operatorLeft) || layout.ticks !== '✓✓' || layout.deliveredTicks !== '✓✓' || layout.audioPlayers !== 1 || !layout.audioBlob || !layout.lock) throw new Error('MESSAGE_LAYOUT');
+  if (!(layout.clientLeft < layout.operatorLeft) || layout.ticks !== '✓✓' || layout.deliveredTicks !== '✓✓' || layout.audioPlayers !== 1 || !layout.audioDataUri || !layout.lock) throw new Error('MESSAGE_LAYOUT');
   await page.screenshot({ path: path.join(outputDir, 'chat-desktop-active.png'), fullPage: true });
 
   await page.setViewport({ width: 375, height: 812, deviceScaleFactor: 1 });

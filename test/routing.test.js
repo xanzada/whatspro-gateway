@@ -71,9 +71,17 @@ test('chat routes and static assets serve the new operator UI', async t => {
   assert.equal(badMedia.status, 400);
 });
 
-test('chat audio hydration constructs a typed Blob from an ArrayBuffer', async () => {
+test('chat audio hydration uses validated JSON media as a Data URI', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
-  assert.match(source, /await response\.arrayBuffer\(\)/);
-  assert.match(source, /new Blob\(\[buffer\], \{ type: mediaType \}\)/);
+  assert.match(source, /await response\.json\(\)/);
+  assert.match(source, /'data:' \+ mediaType \+ ';base64,' \+ base64/);
+  assert.doesNotMatch(source, /response\.arrayBuffer\(\)|URL\.createObjectURL\(blob\)/);
   assert.match(source, /console\.error\('Audio play error:', error\)/);
+});
+
+test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings', async () => {
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
+  assert.match(source, /phoneQuery\.charAt\(0\) === '8' && phoneQuery\.length > 1/);
+  assert.match(source, /phoneQuery = '7' \+ phoneQuery\.slice\(1\)/);
+  assert.match(source, /phone\.indexOf\(phoneQuery\) >= 0/);
 });

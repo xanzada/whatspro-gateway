@@ -113,10 +113,14 @@
 
   function filteredChats() {
     var query = el.searchInput.value.trim().toLowerCase();
+    var phoneQuery = query.replace(/\D/g, '');
+    if (phoneQuery.charAt(0) === '8' && phoneQuery.length > 1) phoneQuery = '7' + phoneQuery.slice(1);
     return state.chats.filter(function (chat) {
       if (!chatMatchesTab(chat)) return false;
       if (!query) return true;
-      return [contactName(chat), chat.phone, chat.lastText, chat.lastMessage].some(function (value) {
+      var phone = String(chat.phone || '').replace(/\D/g, '');
+      if (phoneQuery && phone.indexOf(phoneQuery) >= 0) return true;
+      return [contactName(chat), chat.lastText, chat.lastMessage].some(function (value) {
         return String(value || '').toLowerCase().indexOf(query) >= 0;
       });
     });
@@ -292,15 +296,16 @@
       var id = wrapper.dataset.audioId;
       try {
         var response = await fetch(endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id)), {
-          credentials: 'same-origin', cache: 'no-store', headers: headers({ Accept: 'audio/*' }), signal: signal
+          credentials: 'same-origin', cache: 'no-store', headers: headers({ Accept: 'application/json' }), signal: signal
         });
         if (!response.ok) throw new Error('MEDIA_' + response.status);
-        var buffer = await response.arrayBuffer();
-        var mediaType = String(response.headers.get('content-type') || 'audio/ogg; codecs=opus').trim().toLowerCase();
-        if (!buffer.byteLength || !/^audio\//i.test(mediaType)) throw new Error('INVALID_AUDIO_MEDIA');
-        var blob = new Blob([buffer], { type: mediaType });
-        var url = URL.createObjectURL(blob); state.audioUrls.set(id, url);
-        bindAudio(wrapper, wrapper.querySelector('audio'), url);
+        var data = await response.json();
+        var mediaType = String(data.mimeType || 'audio/ogg').trim().toLowerCase();
+        var base64 = String(data.base64 || '').replace(/\s+/g, '');
+        if (!/^audio\/[a-z0-9][a-z0-9.+_-]*(?:\s*;\s*codecs=[a-z0-9._+-]+)?$/i.test(mediaType) || !base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+          throw new Error('INVALID_AUDIO_MEDIA');
+        }
+        bindAudio(wrapper, wrapper.querySelector('audio'), 'data:' + mediaType + ';base64,' + base64);
       } catch (error) {
         if (error.name === 'AbortError' || !wrapper.isConnected) return;
         if (attempt < 5) {

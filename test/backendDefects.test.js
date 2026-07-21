@@ -69,6 +69,7 @@ test('stored audio decoding is strict and preserves the binary payload', () => {
   const bytes = Buffer.from('RIFF\u0000\u0001audio', 'binary');
   const decoded = serverTest.decodeStoredAudio(`data:audio/wav;base64,${bytes.toString('base64')}`);
   assert.equal(decoded.mediaType, 'audio/wav');
+  assert.equal(decoded.base64, bytes.toString('base64'));
   assert.deepEqual(decoded.buffer, bytes);
   assert.throws(() => serverTest.decodeStoredAudio('data:audio/ogg;base64,YWJj==='));
   assert.throws(() => serverTest.decodeStoredAudio('data:image/png;base64,YWJj'));
@@ -76,15 +77,6 @@ test('stored audio decoding is strict and preserves the binary payload', () => {
   assert.equal(serverTest.playbackAudioType('audio/ogg'), 'audio/ogg; codecs=opus');
   assert.equal(serverTest.playbackAudioType('audio/ogg; codecs=opus'), 'audio/ogg; codecs=opus');
   assert.equal(serverTest.playbackAudioType('audio/mpeg'), 'audio/mpeg');
-});
-
-test('audio byte ranges support normal, open and suffix requests', () => {
-  assert.deepEqual(serverTest.resolveByteRange('', 10), { status: 200, start: 0, end: 9 });
-  assert.deepEqual(serverTest.resolveByteRange('bytes=2-5', 10), { status: 206, start: 2, end: 5 });
-  assert.deepEqual(serverTest.resolveByteRange('bytes=6-', 10), { status: 206, start: 6, end: 9 });
-  assert.deepEqual(serverTest.resolveByteRange('bytes=-3', 10), { status: 206, start: 7, end: 9 });
-  assert.deepEqual(serverTest.resolveByteRange('bytes=20-30', 10), { status: 416 });
-  assert.deepEqual(serverTest.resolveByteRange('bytes=0-1,4-5', 10), { status: 416 });
 });
 
 class FakeIdempotencyRedis {
