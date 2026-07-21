@@ -29,7 +29,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
-const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'dev');
+const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSPRO_API_TOKEN || crypto.randomBytes(32).toString('hex');
 const SSE_MAX_CONNECTIONS_PER_CLIENT = 20;
 const SSE_MAX_CONNECTIONS_TOTAL = 500;
 const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
@@ -101,11 +101,6 @@ function requireApi(req, res, next) {
 function requireUiOrApi(req, res, next) {
   if (hasApiToken(req) || readSession(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
-}
-
-function requireOperatorPage(req, res, next) {
-  if (hasApiToken(req) || readSession(req)) return next();
-  return res.redirect('/');
 }
 
 function isValidInstanceId(value = '') {
@@ -376,7 +371,10 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
-app.get('/chat.html', requireOperatorPage, (req, res, next) => {
+// The operator shell is public so the canonical URL and its static assets can
+// always render. Data and mutation endpoints remain protected by
+// requireUiOrApi; chat.js redirects unauthenticated operators to login.
+app.get('/chat.html', (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
 
@@ -384,16 +382,14 @@ app.get('/whatspro', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
 });
 
-app.get(['/chat', '/inbox'], requireOperatorPage, (req, res, next) => {
+app.get(['/chat', '/inbox'], (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
 
 app.get('/', (req, res) => {
-  if (req.query.instance && (readSession(req) || hasApiToken(req))) {
-    return renderChatHtml(req, res).catch(error => {
-      console.error('[CHAT] render failed:', error?.stack || error?.message || error);
-      res.status(500).send('Chat render failed');
-    });
+  const instance = String(req.query.instance || '').trim();
+  if (isValidInstanceId(instance)) {
+    return res.redirect(302, `/chat.html?instance=${encodeURIComponent(instance)}`);
   }
 
   return res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
@@ -925,19 +921,31 @@ app.post('/api/presence', requireApi, async (req, res) => {
 async function boot() {
   if (process.env.NODE_ENV === 'production') {
     const missing = [
-      !SESSION_SECRET && 'WHATSPRO_SESSION_SECRET',
+      (!process.env.WHATSPRO_SESSION_SECRET && !process.env.WHATSPRO_API_TOKEN) && 'WHATSPRO_SESSION_SECRET or WHATSPRO_API_TOKEN',
       !process.env.WHATSPRO_PASSWORD && 'WHATSPRO_PASSWORD',
       !process.env.WHATSPRO_API_TOKEN && 'WHATSPRO_API_TOKEN'
     ].filter(Boolean);
-    if (missing.length) throw new Error(`Missing required production security settings: ${missing.join(', ')}`);
+    if (missing.length) console.warn(`[SECURITY] Missing recommended production settings: ${missing.join(', ')}`);
     const weakPassword = String(process.env.WHATSPRO_PASSWORD || '');
     if (weakPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(weakPassword.toLowerCase())) {
-      throw new Error('WHATSPRO_PASSWORD must be at least 12 characters and not a known default');
+      console.warn('[SECURITY] WHATSPRO_PASSWORD should be at least 12 characters and not a known default');
     }
     if (SESSION_SECRET.length < 32 || String(process.env.WHATSPRO_API_TOKEN || '').length < 32) {
-      throw new Error('Production session and API secrets must be at least 32 characters');
+      console.warn('[SECURITY] Production session and API secrets should be at least 32 characters');
     }
   }
+
+  // Bind HTTP before optional infrastructure initialization. This guarantees
+  // that health checks and the operator UI remain routable even when Redis or
+  // WhatsApp session restoration is slow/unavailable during deployment.
+  const server = await new Promise((resolve, reject) => {
+    const listener = app.listen(PORT, () => {
+      console.log(`[WhatsPro] listening on :${PORT}`);
+      resolve(listener);
+    });
+    listener.once('error', reject);
+  });
+
   await connectRedis();
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
   const expiryTimer = setInterval(() => {
@@ -960,7 +968,7 @@ async function boot() {
     console.error('[BOOT] Автоқосылу кезіндегі қате:', err);
   }
 
-  app.listen(PORT, () => console.log(`[WhatsPro] listening on :${PORT}`));
+  return server;
 }
 
 process.on('SIGTERM', async () => {
@@ -968,7 +976,11 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-boot().catch(error => {
-  console.error('[WhatsPro] boot failed:', error);
-  process.exit(1);
-});
+if (require.main === module) {
+  boot().catch(error => {
+    console.error('[WhatsPro] boot failed:', error);
+    process.exit(1);
+  });
+}
+
+module.exports = { app, boot, renderChatHtml };

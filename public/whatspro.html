@@ -744,6 +744,7 @@
 
     <script>
         const qs = new URLSearchParams(location.search);
+        const requestedReturnTo = (qs.get('returnTo') || '').trim();
         const scanInstance = (qs.get('scan') || '').trim();
         const connectMode = qs.get('connect') === '1';
         let activeRequestId = (qs.get('request') || '').trim();
@@ -769,6 +770,17 @@
         let scannerStarted = false;
         let adminRefreshTimer = null;
         let operatorLang = localStorage.getItem('whatspro_operator_lang') === 'ru' ? 'ru' : 'kk';
+
+        function safeReturnTo() {
+            if (!requestedReturnTo.startsWith('/') || requestedReturnTo.startsWith('//')) return '';
+            try {
+                const target = new URL(requestedReturnTo, location.origin);
+                if (target.origin !== location.origin || !/^\/(?:chat(?:\.html)?|inbox)(?:$|[/?])/.test(target.pathname)) return '';
+                return target.pathname + target.search;
+            } catch (_) {
+                return '';
+            }
+        }
 
         if (qs.get('instance')) instanceInput.value = qs.get('instance');
 
@@ -1068,6 +1080,8 @@
 
             try {
                 await requestJson('/api/whatspro/session', { skipAuthRedirect: true });
+                const returnTo = safeReturnTo();
+                if (returnTo) return location.replace(returnTo);
                 await startAdminDashboard();
             } catch (error) {
                 showLogin('Логин мен пароль енгізіңіз.');
@@ -1094,6 +1108,8 @@
                     body: JSON.stringify({ username, password }),
                     skipAuthRedirect: true
                 });
+                const returnTo = safeReturnTo();
+                if (returnTo) return location.replace(returnTo);
                 await startAdminDashboard();
             } catch (error) {
                 showLogin('Логин немесе пароль қате.');

@@ -17,6 +17,7 @@
 
   var apiBase = safeApiBase(config.apiBase);
   var chatToken = String(config.chatToken || '');
+  var authRedirectStarted = false;
   var endpoints = Object.assign({
     inbox: '/api/chat/inbox', history: '/api/chat/history', send: '/api/chat/send',
     media: '/api/chat/media', lock: '/api/chat/operator-lock', action: '/api/chat/action',
@@ -83,7 +84,14 @@
       headers: headers(Object.assign({ Accept: 'application/json' }, options && options.headers || {}))
     }));
     var data = await response.json().catch(function () { return {}; });
-    if (!response.ok) throw new Error(data.error || 'HTTP_' + response.status);
+    if (!response.ok) {
+      if (response.status === 401 && !authRedirectStarted) {
+        authRedirectStarted = true;
+        var returnTo = location.pathname + location.search;
+        location.assign('/?returnTo=' + encodeURIComponent(returnTo));
+      }
+      throw new Error(data.error || 'HTTP_' + response.status);
+    }
     return data;
   }
 
