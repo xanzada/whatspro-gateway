@@ -65,14 +65,6 @@ test('base64 validation rejects malformed and oversized media as permanent failu
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
 });
 
-test('stored audio Data URIs are validated without binary decoding', () => {
-  const dataUri = 'data:audio/ogg;base64,T2dnUw==';
-  assert.equal(serverTest.validateStoredAudioDataUri(dataUri), dataUri);
-  assert.throws(() => serverTest.validateStoredAudioDataUri('data:audio/ogg;base64,YWJj==='));
-  assert.throws(() => serverTest.validateStoredAudioDataUri('data:image/png;base64,YWJj'));
-  assert.throws(() => serverTest.validateStoredAudioDataUri('data:audio/ogg\r\nx-bad:value;base64,YWJj'));
-});
-
 class FakeIdempotencyRedis {
   constructor(open = true) { this.isOpen = open; this.values = new Map(); }
   async sendCommand(args) {

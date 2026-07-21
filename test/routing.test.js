@@ -80,6 +80,14 @@ test('chat audio hydration uses validated JSON media as a Data URI', async () =>
   assert.match(source, /console\.error\('Audio play error:', error\)/);
 });
 
+test('chat media route returns the raw Redis Data URI without binary conversion', async () => {
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const route = source.slice(source.indexOf("app.get('/api/chat/media/:instanceId/:messageId'"), source.indexOf("app.post('/api/chat/send/:instanceId/:phone'"));
+  assert.match(route, /redisClient\.sendCommand\(\['GET', chatMediaKey\(instanceId, messageId\)\]\)\.catch\(\(\) => ''\)/);
+  assert.match(route, /res\.json\(\{ success: true, dataUri: mediaData \}\)/);
+  assert.doesNotMatch(route, /Buffer\.from|Content-Length|Accept-Ranges/);
+});
+
 test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   assert.match(source, /phoneQuery\.charAt\(0\) === '8' && phoneQuery\.length > 1/);

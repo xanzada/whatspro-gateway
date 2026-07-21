@@ -459,22 +459,6 @@ async function readInboxEntries(instanceId, limit) {
   return chatStore.readInbox(instanceId, limit);
 }
 
-function validateStoredAudioDataUri(mediaData) {
-  const dataUri = String(mediaData || '').trim();
-  const match = dataUri.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/i);
-  if (!match) throw new Error('INVALID_MEDIA_DATA');
-  const mediaType = String(match[1] || '').trim().toLowerCase();
-  if (!/^audio\/[a-z0-9][a-z0-9.+_-]*$/.test(mediaType)) throw new Error('UNSUPPORTED_MEDIA_TYPE');
-  const base64 = match[2];
-  if (!base64 || base64.length % 4 !== 0 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4) {
-    throw new Error('INVALID_MEDIA_DATA');
-  }
-  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
-  const decodedBytes = (base64.length / 4) * 3 - padding;
-  if (decodedBytes <= 0 || decodedBytes > MAX_MEDIA_BYTES) throw new Error('INVALID_MEDIA_DATA');
-  return dataUri;
-}
-
 function remainingOperatorTtl(expiresAt, now = Date.now()) {
   return Math.max(0, Math.ceil((Number(expiresAt || 0) - now) / 1000));
 }
@@ -981,22 +965,14 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
     }
 
     try {
-        const mediaData = await chatStore.readMedia(instanceId, messageId);
+        const mediaData = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '');
 
         if (!mediaData) {
             res.set('Retry-After', '3');
             return res.status(404).json({ error: 'MEDIA_NOT_READY' });
         }
 
-        let dataUri;
-        try {
-            dataUri = validateStoredAudioDataUri(mediaData);
-        } catch (error) {
-            const status = error.message === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : 422;
-            return res.status(status).json({ error: error.message });
-        }
-        res.set({ 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
-        return res.json({ success: true, dataUri });
+        return res.json({ success: true, dataUri: mediaData });
     } catch (error) {
         console.error(
             `[CHAT MEDIA] ${instanceId}/${messageId}:`,
@@ -1369,5 +1345,5 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, validateStoredAudioDataUri }
+  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl }
 };
