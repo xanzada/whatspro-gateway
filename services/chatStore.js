@@ -1,0 +1,394 @@
+const crypto = require('crypto');
+const { redisClient } = require('../config/redis');
+const { normalizePhone } = require('./phoneUtils');
+
+const STANDARD_TTL_SECONDS = 24 * 60 * 60;
+const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
+const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
+const CHAT_STATES = new Set(['new', 'all', 'operator', 'archive']);
+
+const keys = {
+  history: (instanceId, phone) => `chatwoot:history:${instanceId}:${phone}`,
+  legacyHistory: (instanceId, phone) => `history:${instanceId}:${phone}`,
+  inbox: instanceId => `chatwoot:inbox:${instanceId}`,
+  archive: instanceId => `chatwoot:archive:${instanceId}`,
+  archiveMarker: (instanceId, phone) => `chatwoot:archive:${instanceId}:${phone}`,
+  state: (instanceId, phone) => `chatwoot:state:${instanceId}:${phone}`,
+  viewed: instanceId => `chatwoot:viewed:${instanceId}`,
+  media: (instanceId, messageId) => `chatwoot:media:${instanceId}:${messageId}`,
+  mediaIds: (instanceId, phone) => `chatwoot:media-ids:${instanceId}:${phone}`,
+  receipts: (instanceId, phone) => `chatwoot:receipts:${instanceId}:${phone}`,
+  expiry: instanceId => `chatwoot:expiry:${instanceId}`,
+  operator: (instanceId, phone) => `operator_active:${instanceId}:${phone}`,
+  mute: (instanceId, phone) => `mute:${instanceId}:${phone}`
+};
+
+function parseJson(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function isPhone(phone) {
+  return /^\d{10,15}$/.test(String(phone || ''));
+}
+
+function cleanEntry(entry, now) {
+  const copy = { ...entry };
+  delete copy.mediaData;
+  delete copy.base64;
+  const role = String(copy.role || '').toLowerCase();
+  const outgoing = copy.direction === 'outgoing' || copy.fromMe === true || ['assistant', 'model', 'bot', 'operator'].includes(role);
+  let createdAt = Number(copy.createdAt || copy.timestamp || now());
+  if (createdAt > 0 && createdAt < 1e12) createdAt *= 1000;
+  return {
+    ...copy,
+    direction: outgoing ? 'outgoing' : 'incoming',
+    fromMe: outgoing,
+    text: copy.text || copy.body || '',
+    body: copy.body || copy.text || '',
+    createdAt
+  };
+}
+
+function parseLegacyInboxRow(raw, now) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const object = parseJson(value);
+  if (object && typeof object === 'object') {
+    const phone = normalizePhone(object.phone || object.senderPhone || object.from || '');
+    return isPhone(phone) ? { phone, updatedAt: Number(object.createdAt || object.updatedAt || object.timestamp || now()) } : null;
+  }
+  const [phonePart, scorePart] = value.split(/[,|]/);
+  const phone = normalizePhone(phonePart);
+  return isPhone(phone) ? { phone, updatedAt: Number(scorePart) || 0 } : null;
+}
+
+function createChatStore(redis, options = {}) {
+  const now = options.now || Date.now;
+
+  async function command(args, fallback) {
+    try { return await redis.sendCommand(args); } catch (error) {
+      if (arguments.length > 1) return fallback;
+      throw error;
+    }
+  }
+
+  async function getState(instanceId, phone) {
+    const state = await command(['GET', keys.state(instanceId, phone)], '');
+    if (CHAT_STATES.has(state)) return state;
+    const archiveMarker = await command(['GET', keys.archiveMarker(instanceId, phone)], '');
+    return archiveMarker ? 'archive' : 'all';
+  }
+
+  async function ttlFor(instanceId, phone) {
+    return (await getState(instanceId, phone)) === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+  }
+
+  async function setState(instanceId, phone, state) {
+    if (!CHAT_STATES.has(state)) throw new Error('INVALID_CHAT_STATE');
+    const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    await command(['SET', keys.state(instanceId, phone), state, 'EX', String(ttl)]);
+    if (state === 'archive') {
+      await Promise.all([
+        command(['SADD', keys.archive(instanceId), phone]),
+        command(['SET', keys.archiveMarker(instanceId, phone), String(now()), 'EX', String(ttl)])
+      ]);
+    } else {
+      await Promise.all([
+        command(['SREM', keys.archive(instanceId), phone], 0),
+        command(['DEL', keys.archiveMarker(instanceId, phone)], 0)
+      ]);
+    }
+    return state;
+  }
+
+  async function mediaIds(instanceId, phone, history = []) {
+    const stored = await command(['SMEMBERS', keys.mediaIds(instanceId, phone)], []);
+    const fromHistory = history.filter(item => item?.hasMedia && item?.id).map(item => String(item.id));
+    return [...new Set([...stored, ...fromHistory])];
+  }
+
+  async function applyTtl(instanceId, phone, ttl) {
+    const history = await getHistory(instanceId, phone, 2000);
+    const ids = await mediaIds(instanceId, phone, history);
+    const chatKeys = [
+      keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
+      keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.receipts(instanceId, phone)
+    ];
+    await Promise.all([
+      command(['ZADD', keys.expiry(instanceId), String(now() + ttl * 1000), phone]),
+      ...chatKeys.map(key => command(['EXPIRE', key, String(ttl)], 0)),
+      ...ids.map(id => command(['EXPIRE', keys.media(instanceId, id), String(ttl)], 0))
+    ]);
+  }
+
+  async function storeMedia(instanceId, phone, messageId, data, mimeType = 'audio/ogg', ttl) {
+    if (!messageId || !data) return false;
+    const raw = String(data).trim();
+    const comma = raw.indexOf(',');
+    const base64 = (/^data:[^;,]+;base64,/i.test(raw) ? raw.slice(comma + 1) : raw).replace(/\s+/g, '');
+    if (!base64 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+      throw new Error('INVALID_OR_OVERSIZED_MEDIA');
+    }
+    const encoded = `data:${String(mimeType || 'audio/ogg').split(';')[0]};base64,${base64}`;
+    const effectiveTtl = ttl || await ttlFor(instanceId, phone);
+    await Promise.all([
+      command(['SET', keys.media(instanceId, messageId), encoded, 'EX', String(effectiveTtl)]),
+      command(['SADD', keys.mediaIds(instanceId, phone), String(messageId)])
+    ]);
+    await command(['EXPIRE', keys.mediaIds(instanceId, phone), String(effectiveTtl)], 0);
+    return true;
+  }
+
+  async function readMedia(instanceId, messageId) {
+    return command(['GET', keys.media(instanceId, messageId)], null);
+  }
+
+  async function appendMessage(instanceId, rawPhone, entry, options = {}) {
+    const phone = normalizePhone(rawPhone);
+    if (!isPhone(phone)) throw new Error('INVALID_CHAT_PHONE');
+    const createdAt = Number(entry.createdAt || entry.timestamp || now());
+    const normalized = cleanEntry({ ...entry, instanceId, phone, createdAt }, now);
+    if (entry.mediaData && normalized.id) {
+      await storeMedia(instanceId, phone, normalized.id, entry.mediaData, entry.mediaType);
+    }
+    await ensureInboxSortedSet(instanceId);
+    await Promise.all([
+      command(['RPUSH', keys.history(instanceId, phone), JSON.stringify(normalized)]),
+      command(['ZADD', keys.inbox(instanceId), String(normalized.createdAt), phone])
+    ]);
+    if (options.state) await setState(instanceId, phone, options.state);
+    const ttl = await ttlFor(instanceId, phone);
+    await applyTtl(instanceId, phone, ttl);
+    return normalized;
+  }
+
+  async function getHistory(instanceId, rawPhone, limit = 1000) {
+    const phone = normalizePhone(rawPhone);
+    const [rows, legacyRows, receiptPairs] = await Promise.all([
+      command(['LRANGE', keys.history(instanceId, phone), String(-limit), '-1'], []),
+      command(['LRANGE', keys.legacyHistory(instanceId, phone), String(-limit), '-1'], []),
+      command(['HGETALL', keys.receipts(instanceId, phone)], [])
+    ]);
+    const receipts = new Map();
+    for (let i = 0; i < receiptPairs.length; i += 2) {
+      const stored = String(receiptPairs[i + 1] || '');
+      receipts.set(receiptPairs[i], stored.includes(':') ? stored.slice(stored.indexOf(':') + 1) : stored);
+    }
+    return [...rows, ...legacyRows].map(parseJson).filter(Boolean).map(item => {
+      const normalized = cleanEntry(item, now);
+      const deliveryStatus = normalized.id ? receipts.get(String(normalized.id)) : '';
+      return deliveryStatus ? { ...normalized, deliveryStatus } : normalized;
+    }).sort((a, b) => a.createdAt - b.createdAt)
+      .filter((item, index, all) => !item.id || all.findIndex(other => other.id === item.id) === index)
+      .slice(-limit);
+  }
+
+  async function updateMessageReceipt(instanceId, rawPhone, messageId, deliveryStatus) {
+    const phone = normalizePhone(rawPhone);
+    if (!isPhone(phone) || !messageId) return false;
+    const allowed = new Set(['pending', 'sent', 'delivered', 'read', 'played', 'failed']);
+    const status = allowed.has(String(deliveryStatus).toLowerCase()) ? String(deliveryStatus).toLowerCase() : 'sent';
+    const ranks = { pending: 0, sent: 1, delivered: 2, read: 3, played: 4, failed: -1 };
+    const receiptScript = [
+      "local ttl = math.max(redis.call('TTL', KEYS[1]), redis.call('TTL', KEYS[2]), redis.call('TTL', KEYS[3]))",
+      "if ttl <= 0 then return 0 end",
+      "local current = redis.call('HGET', KEYS[4], ARGV[1])",
+      "local legacyRanks = { pending = 0, sent = 1, delivered = 2, read = 3, played = 4, failed = -1 }",
+      "local currentRank = current and tonumber(current:match('^(-?%d+):') or legacyRanks[current] or -1) or -1",
+      "if current and tonumber(ARGV[3]) < currentRank then return 1 end",
+      "redis.call('HSET', KEYS[4], ARGV[1], ARGV[3] .. ':' .. ARGV[2])",
+      "redis.call('EXPIRE', KEYS[4], ttl)",
+      'return 1'
+    ].join('\n');
+    const result = await command(['EVAL', receiptScript, '4', keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
+      keys.state(instanceId, phone), keys.receipts(instanceId, phone), String(messageId), status, String(ranks[status])], null);
+    if (result !== null) return Number(result) === 1;
+
+    const remaining = Math.max(
+      Number(await command(['TTL', keys.history(instanceId, phone)], -2)),
+      Number(await command(['TTL', keys.legacyHistory(instanceId, phone)], -2)),
+      Number(await command(['TTL', keys.state(instanceId, phone)], -2))
+    );
+    if (remaining <= 0) return false;
+    const current = String(await command(['HGET', keys.receipts(instanceId, phone), String(messageId)], ''));
+    const currentRank = current.includes(':') ? Number(current.split(':')[0]) : ranks[current];
+    if (current && Number.isFinite(currentRank) && currentRank > ranks[status]) return true;
+    await command(['HSET', keys.receipts(instanceId, phone), String(messageId), `${ranks[status]}:${status}`]);
+    await command(['EXPIRE', keys.receipts(instanceId, phone), String(remaining)], 0);
+    return true;
+  }
+
+  async function ensureInboxSortedSet(instanceId) {
+    const key = keys.inbox(instanceId);
+    const lockKey = `${key}:migration-lock`;
+    const token = crypto.randomBytes(12).toString('hex');
+    const acquired = await command(['SET', lockKey, token, 'NX', 'EX', '15'], null);
+    if (acquired !== 'OK') {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const type = await command(['TYPE', key], 'none');
+        if (type !== 'list') return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error('INBOX_MIGRATION_BUSY');
+    }
+    const backupKey = `${key}:legacy-migration`;
+    async function atomicConvertList(sourceKey, targetKey) {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (await command(['TYPE', sourceKey], 'none') !== 'list') return 0;
+        const rows = await command(['LRANGE', sourceKey, '0', '-1'], []);
+        const deduped = new Map();
+        rows.map(row => parseLegacyInboxRow(row, now)).filter(Boolean).forEach(item => {
+          deduped.set(item.phone, Math.max(deduped.get(item.phone) || 0, item.updatedAt));
+        });
+        const pairs = [...deduped].flatMap(([phone, score]) => [String(score), phone]);
+        const script = [
+          "if redis.call('TYPE', KEYS[1]).ok ~= 'list' then return 0 end",
+          "if redis.call('LLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return -1 end",
+          "if KEYS[1] ~= KEYS[2] and redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset' then return -2 end",
+          "if KEYS[1] == KEYS[2] then redis.call('DEL', KEYS[1]) end",
+          "for i = 2, #ARGV, 2 do redis.call('ZADD', KEYS[2], ARGV[i], ARGV[i + 1]) end",
+          "if KEYS[1] ~= KEYS[2] then redis.call('DEL', KEYS[1]) end",
+          'return 1'
+        ].join('\n');
+        const result = await command(['EVAL', script, '2', sourceKey, targetKey, String(rows.length), ...pairs], null);
+        if (result === null) return null;
+        if (Number(result) >= 0) return Number(result);
+      }
+      throw new Error('INBOX_MIGRATION_CHANGED_REPEATEDLY');
+    }
+    async function mergeBackup() {
+      const legacy = await command(['LRANGE', backupKey, '0', '-1'], []);
+      const deduped = new Map();
+      legacy.map(row => parseLegacyInboxRow(row, now)).filter(Boolean).forEach(item => {
+        deduped.set(item.phone, Math.max(deduped.get(item.phone) || 0, item.updatedAt));
+      });
+      const pairs = [...deduped].flatMap(([phone, score]) => [String(score), phone]);
+      if (pairs.length) await command(['ZADD', key, ...pairs]);
+      if (await command(['TYPE', backupKey], 'none') === 'list') await command(['DEL', backupKey], 0);
+    }
+    try {
+      const mainConverted = await atomicConvertList(key, key);
+      if (mainConverted !== null) {
+        await atomicConvertList(backupKey, key);
+        return;
+      }
+      if (await command(['TYPE', backupKey], 'none') === 'list') await mergeBackup();
+      if (await command(['TYPE', key], 'none') === 'list') {
+        await command(['RENAME', key, backupKey]);
+        await mergeBackup();
+      }
+    } finally {
+      const releaseScript = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+      const released = await command(['EVAL', releaseScript, '1', lockKey, token], null);
+      if (released === null && await command(['GET', lockKey], '') === token) await command(['DEL', lockKey], 0);
+    }
+  }
+
+  async function readInbox(instanceId, limit = 100) {
+    const key = keys.inbox(instanceId);
+    await ensureInboxSortedSet(instanceId);
+    await pruneExpired(instanceId);
+    const rows = await command(['ZREVRANGE', key, '0', String(limit - 1), 'WITHSCORES'], []);
+    const result = [];
+    for (let i = 0; i < rows.length; i += 2) {
+      const phone = normalizePhone(rows[i]);
+      if (!isPhone(phone)) continue;
+      const [historyType, legacyType, stateType] = await Promise.all([
+        command(['TYPE', keys.history(instanceId, phone)], 'none'),
+        command(['TYPE', keys.legacyHistory(instanceId, phone)], 'none'),
+        command(['TYPE', keys.state(instanceId, phone)], 'none')
+      ]);
+      if (historyType === 'none' && legacyType === 'none' && stateType === 'none') {
+        await Promise.all([
+          command(['ZREM', key, phone], 0),
+          command(['ZREM', keys.viewed(instanceId), phone], 0),
+          command(['SREM', keys.archive(instanceId), phone], 0)
+        ]);
+        continue;
+      }
+      result.push({ phone, updatedAt: Number(rows[i + 1]) || 0 });
+    }
+    return result;
+  }
+
+  async function pruneExpired(instanceId) {
+    const cutoff = now();
+    const expiredPhones = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff)], []);
+    const pruneScript = [
+      "local score = redis.call('ZSCORE', KEYS[1], ARGV[1])",
+      'if not score or tonumber(score) > tonumber(ARGV[2]) then return 0 end',
+      "redis.call('ZREM', KEYS[1], ARGV[1])",
+      "redis.call('ZREM', KEYS[2], ARGV[1])",
+      "redis.call('ZREM', KEYS[3], ARGV[1])",
+      "redis.call('SREM', KEYS[4], ARGV[1])",
+      'return 1'
+    ].join('\n');
+    await Promise.all(expiredPhones.filter(isPhone).map(async phone => {
+      const result = await command(['EVAL', pruneScript, '4', keys.expiry(instanceId), keys.inbox(instanceId),
+        keys.viewed(instanceId), keys.archive(instanceId), phone, String(cutoff)], null);
+      if (result !== null) return;
+      const score = Number(await command(['ZSCORE', keys.expiry(instanceId), phone], Infinity));
+      if (score > cutoff) return;
+      await Promise.all([
+        command(['ZREM', keys.inbox(instanceId), phone], 0), command(['ZREM', keys.viewed(instanceId), phone], 0),
+        command(['ZREM', keys.expiry(instanceId), phone], 0), command(['SREM', keys.archive(instanceId), phone], 0)
+      ]);
+    }));
+    return expiredPhones.length;
+  }
+
+  async function applyAction(instanceId, rawPhone, action) {
+    const phone = normalizePhone(rawPhone);
+    if (!isPhone(phone)) throw new Error('INVALID_CHAT_PHONE');
+    const normalizedAction = action === 'close' ? 'archive' : action;
+    if (normalizedAction === 'view') {
+      const currentState = await getState(instanceId, phone);
+      await Promise.all([
+        currentState === 'new' ? setState(instanceId, phone, 'all') : Promise.resolve(currentState),
+        command(['ZADD', keys.viewed(instanceId), String(now()), phone])
+      ]);
+      await applyTtl(instanceId, phone, currentState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS);
+    } else if (normalizedAction === 'archive') {
+      await setState(instanceId, phone, 'archive');
+      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS);
+    } else if (normalizedAction === 'restore') {
+      await setState(instanceId, phone, 'all');
+      await applyTtl(instanceId, phone, STANDARD_TTL_SECONDS);
+    } else if (normalizedAction === 'delete') {
+      const history = await getHistory(instanceId, phone, 5000);
+      const ids = await mediaIds(instanceId, phone, history);
+      await Promise.all([
+        command(['DEL', keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
+          keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.receipts(instanceId, phone),
+          keys.operator(instanceId, phone), keys.mute(instanceId, phone)]),
+        command(['ZREM', keys.inbox(instanceId), phone], 0),
+        command(['ZREM', keys.viewed(instanceId), phone], 0),
+        command(['ZREM', keys.expiry(instanceId), phone], 0),
+        command(['SREM', keys.archive(instanceId), phone], 0),
+        ...ids.map(id => command(['DEL', keys.media(instanceId, id)], 0))
+      ]);
+    } else {
+      throw new Error('INVALID_CHAT_ACTION');
+    }
+    return normalizedAction;
+  }
+
+  return { appendMessage, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, keys };
+}
+
+const chatStore = createChatStore(redisClient);
+
+module.exports = {
+  STANDARD_TTL_SECONDS,
+  ARCHIVE_TTL_SECONDS,
+  MAX_MEDIA_BYTES,
+  CHAT_STATES,
+  createChatStore,
+  chatStore,
+  appendMessage: chatStore.appendMessage,
+  updateMessageReceipt: chatStore.updateMessageReceipt,
+  storeMedia: chatStore.storeMedia,
+  readMedia: chatStore.readMedia,
+  keys
+};

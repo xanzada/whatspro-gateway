@@ -10,6 +10,17 @@ Standalone WhatsApp Web API Gateway.
 4. Add persistent volume:
    - `/app/whatsapp_auth`
 
+Production requires `WHATSPRO_SESSION_SECRET` and `WHATSPRO_API_TOKEN` of at
+least 32 characters plus a non-default `WHATSPRO_PASSWORD` of at least 12
+characters. Set `TRUST_PROXY_HOPS` only when the service is behind that exact
+number of trusted reverse proxies.
+
+The operator chat pages require an authenticated WhatsPro session. Chats use
+an exclusive `new` / `all` / `operator` / `archive` state, synchronize through
+authenticated server-sent events, expire after 24 hours, and are retained for
+72 hours while archived. Operator replies reset the AI handoff lock to 60
+seconds.
+
 ## HTTP contract
 
 Send message/media:

@@ -1,9 +1,8 @@
 const axios = require('axios');
 const { redisClient } = require('../config/redis');
 const { normalizePhoneFromCandidates } = require('./phoneUtils');
-
-const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
-const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const { chatStore } = require('./chatStore');
+const { publishChatEvent } = require('./chatEvents');
 
 function stripUndefined(value) {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
@@ -53,22 +52,6 @@ function getPayloadPhone(payload = {}) {
     payload.data?.senderPhone,
     payload.data?.key?.remoteJid
   ]);
-}
-
-function historyKey(instanceId, phone) {
-  return `chatwoot:history:${instanceId}:${phone}`;
-}
-
-function openbotHistoryKey(instanceId, phone) {
-  return `history:${instanceId}:${phone}`;
-}
-
-function inboxKey(instanceId) {
-  return `chatwoot:inbox:${instanceId}`;
-}
-
-function archiveKey(instanceId) {
-  return `chatwoot:archive:${instanceId}`;
 }
 
 function operatorActiveKey(instanceId, phone) {
@@ -126,19 +109,13 @@ async function saveIncomingMessage(payload) {
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
   if (!redisClient.isOpen) return { skipped: true, reason: 'redis_not_connected' };
 
-  const timestamp = Date.now();
+  const rawTimestamp = Number(payload.timestamp || payload.messageTimestamp || payload.data?.messageTimestamp || 0);
+  const timestamp = rawTimestamp > 0 ? (rawTimestamp < 1e12 ? rawTimestamp * 1000 : rawTimestamp) : Date.now();
   const entry = buildHistoryEntry(payload, instanceId, phone, timestamp);
 
-  await Promise.all([
-    redisClient.sendCommand(['RPUSH', historyKey(instanceId, phone), JSON.stringify(entry)]),
-    redisClient.sendCommand(['ZADD', inboxKey(instanceId), String(timestamp), phone])
-  ]);
-  const archived = await redisClient.sendCommand(['SISMEMBER', archiveKey(instanceId), phone]).catch(() => 0);
-  const ttlSeconds = Number(archived) === 1 ? CHAT_ARCHIVE_TTL_SECONDS : CHAT_STANDARD_TTL_SECONDS;
-  await Promise.all([
-    redisClient.sendCommand(['EXPIRE', historyKey(instanceId, phone), String(ttlSeconds)]),
-    redisClient.sendCommand(['EXPIRE', openbotHistoryKey(instanceId, phone), String(ttlSeconds)]).catch(() => 0)
-  ]);
+  const state = entry.direction === 'incoming' ? 'new' : undefined;
+  await chatStore.appendMessage(instanceId, phone, entry, { state });
+  await publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state }).catch(() => {});
 
   return { saved: true, instanceId, phone, timestamp };
 }

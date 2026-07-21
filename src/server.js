@@ -18,6 +18,8 @@ const {
 const { normalizePhone } = require('../services/phoneUtils');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
+const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
+const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -27,11 +29,21 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
-const CHAT_ACCESS_SECRET = process.env.CHAT_ACCESS_SECRET || process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSPRO_API_TOKEN || 'dev';
+const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'dev');
+const SSE_MAX_CONNECTIONS_PER_CLIENT = 20;
+const SSE_MAX_CONNECTIONS_TOTAL = 500;
+const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
+const sseConnections = new Map();
+let sseConnectionTotal = 0;
+const loginAttempts = new Map();
 
-app.set('trust proxy', true);
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+const configuredProxyHops = String(process.env.TRUST_PROXY_HOPS || '').trim();
+app.set('trust proxy', /^\d+$/.test(configuredProxyHops) ? Number(configuredProxyHops) : false);
+const smallJsonParser = express.json({ limit: '256kb' });
+const smallFormParser = express.urlencoded({ extended: true, limit: '64kb' });
+const apiSendJsonParser = express.json({ limit: '23mb' });
+app.use((req, res, next) => req.path === '/api/send' ? next() : smallJsonParser(req, res, next));
+app.use((req, res, next) => req.path === '/api/send' ? next() : smallFormParser(req, res, next));
 
 function safeEqual(a = '', b = '') {
   const left = Buffer.from(String(a));
@@ -52,7 +64,7 @@ function parseCookies(req) {
 
 function signSession(username) {
   const payload = `${username}:${Date.now()}`;
-  const sig = crypto.createHmac('sha256', process.env.WHATSPRO_SESSION_SECRET || 'dev').update(payload).digest('hex');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   return Buffer.from(`${payload}:${sig}`).toString('base64url');
 }
 
@@ -64,7 +76,7 @@ function readSession(req) {
     const parts = decoded.split(':');
     const sig = parts.pop();
     const payload = parts.join(':');
-    const expected = crypto.createHmac('sha256', process.env.WHATSPRO_SESSION_SECRET || 'dev').update(payload).digest('hex');
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
     if (!safeEqual(sig, expected)) return null;
     const [username, ts] = parts;
     if (Date.now() - Number(ts || 0) > 30 * 86400 * 1000) return null;
@@ -81,24 +93,19 @@ function hasApiToken(req) {
   return expected && safeEqual(incoming, expected);
 }
 
-function signChatToken(instanceId) {
-  return crypto.createHmac('sha256', CHAT_ACCESS_SECRET).update(String(instanceId || '')).digest('hex');
-}
-
-function hasChatToken(req) {
-  const instanceId = String(req.params?.instanceId || req.body?.instanceId || req.query?.instance || req.headers['x-chat-instance'] || '').trim();
-  const token = String(req.headers['x-chat-token'] || req.query?.chatToken || '');
-  return Boolean(instanceId && token && safeEqual(token, signChatToken(instanceId)));
-}
-
 function requireApi(req, res, next) {
   if (hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
 function requireUiOrApi(req, res, next) {
-  if (hasApiToken(req) || readSession(req) || hasChatToken(req)) return next();
+  if (hasApiToken(req) || readSession(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
+}
+
+function requireOperatorPage(req, res, next) {
+  if (hasApiToken(req) || readSession(req)) return next();
+  return res.redirect('/');
 }
 
 function isValidInstanceId(value = '') {
@@ -127,13 +134,14 @@ async function renderChatHtml(req, res) {
     ...tenant,
     instance: tenant.instance || instance,
     apiBase: publicApiBase(req),
-    chatToken: signChatToken(tenant.instance || instance),
     endpoints: {
       inbox: '/api/chat/inbox',
       history: '/api/chat/history',
       send: '/api/chat/send',
       media: '/api/chat/media',
-      action: '/api/chat/action'
+      action: '/api/chat/action',
+      lock: '/api/chat/operator-lock',
+      events: '/api/chat/events'
     }
   };
   const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
@@ -289,13 +297,8 @@ async function chatTtlSeconds(instanceId, phone) {
 
 async function saveChatHistoryEntry(instanceId, phone, entry) {
   if (!redisClient.isOpen || !isValidChatPhone(phone)) return;
-
-  const createdAt = Number(entry.createdAt || Date.now());
-  await Promise.all([
-    redisClient.sendCommand(['RPUSH', chatHistoryKey(instanceId, phone), JSON.stringify({ ...entry, createdAt })]),
-    redisClient.sendCommand(['ZADD', chatInboxKey(instanceId), String(createdAt), phone])
-  ]);
-  await expireChatKeys(instanceId, phone, await chatTtlSeconds(instanceId, phone));
+  const state = isOperatorEntry(entry) ? 'operator' : undefined;
+  return chatStore.appendMessage(instanceId, phone, entry, { state });
 }
 
 function parseInboxListEntry(raw) {
@@ -316,18 +319,14 @@ function parseInboxListEntry(raw) {
 }
 
 async function readInboxEntries(instanceId, limit) {
-  const key = chatInboxKey(instanceId);
-  try {
-    const rows = await redisClient.sendCommand(['ZREVRANGE', key, '0', String(limit - 1), 'WITHSCORES']);
-    const entries = [];
-    for (let i = 0; i < rows.length; i += 2) {
-      const phone = normalizePhone(String(rows[i] || '').split(',')[0]);
-      if (isValidChatPhone(phone)) entries.push({ phone, updatedAt: Number(rows[i + 1]) || 0 });
-    }
-    return entries;
-  } catch (error) {
-    const rows = await redisClient.sendCommand(['LRANGE', key, '0', String(limit - 1)]).catch(() => []);
-    return rows.map(parseInboxListEntry).filter(Boolean);
+  return chatStore.readInbox(instanceId, limit);
+}
+
+async function sweepExpiredChatIndexes() {
+  if (!redisClient.isOpen) return;
+  for await (const key of redisClient.scanIterator({ MATCH: 'chatwoot:expiry:*', COUNT: 100 })) {
+    const instanceId = String(key).slice('chatwoot:expiry:'.length);
+    if (isValidInstanceId(instanceId)) await chatStore.pruneExpired(instanceId);
   }
 }
 
@@ -377,7 +376,7 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
 
-app.get('/chat.html', (req, res, next) => {
+app.get('/chat.html', requireOperatorPage, (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
 
@@ -385,12 +384,12 @@ app.get('/whatspro', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
 });
 
-app.get(['/chat', '/inbox'], (req, res, next) => {
+app.get(['/chat', '/inbox'], requireOperatorPage, (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
 
 app.get('/', (req, res) => {
-  if (req.query.instance) {
+  if (req.query.instance && (readSession(req) || hasApiToken(req))) {
     return renderChatHtml(req, res).catch(error => {
       console.error('[CHAT] render failed:', error?.stack || error?.message || error);
       res.status(500).send('Chat render failed');
@@ -411,9 +410,27 @@ app.get('/api/whatspro/session', (req, res) => {
 app.post('/api/whatspro/login', (req, res) => {
   const username = String(req.body?.username || '');
   const password = String(req.body?.password || '');
+  if (username.length > 64 || password.length > 256) return res.status(400).json({ error: 'INVALID_CREDENTIALS' });
+  const now = Date.now();
+  if (loginAttempts.size >= 1000) {
+    for (const [key, value] of loginAttempts) if (value.resetAt <= now) loginAttempts.delete(key);
+  }
+  const attemptKey = String(req.ip || 'unknown');
+  if (!loginAttempts.has(attemptKey) && loginAttempts.size >= 10000) {
+    return res.status(503).json({ error: 'LOGIN_THROTTLE_BUSY' });
+  }
+  const attempt = loginAttempts.get(attemptKey) || { count: 0, resetAt: Date.now() + 15 * 60 * 1000 };
+  if (attempt.resetAt <= now) { attempt.count = 0; attempt.resetAt = now + 15 * 60 * 1000; }
+  if (attempt.count >= 5) {
+    res.set('Retry-After', String(Math.max(1, Math.ceil((attempt.resetAt - Date.now()) / 1000))));
+    return res.status(429).json({ error: 'TOO_MANY_LOGIN_ATTEMPTS' });
+  }
   if (!safeEqual(username, process.env.WHATSPRO_USER || 'admin') || !safeEqual(password, process.env.WHATSPRO_PASSWORD || 'change-me')) {
+    attempt.count += 1;
+    loginAttempts.set(attemptKey, attempt);
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
   }
+  loginAttempts.delete(attemptKey);
   res.cookie('whatspro_session', signSession(username), { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 30 * 86400 * 1000 });
   res.json({ success: true, username });
 });
@@ -497,11 +514,12 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
     if (candidates.length >= limit) break;
   }
 
-  const [archiveRows, histories, openbotHistories, viewedScores] = await Promise.all([
+  const [archiveRows, histories, openbotHistories, viewedScores, states] = await Promise.all([
     redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []),
     Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
     Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null)))
+    Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null))),
+    Promise.all(candidates.map(item => chatStore.getState(instanceId, item.phone)))
   ]);
   const archiveSet = new Set((archiveRows || []).map(normalizePhone).filter(Boolean));
   const items = [];
@@ -518,7 +536,15 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
       stalePhones.push(item.phone);
       return;
     }
-    items.push(summary);
+    const state = states[index] || (summary.closed ? 'archive' : summary.hasOperator ? 'operator' : summary.unread ? 'new' : 'all');
+    items.push({
+      ...summary,
+      state,
+      unread: state === 'new',
+      viewed: state === 'all',
+      hasOperator: state === 'operator',
+      closed: state === 'archive'
+    });
   });
 
   await Promise.all(stalePhones.map(phone => Promise.all([
@@ -531,6 +557,58 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
   items.sort((a, b) => Number(b.lastAt || b.updatedAt || 0) - Number(a.lastAt || a.updatedAt || 0));
 
   res.json({ success: true, instanceId, items });
+});
+
+app.get('/api/chat/events/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const sessionToken = parseCookies(req).whatspro_session || '';
+  const incomingApiToken = String(req.headers.authorization || req.headers['x-api-key'] || '');
+  const principal = crypto.createHash('sha256').update(sessionToken || incomingApiToken || req.ip).digest('hex').slice(0, 24);
+  const connectionKey = `${principal}:${instanceId}`;
+  const connectionCount = sseConnections.get(connectionKey) || 0;
+  if (connectionCount >= SSE_MAX_CONNECTIONS_PER_CLIENT || sseConnectionTotal >= SSE_MAX_CONNECTIONS_TOTAL) {
+    return res.status(429).json({ error: 'TOO_MANY_EVENT_STREAMS' });
+  }
+  sseConnections.set(connectionKey, connectionCount + 1);
+  sseConnectionTotal += 1;
+
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+
+  let unsubscribe = () => {};
+  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 20000);
+  const maxLifetime = setTimeout(() => res.end(), SSE_MAX_LIFETIME_MS);
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    clearInterval(heartbeat);
+    clearTimeout(maxLifetime);
+    unsubscribe();
+    const remaining = Math.max(0, (sseConnections.get(connectionKey) || 1) - 1);
+    if (remaining) sseConnections.set(connectionKey, remaining);
+    else sseConnections.delete(connectionKey);
+    sseConnectionTotal = Math.max(0, sseConnectionTotal - 1);
+  };
+  req.once('close', cleanup);
+
+  try {
+    const teardown = await subscribeChatEvents(instanceId, event => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+    if (cleanedUp || req.destroyed) teardown();
+    else unsubscribe = teardown;
+  } catch (error) {
+    cleanup();
+    if (!res.writableEnded) res.end(`event: error\ndata: ${JSON.stringify({ error: 'EVENT_STREAM_UNAVAILABLE' })}\n\n`);
+  }
 });
 
 app.get('/api/chat/inbox-legacy/:instanceId', requireUiOrApi, async (req, res) => {
@@ -589,22 +667,7 @@ app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res)
 
   const limit = parseLimit(req.query.limit, 200, 1000);
   
-  const [chatRows, openbotRows] = await Promise.all([
-    redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, phone), String(-limit), '-1']).catch(() => []),
-    redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, phone), String(-limit), '-1']).catch(() => [])
-  ]);
-  
-  const chatHistory = chatRows.map(parseHistoryEntry).filter(Boolean).map(normalizeChatEntry);
-  const openbotHistory = openbotRows
-    .map(parseHistoryEntry)
-    .filter(Boolean)
-    .filter(entry => ['assistant', 'model', 'operator'].includes(String(entry.role || '').toLowerCase()))
-    .map(normalizeChatEntry);
-    
-  const history = [...chatHistory, ...openbotHistory]
-    .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
-    .filter((entry, index, rows) => !entry.id || rows.findIndex(item => item.id === entry.id) === index)
-    .slice(-limit);
+  const history = await chatStore.getHistory(instanceId, phone, limit);
 
   res.json({ success: true, instanceId, phone, history });
 });
@@ -626,9 +689,7 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
     }
 
     try {
-        const mediaData = await redisClient
-            .sendCommand(['GET', chatMediaKey(instanceId, messageId)])
-            .catch(() => '');
+        const mediaData = await chatStore.readMedia(instanceId, messageId);
 
         if (!mediaData) {
             res.set('Retry-After', '3');
@@ -652,13 +713,13 @@ app.get('/api/chat/media/:instanceId/:messageId', requireUiOrApi, async (req, re
 
         const base64 = String(match[2] || '').replace(/\s+/g, '');
 
-        if (!base64) {
+        if (!base64 || base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
             return res.status(422).json({ error: 'EMPTY_MEDIA_DATA' });
         }
 
         const buffer = Buffer.from(base64, 'base64');
 
-        if (!buffer.length) {
+        if (!buffer.length || buffer.length > MAX_MEDIA_BYTES) {
             return res.status(422).json({ error: 'INVALID_MEDIA_BUFFER' });
         }
 
@@ -689,15 +750,16 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
     if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
     if (!text) return res.status(400).json({ error: 'TEXT_REQUIRED' });
 
-    const ok = await sendWhatsAppText(instanceId, phone, text);
+    const sendResult = await sendWhatsAppText(instanceId, phone, text);
+    const ok = Boolean(sendResult?.success || sendResult);
     
     if (ok) {
         await Promise.all([
             markOperatorActive(instanceId, phone, 'operator_panel'),
             redisClient.isOpen ? redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_operator_panel', 'EX', String(OPERATOR_ACTIVE_SECONDS)]).catch(() => null) : Promise.resolve(null)
         ]);
-        await saveChatHistoryEntry(instanceId, phone, {
-            id: `operator:${Date.now()}:${phone}`,
+        const saved = await saveChatHistoryEntry(instanceId, phone, {
+            id: sendResult?.messageId || `operator:${Date.now()}:${phone}`,
             instanceId,
             phone,
             direction: 'outgoing',
@@ -706,18 +768,27 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
             text,
             body: text,
             type: 'chat',
+            deliveryStatus: 'sent',
             source: 'operator_panel'
         });
+        await publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: saved.id, state: 'operator' }).catch(() => {});
     }
 
-    res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
+    const expiresAt = ok ? Date.now() + OPERATOR_ACTIVE_SECONDS * 1000 : 0;
+    res.status(ok ? 200 : 503).json({
+      success: Boolean(ok),
+      messageId: sendResult?.messageId || '',
+      ttl: ok ? OPERATOR_ACTIVE_SECONDS : 0,
+      expiresAt
+    });
 });
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
   const ttl = redisClient.isOpen ? await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => 0) : 0;
-  return res.json({ success: true, instanceId, phone, ttl: Math.max(0, Number(ttl) || 0) });
+  const safeTtl = Math.max(0, Number(ttl) || 0);
+  return res.json({ success: true, instanceId, phone, ttl: safeTtl, expiresAt: safeTtl ? Date.now() + safeTtl * 1000 : 0 });
 });
 
 app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
@@ -725,12 +796,10 @@ app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res)
   const phone = normalizePhone(req.params.phone || '');
   const action = String(req.body?.action || '').trim().toLowerCase();
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
-  if (!['view', 'close', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
+  if (!['view', 'close', 'archive', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
-  if (action === 'view') await redisClient.sendCommand(['ZADD', chatViewedKey(instanceId), String(Date.now()), phone]);
-  if (action === 'close') { await redisClient.sendCommand(['SADD', chatArchiveKey(instanceId), phone]); await redisClient.sendCommand(['SET', chatArchiveMarkerKey(instanceId, phone), String(Date.now()), 'EX', String(CHAT_ARCHIVE_TTL_SECONDS)]); }
-  if (action === 'restore') { await redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]); await redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)]); }
-  if (action === 'delete') await Promise.all([redisClient.sendCommand(['DEL', chatHistoryKey(instanceId, phone)]), redisClient.sendCommand(['DEL', openbotHistoryKey(instanceId, phone)]), redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]), redisClient.sendCommand(['SREM', chatArchiveKey(instanceId), phone]), redisClient.sendCommand(['ZREM', chatViewedKey(instanceId), phone]), redisClient.sendCommand(['DEL', chatArchiveMarkerKey(instanceId, phone)])]);
+  await chatStore.applyAction(instanceId, phone, action);
+  await publishChatEvent({ type: 'chat.action', instanceId, phone, action }).catch(() => {});
   return res.json({ success: true, instanceId, phone, action });
 });
 
@@ -786,7 +855,7 @@ app.post('/api/wa/logout', requireUiOrApi, async (req, res) => {
   res.json(await stopWhatsAppInstance(instanceId));
 });
 
-app.post('/api/send', requireApi, async (req, res) => {
+app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   const { instanceId, phone, text, media } = req.body || {};
   
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -797,27 +866,31 @@ app.post('/api/send', requireApi, async (req, res) => {
   const cleanPhone = normalizePhone(phone);
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
 
-  let ok = true;
+  let sendResult = { success: true };
   
   // 2-ӨЗГЕРІС: Медиа жіберу логикасын қауіпсіздендіру және cleanPhone қолдану
   if (media) {
     if (media.base64) {
-      ok = await sendMedia(instanceId, cleanPhone, media.base64, media.fileName || media.mimeType || 'file', media.caption || text || '');
+      if (String(media.base64).length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 128) {
+        return res.status(413).json({ error: 'MEDIA_TOO_LARGE' });
+      }
+      sendResult = await sendMedia(instanceId, cleanPhone, media.base64, media.fileName || media.mimeType || 'file', media.caption || text || '');
     } else {
       console.warn(`[API:SEND] Warning: Media object received but missing 'base64' property for phone ${cleanPhone}`);
       // Егер медиа қате болса, бірақ мәтін болса, құламай мәтінді жібереміз
-      if (text) ok = await sendWhatsAppText(instanceId, cleanPhone, text);
+      if (text) sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
       else return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
     }
   } else if (text) {
-    ok = await sendWhatsAppText(instanceId, cleanPhone, text);
+    sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
   } else {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
 
+  const ok = Boolean(sendResult?.success || sendResult);
   if (ok && (text || media)) {
-    await saveChatHistoryEntry(instanceId, cleanPhone, {
-      id: `api:${Date.now()}:${cleanPhone}`,
+    const saved = await saveChatHistoryEntry(instanceId, cleanPhone, {
+      id: sendResult?.messageId || `api:${Date.now()}:${cleanPhone}`,
       instanceId,
       phone: cleanPhone,
       direction: 'outgoing',
@@ -829,8 +902,10 @@ app.post('/api/send', requireApi, async (req, res) => {
       hasMedia: Boolean(media),
       mediaData: (media && media.base64) ? media.base64 : '',
       mediaType: (media && media.mimeType) ? media.mimeType : 'audio/ogg',
+      deliveryStatus: 'sent',
       source: 'api_send'
     });
+    await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved.id }).catch(() => {});
   }
 
   res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
@@ -848,7 +923,27 @@ app.post('/api/presence', requireApi, async (req, res) => {
 });
 
 async function boot() {
+  if (process.env.NODE_ENV === 'production') {
+    const missing = [
+      !SESSION_SECRET && 'WHATSPRO_SESSION_SECRET',
+      !process.env.WHATSPRO_PASSWORD && 'WHATSPRO_PASSWORD',
+      !process.env.WHATSPRO_API_TOKEN && 'WHATSPRO_API_TOKEN'
+    ].filter(Boolean);
+    if (missing.length) throw new Error(`Missing required production security settings: ${missing.join(', ')}`);
+    const weakPassword = String(process.env.WHATSPRO_PASSWORD || '');
+    if (weakPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(weakPassword.toLowerCase())) {
+      throw new Error('WHATSPRO_PASSWORD must be at least 12 characters and not a known default');
+    }
+    if (SESSION_SECRET.length < 32 || String(process.env.WHATSPRO_API_TOKEN || '').length < 32) {
+      throw new Error('Production session and API secrets must be at least 32 characters');
+    }
+  }
   await connectRedis();
+  await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
+  const expiryTimer = setInterval(() => {
+    sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] sweep failed:', error.message));
+  }, 60000);
+  expiryTimer.unref();
   
   console.log('[WhatsPro] Сервер қосылды. Барлық сақталған сессиялар автоматты түрде іске қосылады...');
   try {

@@ -9,6 +9,8 @@ const path = require('path');
 const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive } = require('./operatorLock');
+const { appendMessage, storeMedia, updateMessageReceipt } = require('./chatStore');
+const { publishChatEvent } = require('./chatEvents');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -21,7 +23,7 @@ function chatMediaKey(instanceId, messageId) {
     return `chatwoot:media:${instanceId}:${messageId}`;
 }
 
-async function persistMessageMedia(instanceId, msg) {
+async function persistMessageMedia(instanceId, phone, msg) {
     if (!msg?.hasMedia || !redisClient.isOpen) return null;
 
     const messageId = String(msg?.id?.id || '').trim();
@@ -54,14 +56,7 @@ async function persistMessageMedia(instanceId, msg) {
     }
 
     const mediaUrl = `data:${mediaType};base64,${base64}`;
-
-    await redisClient.sendCommand([
-        'SET',
-        chatMediaKey(instanceId, messageId),
-        mediaUrl,
-        'EX',
-        String(CHAT_ARCHIVE_TTL_SECONDS)
-    ]);
+    await storeMedia(instanceId, phone, messageId, base64, mediaType);
 
     return {
         media: {
@@ -73,7 +68,7 @@ async function persistMessageMedia(instanceId, msg) {
     };
 }
 
-function scheduleMediaPersist(instanceId, msg) {
+function scheduleMediaPersist(instanceId, phone, msg) {
     const type = String(msg?.type || '').toLowerCase();
     const isAudio = type === 'audio' || type === 'ptt';
 
@@ -94,7 +89,7 @@ function scheduleMediaPersist(instanceId, msg) {
 
                 if (Number(exists) === 1) return;
 
-                await persistMessageMedia(instanceId, msg);
+                await persistMessageMedia(instanceId, phone, msg);
             } catch (error) {
                 console.warn(
                     `[MEDIA RETRY] ${instanceId}: ${msg?.id?.id || '-'} ` +
@@ -430,12 +425,12 @@ async function getOutgoingPhoneFromMessage(client, msg) {
     return phone;
 }
 
-async function saveOperatorOutgoingHistory(instanceId, phone, text, source) {
+async function saveOperatorOutgoingHistory(instanceId, phone, text, source, messageId) {
     if (!redisClient.isOpen || !isValidChatPhone(phone) || !text) return;
 
     const createdAt = Date.now();
     const entry = {
-        id: `${source}:${createdAt}:${phone}`,
+        id: String(messageId || `${source}:${createdAt}:${phone}`),
         instanceId,
         phone,
         direction: 'outgoing',
@@ -445,23 +440,12 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source) {
         body: text,
         type: 'chat',
         createdAt,
-        source
+        source,
+        deliveryStatus: 'sent'
     };
 
-    await Promise.all([
-        redisClient.sendCommand(['RPUSH', `chatwoot:history:${instanceId}:${phone}`, JSON.stringify(entry)]),
-        redisClient.sendCommand(['ZADD', `chatwoot:inbox:${instanceId}`, String(createdAt), phone])
-    ]).catch(error => {
-        console.warn(`[OPERATOR HISTORY] ${instanceId} -> ${phone} save failed:`, error.message);
-    });
-    const archived = await redisClient.sendCommand(['SISMEMBER', `chatwoot:archive:${instanceId}`, phone]).catch(() => 0);
-    const ttlSeconds = Number(archived) === 1 ? CHAT_ARCHIVE_TTL_SECONDS : CHAT_STANDARD_TTL_SECONDS;
-    await Promise.all([
-        redisClient.sendCommand(['EXPIRE', `chatwoot:history:${instanceId}:${phone}`, String(ttlSeconds)]),
-        redisClient.sendCommand(['EXPIRE', `history:${instanceId}:${phone}`, String(ttlSeconds)]).catch(() => 0)
-    ]).catch(error => {
-        console.warn(`[OPERATOR HISTORY] ${instanceId} -> ${phone} expire failed:`, error.message);
-    });
+    await appendMessage(instanceId, phone, entry, { state: 'operator' });
+    await publishChatEvent({ type: 'history.append', instanceId, phone, message: entry });
 }
 
 async function getContactInfoFromMessage(msg) {
@@ -693,10 +677,44 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             if (redisClient.isOpen) {
                 await redisClient.sendCommand(['SET', `mute:${instanceId}:${phone}`, 'muted_by_agent', 'EX', '60']).catch(() => {});
             }
-            await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app');
+            await saveOperatorOutgoingHistory(instanceId, phone, text, 'whatsapp_app', msg?.id?.id);
+            await publishChatEvent({
+                type: 'lock.changed',
+                instanceId,
+                phone,
+                ttl: 60,
+                expiresAt: Date.now() + 60000
+            });
             console.log(`[OPERATOR LOCK] ${instanceId} -> ${phone}: direct WhatsApp reply activated handoff lock.`);
         } catch (error) {
             console.error(`[OPERATOR LOCK] ${instanceId} message_create failed:`, error.message);
+        }
+    });
+
+    client.on('message_ack', async (msg, ack) => {
+        try {
+            if (!msg?.fromMe) return;
+            const phone = await getOutgoingPhoneFromMessage(client, msg);
+            const messageId = String(msg?.id?.id || '').trim();
+            if (!isValidChatPhone(phone) || !messageId) return;
+
+            const deliveryStatus = Number(ack) >= 3 ? 'read' : 'sent';
+            let updated = false;
+            for (const retryDelay of [0, 200, 500, 1000, 2000]) {
+                if (retryDelay) await delay(retryDelay);
+                updated = await updateMessageReceipt(instanceId, phone, messageId, deliveryStatus);
+                if (updated) break;
+            }
+            if (!updated) return;
+            await publishChatEvent({
+                type: 'message.ack',
+                instanceId,
+                phone,
+                messageId,
+                deliveryStatus
+            });
+        } catch (error) {
+            console.warn(`[MESSAGE ACK] ${instanceId}:`, error.message);
         }
     });
 
@@ -738,12 +756,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         console.log(`📥 [${instanceId}] Жаңа хат: ${msg.from} -> ${msg.body}`);
 
        
-        scheduleMediaPersist(instanceId, msg);
+        scheduleMediaPersist(instanceId, cleanNumber, msg);
 
         let downloadedMedia = null;
         if (msg.hasMedia && (msg.type === 'audio' || msg.type === 'ptt')) {
             try {
-                downloadedMedia = (await persistMessageMedia(instanceId, msg))?.media || null;
+                downloadedMedia = (await persistMessageMedia(instanceId, cleanNumber, msg))?.media || null;
             } catch (error) {
                 console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
             }
@@ -767,6 +785,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 normalizedPhone: cleanNumber,
                 senderPhone: cleanNumber,
                 messageId: msg.id.id,
+                timestamp: Number(msg.timestamp || 0) ? Number(msg.timestamp) * 1000 : Date.now(),
                 fromMe: msg.fromMe,
                 type: msg.type,
                 hasMedia: msg.hasMedia,
@@ -969,9 +988,13 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
     if (!chatId) return false;
 
     await markBotSending(instanceId, phone, chatId);
-    await client.sendMessage(chatId, text);
+    const message = await client.sendMessage(chatId, text);
     console.log(`📤 [SENT] ${instanceId} -> ${chatId}: Хат сәтті жіберілді.`);
-    return true;
+    return {
+        success: true,
+        messageId: String(message?.id?.id || ''),
+        ack: Number(message?.ack || 0)
+    };
 }
 
 async function flushPendingOutgoingText(instanceId) {
@@ -1065,8 +1088,12 @@ async function sendMedia(instanceId, phone, base64Data, fileName, caption) {
         }
 
         const media = new MessageMedia(mimeType, cleanBase64, fileName || 'file');
-        await client.sendMessage(chatId, media, { caption: caption || '' });
-        return true;
+        const message = await client.sendMessage(chatId, media, { caption: caption || '' });
+        return {
+            success: true,
+            messageId: String(message?.id?.id || ''),
+            ack: Number(message?.ack || 0)
+        };
     } catch (error) {
         console.error(`❌ [MEDIA ERROR] ${instanceId}:`, error.message);
         return false;
