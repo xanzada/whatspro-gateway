@@ -1,7 +1,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const axios = require('axios');
 
 const { __test: whatsappTest } = require('../services/whatsappManager');
+
+function encryptedWhatsAppAudioFixture(plaintext, mediaKey) {
+  const expanded = Buffer.from(crypto.hkdfSync('sha256', mediaKey, Buffer.alloc(32), Buffer.from('WhatsApp Audio Keys'), 112));
+  const iv = expanded.subarray(0, 16);
+  const cipherKey = expanded.subarray(16, 48);
+  const macKey = expanded.subarray(48, 80);
+  const cipher = crypto.createCipheriv('aes-256-cbc', cipherKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const mac = crypto.createHmac('sha256', macKey).update(Buffer.concat([iv, ciphertext])).digest().subarray(0, 10);
+  return Buffer.concat([ciphertext, mac]);
+}
 const { __test: webhookTest } = require('../services/incomingWebhook');
 const { __test: serverTest } = require('../src/server');
 
@@ -78,6 +91,64 @@ test('base64 validation rejects malformed and oversized media as permanent failu
   }
   assert.equal(whatsappTest.shouldRetryMediaError(Object.assign(new Error('bad'), { permanent: true })), false);
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
+});
+
+test('audio downloader decrypts WhatsApp CDN media without the broken browser download API', async () => {
+  const plaintext = Buffer.from('OggS\u0000\u0002WhatsPro-OpusHead-voice-note');
+  const mediaKey = Buffer.alloc(32, 7);
+  const encrypted = encryptedWhatsAppAudioFixture(plaintext, mediaKey);
+  let requestedUrl = '';
+  const msg = {
+    hasMedia: true,
+    type: 'ptt',
+    mimetype: 'audio/ogg',
+    mediaKey: mediaKey.toString('base64'),
+    _data: {
+      directPath: '/v/t62.7117-24/test-audio.enc?ccb=11-4',
+      filehash: crypto.createHash('sha256').update(plaintext).digest('base64'),
+      encFilehash: crypto.createHash('sha256').update(encrypted).digest('base64')
+    }
+  };
+
+  const media = await whatsappTest.downloadEncryptedMessageMedia(msg, async url => {
+    requestedUrl = url;
+    return encrypted;
+  });
+  assert.equal(requestedUrl, 'https://mmg.whatsapp.net/v/t62.7117-24/test-audio.enc?ccb=11-4');
+  assert.deepEqual(media, {
+    data: plaintext.toString('base64'),
+    mimetype: 'audio/ogg',
+    filename: undefined,
+    filesize: plaintext.length
+  });
+
+  const corrupted = Buffer.from(encrypted);
+  corrupted[corrupted.length - 1] ^= 1;
+  await assert.rejects(
+    () => whatsappTest.downloadEncryptedMessageMedia(msg, async () => corrupted),
+    /MEDIA_CDN_ENCRYPTED_HASH_INVALID|MEDIA_CDN_MAC_INVALID/
+  );
+});
+
+test('WhatsApp CDN requests reject redirects instead of following them outside the allowlist', async () => {
+  const originalGet = axios.get;
+  let requestOptions;
+  axios.get = async (url, options) => {
+    assert.equal(url, 'https://mmg.whatsapp.net/redirect-test');
+    requestOptions = options;
+    const error = new Error('redirect');
+    error.response = { status: 302, headers: { location: 'http://127.0.0.1/private' } };
+    throw error;
+  };
+  try {
+    await assert.rejects(
+      () => whatsappTest.fetchWhatsAppMediaBytes('https://mmg.whatsapp.net/redirect-test'),
+      /MEDIA_CDN_HTTP_302/
+    );
+    assert.equal(requestOptions.maxRedirects, 0);
+  } finally {
+    axios.get = originalGet;
+  }
 });
 
 test('audio downloader uses WhatsApp blob cache path when legacy downloadMedia is broken', async () => {
@@ -205,6 +276,28 @@ test('audio download single-flight is isolated between tenants', async () => {
   ]);
   assert.equal(first.data, 'VEVOQU5UX0E=');
   assert.equal(second.data, 'VEVOQU5UX0I=');
+  whatsappTest.clearMediaDownloadJobs();
+});
+
+test('audio downloads cap distinct concurrent media work', async () => {
+  whatsappTest.clearMediaDownloadJobs();
+  let releaseDownloads;
+  const gate = new Promise(resolve => { releaseDownloads = resolve; });
+  const makeMessage = id => ({
+    hasMedia: true,
+    id: { _serialized: `false_224043110273161@lid_${id}` },
+    client: { pupPage: { evaluate: async () => { await gate; return { data: 'T2dnUw==', mimetype: 'audio/ogg' }; } } },
+    downloadMedia: async () => { throw new Error('legacy downloader must not run'); }
+  });
+  const first = whatsappTest.downloadMessageMedia(makeMessage('BUSY1'), 'tenant:phone1');
+  const second = whatsappTest.downloadMessageMedia(makeMessage('BUSY2'), 'tenant:phone2');
+  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(
+    () => whatsappTest.downloadMessageMedia(makeMessage('BUSY3'), 'tenant:phone3'),
+    /MEDIA_DOWNLOAD_BUSY/
+  );
+  releaseDownloads();
+  await Promise.all([first, second]);
   whatsappTest.clearMediaDownloadJobs();
 });
 

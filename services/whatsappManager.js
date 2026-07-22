@@ -1,5 +1,7 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
+const axios = require('axios');
+const crypto = require('node:crypto');
 const qrcode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const { redisClient } = require('../config/redis');
@@ -14,7 +16,10 @@ const { publishChatEvent } = require('./chatEvents');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const MEDIA_CDN_TIMEOUT_MS = 12000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 25000;
+const MEDIA_PIPELINE_TIMEOUT_MS = 30000;
+const MAX_CONCURRENT_MEDIA_DOWNLOADS = 2;
 const MEDIA_DOWNLOAD_COOLDOWN_MS = 15000;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
 const localBotSends = new Map();
@@ -23,6 +28,7 @@ const mediaDownloadJobs = new Map();
 const mediaDownloadCooldowns = new Map();
 const mediaRecoveryJobs = new Map();
 const mediaRecoveryMisses = new Set();
+let activeMediaDownloads = 0;
 
 function isValidChatPhone(phone) {
     return /^\d{10,15}$/.test(String(phone || ''));
@@ -86,14 +92,136 @@ function shouldRetryMediaError(error) {
     return error?.permanent !== true;
 }
 
+function decodeWhatsAppBase64(value, code) {
+    if (Buffer.isBuffer(value)) return Buffer.from(value);
+    const raw = String(value || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+    if (!raw || !/^[A-Za-z0-9+/]*={0,2}$/.test(raw)) throw new Error(code);
+    const padded = raw.padEnd(Math.ceil(raw.length / 4) * 4, '=');
+    const decoded = Buffer.from(padded, 'base64');
+    if (!decoded.length) throw new Error(code);
+    return decoded;
+}
+
+function verifyWhatsAppSha256(data, expected, code) {
+    if (!expected) return;
+    const expectedHash = decodeWhatsAppBase64(expected, code);
+    const actualHash = crypto.createHash('sha256').update(data).digest();
+    if (expectedHash.length !== actualHash.length || !crypto.timingSafeEqual(expectedHash, actualHash)) {
+        throw new Error(code);
+    }
+}
+
+function decryptWhatsAppMedia(encryptedData, mediaKey, mediaType = 'audio') {
+    const encrypted = Buffer.isBuffer(encryptedData) ? encryptedData : Buffer.from(encryptedData || []);
+    if (encrypted.length < 27 || encrypted.length > MAX_MEDIA_BYTES + 1024) {
+        throw new Error('MEDIA_CDN_PAYLOAD_INVALID');
+    }
+    const key = decodeWhatsAppBase64(mediaKey, 'MEDIA_CDN_KEY_INVALID');
+    if (key.length !== 32) throw new Error('MEDIA_CDN_KEY_INVALID');
+    const type = String(mediaType || 'audio').toLowerCase();
+    const label = type === 'ptt' || type === 'audio' ? 'Audio' : type.charAt(0).toUpperCase() + type.slice(1);
+    const expanded = Buffer.from(crypto.hkdfSync(
+        'sha256', key, Buffer.alloc(32), Buffer.from(`WhatsApp ${label} Keys`), 112
+    ));
+    const iv = expanded.subarray(0, 16);
+    const cipherKey = expanded.subarray(16, 48);
+    const macKey = expanded.subarray(48, 80);
+    const ciphertext = encrypted.subarray(0, -10);
+    const receivedMac = encrypted.subarray(-10);
+    const expectedMac = crypto.createHmac('sha256', macKey)
+        .update(Buffer.concat([iv, ciphertext]))
+        .digest()
+        .subarray(0, 10);
+    if (!crypto.timingSafeEqual(receivedMac, expectedMac)) throw new Error('MEDIA_CDN_MAC_INVALID');
+    try {
+        const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
+        const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+        if (!decrypted.length || decrypted.length > MAX_MEDIA_BYTES) throw new Error('MEDIA_CDN_PAYLOAD_INVALID');
+        return decrypted;
+    } catch (error) {
+        if (error?.message === 'MEDIA_CDN_PAYLOAD_INVALID') throw error;
+        throw new Error('MEDIA_CDN_DECRYPT_FAILED');
+    }
+}
+
+async function fetchWhatsAppMediaBytes(url) {
+    try {
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: MEDIA_CDN_TIMEOUT_MS,
+            maxRedirects: 0,
+            maxContentLength: MAX_MEDIA_BYTES + 1024,
+            maxBodyLength: MAX_MEDIA_BYTES + 1024,
+            headers: {
+                Accept: '*/*',
+                Origin: 'https://web.whatsapp.com',
+                Referer: 'https://web.whatsapp.com/'
+            }
+        });
+        return Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data || []);
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        throw new Error(status ? `MEDIA_CDN_HTTP_${status}` : 'MEDIA_CDN_REQUEST_FAILED');
+    }
+}
+
+async function downloadEncryptedMessageMedia(msg, requestBinary = fetchWhatsAppMediaBytes) {
+    const data = msg?._data || {};
+    const mediaData = data.mediaData || {};
+    const directPath = String(data.directPath || mediaData.directPath || msg?.directPath || '').trim();
+    const mediaKey = msg?.mediaKey || data.mediaKey || mediaData.mediaKey;
+    if (!directPath || !mediaKey) return null;
+
+    let parsed;
+    try {
+        parsed = new URL(directPath, 'https://mmg.whatsapp.net');
+    } catch {
+        throw new Error('MEDIA_CDN_PATH_INVALID');
+    }
+    const downloadUrl = `https://mmg.whatsapp.net${parsed.pathname}${parsed.search}`;
+    const downloaded = await requestBinary(downloadUrl);
+    const encrypted = Buffer.isBuffer(downloaded) ? downloaded : Buffer.from(downloaded || []);
+    verifyWhatsAppSha256(encrypted, data.encFilehash || mediaData.encFilehash, 'MEDIA_CDN_ENCRYPTED_HASH_INVALID');
+    const decrypted = decryptWhatsAppMedia(encrypted, mediaKey, msg?.type || data.type || 'audio');
+    verifyWhatsAppSha256(decrypted, data.filehash || mediaData.filehash, 'MEDIA_CDN_FILE_HASH_INVALID');
+    return {
+        data: decrypted.toString('base64'),
+        mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || 'audio/ogg',
+        filename: data.filename || mediaData.filename || msg?.filename,
+        filesize: decrypted.length
+    };
+}
+
+function mediaFailureCode(error) {
+    return String(error?.code || error?.message || error || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+}
+
+async function runWithMediaDownloadSlot(task) {
+    if (activeMediaDownloads >= MAX_CONCURRENT_MEDIA_DOWNLOADS) throw new Error('MEDIA_DOWNLOAD_BUSY');
+    activeMediaDownloads += 1;
+    try {
+        return await task();
+    } finally {
+        activeMediaDownloads -= 1;
+    }
+}
+
 async function downloadMessageMediaOnce(msg) {
     if (!msg?.hasMedia) return null;
     const messageId = String(msg?.id?._serialized || '').trim();
     const page = msg?.client?.pupPage;
     let blobDownloadError = null;
+    let cdnDownloadError = null;
 
     const declaredSize = Number(msg?._data?.size || msg?._data?.mediaData?.size || 0);
     if (declaredSize > MAX_MEDIA_BYTES) throw permanentMediaError('MEDIA_TOO_LARGE');
+
+    try {
+        const media = await downloadEncryptedMessageMedia(msg);
+        if (media?.data) return media;
+    } catch (error) {
+        cdnDownloadError = error;
+    }
 
     if (messageId && page && typeof page.evaluate === 'function') {
         try {
@@ -149,7 +277,12 @@ async function downloadMessageMediaOnce(msg) {
         const media = await withTimeout(msg.downloadMedia(), MEDIA_DOWNLOAD_TIMEOUT_MS, 'MEDIA_DOWNLOAD_TIMEOUT');
         if (media?.data) return media;
     } catch (error) {
-        throw error instanceof Error ? error : new Error(String(error || 'MEDIA_DOWNLOAD_FAILED'));
+        const failure = new Error(
+            `MEDIA_DOWNLOAD_FAILED cdn=${mediaFailureCode(cdnDownloadError)} ` +
+            `browser=${mediaFailureCode(blobDownloadError)} legacy=${mediaFailureCode(error)}`
+        );
+        failure.code = 'MEDIA_DOWNLOAD_FAILED';
+        throw failure;
     }
     if (blobDownloadError) {
         throw blobDownloadError instanceof Error ? blobDownloadError : new Error(String(blobDownloadError));
@@ -168,7 +301,11 @@ async function downloadMessageMedia(msg, scope = '') {
     const current = mediaDownloadJobs.get(jobKey);
     if (current) return current;
 
-    const job = downloadMessageMediaOnce(msg);
+    const job = withTimeout(
+        runWithMediaDownloadSlot(() => downloadMessageMediaOnce(msg)),
+        MEDIA_PIPELINE_TIMEOUT_MS,
+        'MEDIA_DOWNLOAD_TIMEOUT'
+    );
     mediaDownloadJobs.set(jobKey, job);
     try {
         const media = await job;
@@ -1589,11 +1726,15 @@ module.exports = {
         MAX_MEDIA_BASE64_LENGTH,
         validateAudioBase64,
         shouldRetryMediaError,
+        decryptWhatsAppMedia,
+        fetchWhatsAppMediaBytes,
+        downloadEncryptedMessageMedia,
         downloadMessageMedia,
         findMessageForMediaRecovery,
         clearMediaDownloadJobs() {
             mediaDownloadJobs.clear();
             mediaDownloadCooldowns.clear();
+            activeMediaDownloads = 0;
         },
         incrementLocalBotSend,
         consumeLocalBotSend,
