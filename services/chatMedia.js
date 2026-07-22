@@ -3,9 +3,14 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
+const bundledFfmpegPath = require('ffmpeg-static');
 
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+function resolveFfmpegPath(env = process.env, bundledPath = bundledFfmpegPath) {
+  return String(env.FFMPEG_PATH || bundledPath || 'ffmpeg').trim();
+}
+
+const ffmpegPath = resolveFfmpegPath();
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const DEFAULT_CACHE_DIR = path.join(os.tmpdir(), 'whatspro-audio-cache');
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -170,4 +175,4 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
   };
 }
 
-module.exports = { createChatMediaHandler, decodeAudioDataUri };
+module.exports = { createChatMediaHandler, decodeAudioDataUri, resolveFfmpegPath };

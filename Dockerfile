@@ -1,6 +1,7 @@
 FROM node:20-bullseye-slim
 
 ENV NODE_ENV=production \
+    FFMPEG_PATH=/usr/bin/ffmpeg \
     PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
     WHATSAPP_AUTH_PATH=/app/whatsapp_auth
@@ -8,6 +9,7 @@ ENV NODE_ENV=production \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     ca-certificates \
+    ffmpeg \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \

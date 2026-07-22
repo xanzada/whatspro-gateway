@@ -6,7 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 
-const { createChatMediaHandler } = require('../services/chatMedia');
+const { createChatMediaHandler, resolveFfmpegPath } = require('../services/chatMedia');
+
+test('production audio fallback installs and selects the system ffmpeg binary', async () => {
+  const dockerfile = await fs.readFile(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /\n\s*ffmpeg\s*\\/);
+  assert.match(dockerfile, /FFMPEG_PATH=\/usr\/bin\/ffmpeg/);
+  assert.equal(resolveFfmpegPath({ FFMPEG_PATH: '/usr/bin/ffmpeg' }, null), '/usr/bin/ffmpeg');
+});
 
 function oggCrc(bytes) {
   let crc = 0;
