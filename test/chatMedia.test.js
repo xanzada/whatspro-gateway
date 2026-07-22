@@ -151,3 +151,30 @@ test('media endpoint serves valid Ogg Opus with compliant byte ranges and browse
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.ok(Number.isFinite(result.duration) && result.duration > 0);
 });
+
+test('media endpoint recovers a missing persisted voice note before returning 404', async t => {
+  const fixture = validOggOpus();
+  const dataUri = `data:audio/ogg;base64,${fixture.toString('base64')}`;
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whatspro-media-recovery-test-'));
+  t.after(async () => fs.rm(cacheDir, { recursive: true, force: true }));
+  let stored = '';
+  let recoveryRequest = null;
+  const app = express();
+  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({
+    cacheDir,
+    readMedia: async () => stored,
+    recoverMedia: async (instanceId, messageId, req) => {
+      recoveryRequest = { instanceId, messageId, phone: req.query.phone };
+      stored = dataUri;
+      return stored;
+    }
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/prestige/audio-missing?phone=77476884956`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(recoveryRequest, { instanceId: 'prestige', messageId: 'audio-missing', phone: '77476884956' });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture);
+});

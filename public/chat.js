@@ -218,7 +218,7 @@
     var content = '';
     if (part.kind === 'text') content = '<div class="message-text">' + core.escapeHtml(part.text) + '</div>';
     if (part.kind === 'audio') {
-      content = '<div class="audio-player" data-audio-id="' + core.escapeHtml(part.id) + '" aria-busy="true"><audio preload="auto" playsinline></audio>' +
+      content = '<div class="audio-player" data-audio-id="' + core.escapeHtml(part.id) + '" aria-busy="true"><audio preload="none" playsinline></audio>' +
         '<button class="audio-play" type="button" aria-label="' + core.escapeHtml(t('play')) + '"><i class="fa-solid fa-play"></i></button>' +
         '<input class="audio-seek" type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="audio-duration">0:00</span>' +
         '<button class="audio-speed" type="button">1x</button></div>';
@@ -269,8 +269,12 @@
     event.preventDefault();
     event.stopPropagation();
     el.messages.querySelectorAll('audio').forEach(function (other) { if (other !== audio) other.pause(); });
-    if (!audio.paused) return audio.pause();
+    if (!audio.paused) {
+      wrapper._audioWantsPlayback = false;
+      return audio.pause();
+    }
     try {
+      wrapper._audioWantsPlayback = true;
       console.log('CALLING AUDIO PLAY', audio);
       var playback = audio.play();
       if (playback && typeof playback.catch === 'function') {
@@ -281,18 +285,11 @@
     }
   }
 
-  function bindAudio(wrapper, audio, objectUrl) {
+  function bindAudio(wrapper, audio, mediaUrl, onError, forceLoad) {
     var play = wrapper.querySelector('.audio-play');
     var seek = wrapper.querySelector('.audio-seek');
     var duration = wrapper.querySelector('.audio-duration');
     var speed = wrapper.querySelector('.audio-speed');
-    audio.src = objectUrl;
-    audio.addEventListener('error', function () {
-      console.error('Audio failed to load', {
-        code: audio.error && audio.error.code,
-        src: String(audio.currentSrc || audio.src || '').replace(/([?&]token=)[^&]+/i, '$1[redacted]')
-      });
-    });
     function sync() {
       var total = Number.isFinite(audio.duration) ? audio.duration : 0;
       var current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
@@ -301,15 +298,34 @@
       play.innerHTML = '<i class="fa-solid fa-' + (audio.paused ? 'play' : 'pause') + '"></i>';
       play.setAttribute('aria-label', audio.paused ? t('play') : t('pause'));
     }
-    seek.addEventListener('input', function () { if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value) / 1000 * audio.duration; });
-    speed.addEventListener('click', function () {
-      var rates = [1, 1.5, 2]; var next = rates[(rates.indexOf(audio.playbackRate) + 1) % rates.length];
-      audio.playbackRate = next; speed.textContent = next + 'x';
-    });
-    ['loadedmetadata', 'loadeddata', 'canplay', 'durationchange', 'timeupdate', 'play', 'pause', 'ended'].forEach(function (event) { audio.addEventListener(event, sync); });
+    wrapper._audioOnError = onError;
+    if (!wrapper._audioBound) {
+      wrapper._audioBound = true;
+      audio.addEventListener('error', function () {
+        var details = {
+          code: audio.error && audio.error.code,
+          src: String(audio.currentSrc || audio.src || '').replace(/([?&]token=)[^&]+/i, '$1[redacted]')
+        };
+        console.error('Audio failed to load', details);
+        if (typeof wrapper._audioOnError === 'function') wrapper._audioOnError(details);
+      });
+      audio.addEventListener('canplay', function () {
+        if (!wrapper._audioWantsPlayback || !audio.paused) return;
+        var playback = audio.play();
+        if (playback && typeof playback.catch === 'function') playback.catch(function (error) { console.error('Play Promise failed:', error); });
+      });
+      audio.addEventListener('ended', function () { wrapper._audioWantsPlayback = false; });
+      seek.addEventListener('input', function () { if (Number.isFinite(audio.duration)) audio.currentTime = Number(seek.value) / 1000 * audio.duration; });
+      speed.addEventListener('click', function () {
+        var rates = [1, 1.5, 2]; var next = rates[(rates.indexOf(audio.playbackRate) + 1) % rates.length];
+        audio.playbackRate = next; speed.textContent = next + 'x';
+      });
+      ['loadedmetadata', 'loadeddata', 'canplay', 'durationchange', 'timeupdate', 'play', 'pause', 'ended'].forEach(function (event) { audio.addEventListener(event, sync); });
+    }
+    audio.src = mediaUrl;
     play.disabled = false;
     wrapper.removeAttribute('aria-busy');
-    audio.load();
+    if (forceLoad) audio.load();
     sync();
   }
 
@@ -331,10 +347,22 @@
         }
         var query = new URLSearchParams();
         if (mediaToken) query.set('token', mediaToken);
+        if (state.activePhone) query.set('phone', state.activePhone);
         query.set('fmt', 'mp4');
+        if (attempt) query.set('retry', String(attempt));
         var mediaUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
         if (query.toString()) mediaUrl += '?' + query.toString();
-        bindAudio(wrapper, audio, mediaUrl);
+        bindAudio(wrapper, audio, mediaUrl, function () {
+          if (signal.aborted || !wrapper.isConnected) return;
+          if (attempt >= 5) {
+            wrapper.innerHTML = '<span class="audio-error"><i class="fa-solid fa-circle-exclamation"></i> ' + core.escapeHtml(t('audioFailed')) + '</span>';
+            return;
+          }
+          wrapper.setAttribute('aria-busy', 'true');
+          setTimeout(function () {
+            if (!signal.aborted && wrapper.isConnected) loadAudio(wrapper, signal, attempt + 1);
+          }, Math.min(16000, 1000 * Math.pow(2, attempt)));
+        }, attempt > 0);
       } catch (error) {
         if (error.name === 'AbortError' || !wrapper.isConnected) return;
         if (attempt < 5) {

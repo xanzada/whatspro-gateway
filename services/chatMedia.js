@@ -132,11 +132,18 @@ async function cacheMp4Fallback(cacheDir, sourcePath, media) {
   }
 }
 
-function createChatMediaHandler({ readMedia, cacheDir = DEFAULT_CACHE_DIR } = {}) {
+function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CACHE_DIR } = {}) {
   if (typeof readMedia !== 'function') throw new TypeError('readMedia is required');
   return async function chatMediaHandler(req, res) {
     try {
-      const mediaData = await readMedia(req.params.instanceId, req.params.messageId);
+      let mediaData = await readMedia(req.params.instanceId, req.params.messageId);
+      if (!mediaData && typeof recoverMedia === 'function') {
+        try {
+          mediaData = await recoverMedia(req.params.instanceId, req.params.messageId, req);
+        } catch (error) {
+          console.warn('[CHAT MEDIA RECOVERY]', error?.message || error);
+        }
+      }
       if (!mediaData) {
         res.set('Retry-After', '3');
         return res.status(404).json({ error: 'MEDIA_NOT_READY' });

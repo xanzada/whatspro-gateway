@@ -13,6 +13,7 @@ const {
   sendMedia,
   sendPresence,
   getBase64Media,
+  recoverChatMedia,
   shutdownWhatsAppClients
 } = require('../services/whatsappManager');
 const { normalizePhone } = require('../services/phoneUtils');
@@ -983,7 +984,8 @@ app.get('/api/chat/history/:instanceId/:phone', requireChatUiOrApi, async (req, 
 });
 
 const serveChatMedia = createChatMediaHandler({
-    readMedia: (instanceId, messageId) => redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => '')
+    readMedia: (instanceId, messageId) => redisClient.sendCommand(['GET', chatMediaKey(instanceId, messageId)]).catch(() => ''),
+    recoverMedia: (instanceId, messageId, req) => recoverChatMedia(instanceId, req.query?.phone, messageId)
 });
 
 app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (req, res) => {

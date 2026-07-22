@@ -80,6 +80,159 @@ test('base64 validation rejects malformed and oversized media as permanent failu
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
 });
 
+test('audio downloader uses WhatsApp blob cache path when legacy downloadMedia is broken', async () => {
+  const calls = [];
+  const voice = Buffer.from('OggS-voice-payload');
+  let downloadOptions = null;
+  const source = {
+    mediaData: { mediaStage: 'RESOLVED' },
+    mediaObject: { filehash: 'voice-hash' },
+    mimetype: 'audio/ogg', filename: 'voice.ogg', size: voice.length,
+    downloadMedia: async options => { downloadOptions = options; }
+  };
+  const msg = {
+    hasMedia: true,
+    id: { _serialized: 'false_224043110273161@lid_AUDIO1' },
+    downloadMedia: async () => { throw new Error('legacy downloader must not run'); },
+    client: {
+      pupPage: {
+        evaluate: async (resolver, messageId) => {
+          calls.push({ source: String(resolver), messageId });
+          global.window = {
+            require(name) {
+              if (name === 'WAWebCollections') return { Msg: { get: () => source } };
+              if (name === 'WAWebMediaInMemoryBlobCache') {
+                return { InMemoryMediaBlobCache: { get: () => new Blob([voice], { type: 'audio/ogg' }) } };
+              }
+              throw new Error(`unexpected module ${name}`);
+            },
+            WWebJS: {}
+          };
+          global.FileReader = class {
+            readAsDataURL(blob) {
+              blob.arrayBuffer().then(buffer => {
+                this.result = `data:${blob.type};base64,${Buffer.from(buffer).toString('base64')}`;
+                this.onload();
+              }, error => { this.error = error; this.onerror(); });
+            }
+          };
+          try { return await resolver(messageId, whatsappTest.MAX_MEDIA_BYTES); }
+          finally { delete global.window; delete global.FileReader; }
+        }
+      }
+    }
+  };
+
+  assert.deepEqual(await whatsappTest.downloadMessageMedia(msg), {
+    data: voice.toString('base64'), mimetype: 'audio/ogg', filename: 'voice.ogg', filesize: voice.length
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].messageId, msg.id._serialized);
+  assert.deepEqual(downloadOptions, { downloadEvenIfExpensive: true, rmrReason: 1, isUserInitiated: true });
+  assert.match(calls[0].source, /isUserInitiated:\s*true/);
+  assert.match(calls[0].source, /WAWebMediaInMemoryBlobCache/);
+  assert.match(calls[0].source, /forceToBlob/);
+  assert.match(calls[0].source, /arrayBufferToBase64Async/);
+  assert.match(calls[0].source, /new FileReader\(\)/);
+});
+
+test('audio downloader rejects declared oversized media before allocating the blob', async () => {
+  let arrayBufferCalls = 0;
+  let legacyCalls = 0;
+  const source = {
+    mediaData: { mediaStage: 'RESOLVED' },
+    mediaObject: { filehash: 'oversized' },
+    mimetype: 'audio/ogg', size: whatsappTest.MAX_MEDIA_BYTES + 1,
+    downloadMedia: async () => {}
+  };
+  const msg = {
+    hasMedia: true,
+    id: { _serialized: 'false_224043110273161@lid_AUDIO2' },
+    downloadMedia: async () => { legacyCalls += 1; },
+    client: { pupPage: { evaluate: async (resolver, messageId, maxBytes) => {
+      global.window = {
+        require(name) {
+          if (name === 'WAWebCollections') return { Msg: { get: () => source } };
+          if (name === 'WAWebMediaInMemoryBlobCache') return { InMemoryMediaBlobCache: { get: () => ({ size: source.size, arrayBuffer: async () => { arrayBufferCalls += 1; return new ArrayBuffer(1); } }) } };
+          throw new Error(`unexpected module ${name}`);
+        },
+        WWebJS: { arrayBufferToBase64Async: async () => 'AA==' }
+      };
+      try { return await resolver(messageId, maxBytes); }
+      finally { delete global.window; }
+    } } }
+  };
+
+  await assert.rejects(() => whatsappTest.downloadMessageMedia(msg), error => error.permanent === true && error.message === 'MEDIA_TOO_LARGE');
+  assert.equal(arrayBufferCalls, 0);
+  assert.equal(legacyCalls, 0);
+});
+
+test('concurrent audio persistence shares one Chromium media download', async () => {
+  whatsappTest.clearMediaDownloadJobs();
+  let evaluateCalls = 0;
+  let releaseDownload;
+  const gate = new Promise(resolve => { releaseDownload = resolve; });
+  const media = { data: 'T2dnUw==', mimetype: 'audio/ogg' };
+  const msg = {
+    hasMedia: true,
+    id: { _serialized: 'false_224043110273161@lid_AUDIO3' },
+    client: { pupPage: { evaluate: async () => { evaluateCalls += 1; await gate; return media; } } },
+    downloadMedia: async () => { throw new Error('legacy downloader must not run'); }
+  };
+
+  const first = whatsappTest.downloadMessageMedia(msg);
+  const second = whatsappTest.downloadMessageMedia(msg);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(evaluateCalls, 1);
+  releaseDownload();
+  assert.deepEqual(await Promise.all([first, second]), [media, media]);
+  whatsappTest.clearMediaDownloadJobs();
+});
+
+test('audio download single-flight is isolated between tenants', async () => {
+  whatsappTest.clearMediaDownloadJobs();
+  const makeMessage = data => ({
+    hasMedia: true,
+    id: { _serialized: 'false_224043110273161@lid_SHARED_AUDIO_ID' },
+    client: { pupPage: { evaluate: async () => ({ data, mimetype: 'audio/ogg' }) } },
+    downloadMedia: async () => { throw new Error('legacy downloader must not run'); }
+  });
+
+  const [first, second] = await Promise.all([
+    whatsappTest.downloadMessageMedia(makeMessage('VEVOQU5UX0E='), 'tenant-a:77000000001'),
+    whatsappTest.downloadMessageMedia(makeMessage('VEVOQU5UX0I='), 'tenant-b:77000000002')
+  ]);
+  assert.equal(first.data, 'VEVOQU5UX0E=');
+  assert.equal(second.data, 'VEVOQU5UX0I=');
+  whatsappTest.clearMediaDownloadJobs();
+});
+
+test('missing persisted audio can be found again in the WhatsApp chat history', async () => {
+  const expected = { id: { id: 'AUDIO_MISSING' }, hasMedia: true, type: 'ptt' };
+  let fetchLimit = 0;
+  const client = {
+    getMessageById: async () => null,
+    getContactLidAndPhone: async userIds => {
+      assert.deepEqual(userIds, ['77476884956@c.us']);
+      return [{ lid: '224043110273161@lid', pn: '77476884956@c.us' }];
+    },
+    getChatById: async chatId => {
+      if (chatId === '77476884956@c.us') throw new Error('PN chat is unavailable after linked-device restart');
+      assert.equal(chatId, '224043110273161@lid');
+      return {
+        fetchMessages: async options => {
+          fetchLimit = options.limit;
+          return [{ id: { id: 'OTHER' } }, expected];
+        }
+      };
+    }
+  };
+
+  assert.equal(await whatsappTest.findMessageForMediaRecovery(client, '77476884956', 'AUDIO_MISSING'), expected);
+  assert.equal(fetchLimit, 200);
+});
+
 class FakeIdempotencyRedis {
   constructor(open = true) { this.isOpen = open; this.values = new Map(); }
   async sendCommand(args) {

@@ -4,32 +4,45 @@ const fs = require('fs');
 const puppeteer = require('puppeteer');
 
 const outputDir = process.env.QA_OUTPUT || path.join(os.tmpdir(), 'whatspro-browser-qa');
-const baseUrl = process.env.QA_BASE_URL || 'http://127.0.0.1:3000';
+let baseUrl = process.env.QA_BASE_URL || '';
+let qaServer = null;
+let browser = null;
 fs.mkdirSync(outputDir, { recursive: true });
 
+function playableWav(seconds = 2, sampleRate = 8000) {
+  const samples = Math.floor(seconds * sampleRate);
+  const buffer = Buffer.alloc(44 + samples);
+  buffer.write('RIFF', 0); buffer.writeUInt32LE(buffer.length - 8, 4); buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20); buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24); buffer.writeUInt32LE(sampleRate, 28);
+  buffer.writeUInt16LE(1, 32); buffer.writeUInt16LE(8, 34); buffer.write('data', 36);
+  buffer.writeUInt32LE(samples, 40);
+  for (let index = 0; index < samples; index += 1) buffer[44 + index] = 128 + Math.round(24 * Math.sin(2 * Math.PI * 440 * index / sampleRate));
+  return buffer;
+}
+
 (async () => {
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  if (!baseUrl) {
+    const { app } = require('../src/server');
+    qaServer = app.listen(0, '127.0.0.1');
+    await new Promise((resolve, reject) => { qaServer.once('listening', resolve); qaServer.once('error', reject); });
+    baseUrl = `http://127.0.0.1:${qaServer.address().port}`;
+  }
+  browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
   const page = await browser.newPage();
   await page.evaluateOnNewDocument(() => {
-    window.__audioPlayCalls = 0;
-    window.__audioPlayTarget = null;
     localStorage.setItem('token_key', 'qa-media-token');
     const nativeCanPlayType = HTMLMediaElement.prototype.canPlayType;
     HTMLMediaElement.prototype.canPlayType = function (type) {
       if (String(type).toLowerCase().includes('audio/ogg')) return 'probably';
       return nativeCanPlayType.call(this, type);
     };
-    HTMLMediaElement.prototype.play = function () {
-      window.__audioPlayCalls += 1;
-      window.__audioPlayTarget = this;
-      return Promise.resolve();
-    };
   });
   const consoleErrors = [];
   const consoleMessages = [];
   let sendRequests = 0;
   let mediaRequestUrl = '';
-  const wav = Buffer.from('UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=', 'base64');
+  const wav = playableWav();
   page.on('console', message => {
     consoleMessages.push(message.text());
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -100,32 +113,34 @@ fs.mkdirSync(outputDir, { recursive: true });
     const audio = button.closest('.audio-player').querySelector('audio');
     const cursor = getComputedStyle(button).cursor;
     const rerendered = button !== window.__qaOriginalPlayButton && !window.__qaOriginalPlayButton.isConnected;
+    const waitForProgress = () => new Promise(resolve => {
+      const deadline = Date.now() + 1500;
+      const check = () => audio.currentTime > 0 ? resolve(true) : Date.now() >= deadline ? resolve(false) : setTimeout(check, 25);
+      check();
+    });
 
-    window.__audioPlayCalls = 0;
-    window.__audioPlayTarget = null;
     button.click();
-    await Promise.resolve();
-    const directCalls = window.__audioPlayCalls;
-    const directTarget = window.__audioPlayTarget === audio;
+    const directPlayed = await waitForProgress();
+    button.click();
 
-    window.__audioPlayCalls = 0;
-    window.__audioPlayTarget = null;
+    audio.currentTime = 0;
     button.innerHTML = '<svg viewBox="0 0 10 10"><path d="M1 1 L9 5 L1 9 Z"></path></svg>';
     button.querySelector('path').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    await Promise.resolve();
+    const nestedPlayed = await waitForProgress();
+    audio.pause();
     return {
       disabled: button.disabled,
       cursor,
       rerendered,
-      directCalls,
-      directTarget,
-      nestedCalls: window.__audioPlayCalls,
-      nestedTarget: window.__audioPlayTarget === audio
+      directPlayed,
+      nestedPlayed,
+      duration: audio.duration
     };
   });
-  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || !audioClick.rerendered || audioClick.directCalls !== 1 || !audioClick.directTarget || audioClick.nestedCalls !== 1 || !audioClick.nestedTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
+  if (audioClick.disabled || audioClick.cursor === 'not-allowed' || !audioClick.rerendered || !audioClick.directPlayed || !audioClick.nestedPlayed || !(audioClick.duration > 0)) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
   if (!consoleMessages.some(message => message.includes('PLAY BUTTON CLICKED')) || !consoleMessages.some(message => message.includes('CALLING AUDIO PLAY'))) throw new Error('AUDIO_CLICK_LOGS');
-  if (new URL(mediaRequestUrl).searchParams.get('token') !== configuredChatToken || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
+  const mediaRequest = new URL(mediaRequestUrl);
+  if (mediaRequest.searchParams.get('token') !== configuredChatToken || mediaRequest.searchParams.get('phone') !== '77001234567' || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();
     const operator = document.querySelector('.message-row.operator .bubble').getBoundingClientRect();
@@ -165,7 +180,12 @@ fs.mkdirSync(outputDir, { recursive: true });
 
   process.stdout.write(`${JSON.stringify({ contactText, layout, audioClick, overflow, keyboardLayout, sendRequests, consoleErrors })}\n`);
   await browser.close();
-})().catch(error => {
+  browser = null;
+  if (qaServer) await new Promise(resolve => qaServer.close(resolve));
+  qaServer = null;
+})().catch(async error => {
+  if (browser) await browser.close().catch(() => {});
+  if (qaServer) await new Promise(resolve => qaServer.close(resolve));
   console.error(error);
   process.exitCode = 1;
 });

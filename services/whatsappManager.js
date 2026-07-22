@@ -14,9 +14,15 @@ const { publishChatEvent } = require('./chatEvents');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 25000;
+const MEDIA_DOWNLOAD_COOLDOWN_MS = 15000;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
 const localBotSends = new Map();
 const permanentMediaFailures = new Set();
+const mediaDownloadJobs = new Map();
+const mediaDownloadCooldowns = new Map();
+const mediaRecoveryJobs = new Map();
+const mediaRecoveryMisses = new Set();
 
 function isValidChatPhone(phone) {
     return /^\d{10,15}$/.test(String(phone || ''));
@@ -78,6 +84,104 @@ function validateAudioBase64(value) {
 
 function shouldRetryMediaError(error) {
     return error?.permanent !== true;
+}
+
+async function downloadMessageMediaOnce(msg) {
+    if (!msg?.hasMedia) return null;
+    const messageId = String(msg?.id?._serialized || '').trim();
+    const page = msg?.client?.pupPage;
+    let blobDownloadError = null;
+
+    const declaredSize = Number(msg?._data?.size || msg?._data?.mediaData?.size || 0);
+    if (declaredSize > MAX_MEDIA_BYTES) throw permanentMediaError('MEDIA_TOO_LARGE');
+
+    if (messageId && page && typeof page.evaluate === 'function') {
+        try {
+            const media = await withTimeout(page.evaluate(async (msgId, maxBytes) => {
+                const { Msg } = window.require('WAWebCollections');
+                const source = Msg.get(msgId) || (await Msg.getMessagesById([msgId]))?.messages?.[0];
+                if (!source?.mediaData || source.mediaData.mediaStage === 'REUPLOADING') return null;
+                if (Number(source.size || 0) > maxBytes) return { error: 'MEDIA_TOO_LARGE' };
+
+                await source.downloadMedia({
+                    downloadEvenIfExpensive: true,
+                    rmrReason: 1,
+                    isUserInitiated: true
+                });
+
+                const mediaStage = String(source.mediaData.mediaStage || '');
+                if (mediaStage.includes('ERROR') || mediaStage === 'FETCHING') return null;
+
+                const cache = window.require('WAWebMediaInMemoryBlobCache').InMemoryMediaBlobCache;
+                const cached = cache.get(source.mediaObject?.filehash);
+                const blob = cached || source.mediaObject?.mediaBlob?.forceToBlob?.();
+                if (!blob || typeof blob.arrayBuffer !== 'function') return null;
+                if (Number(blob.size || 0) > maxBytes) return { error: 'MEDIA_TOO_LARGE' };
+
+                let data;
+                if (typeof window.WWebJS?.arrayBufferToBase64Async === 'function') {
+                    data = await window.WWebJS.arrayBufferToBase64Async(await blob.arrayBuffer());
+                } else {
+                    data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '');
+                        reader.onerror = () => reject(reader.error || new Error('MEDIA_BLOB_READ_FAILED'));
+                        reader.readAsDataURL(blob);
+                    });
+                }
+
+                return {
+                    data,
+                    mimetype: source.mimetype || blob.type || 'audio/ogg',
+                    filename: source.filename,
+                    filesize: source.size || blob.size
+                };
+            }, messageId, MAX_MEDIA_BYTES), MEDIA_DOWNLOAD_TIMEOUT_MS, 'MEDIA_DOWNLOAD_TIMEOUT');
+            if (media?.error === 'MEDIA_TOO_LARGE') throw permanentMediaError('MEDIA_TOO_LARGE');
+            if (media?.data) return media;
+        } catch (error) {
+            if (error?.permanent || error?.message === 'MEDIA_DOWNLOAD_TIMEOUT') throw error;
+            blobDownloadError = error;
+        }
+    }
+
+    try {
+        const media = await withTimeout(msg.downloadMedia(), MEDIA_DOWNLOAD_TIMEOUT_MS, 'MEDIA_DOWNLOAD_TIMEOUT');
+        if (media?.data) return media;
+    } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error || 'MEDIA_DOWNLOAD_FAILED'));
+    }
+    if (blobDownloadError) {
+        throw blobDownloadError instanceof Error ? blobDownloadError : new Error(String(blobDownloadError));
+    }
+    return null;
+}
+
+async function downloadMessageMedia(msg, scope = '') {
+    const messageId = String(msg?.id?._serialized || msg?.id?.id || '').trim();
+    if (!messageId) return downloadMessageMediaOnce(msg);
+    const jobKey = `${String(scope || 'unscoped')}:${messageId}`;
+    const cooldownUntil = mediaDownloadCooldowns.get(jobKey) || 0;
+    if (cooldownUntil > Date.now()) throw new Error('MEDIA_DOWNLOAD_COOLDOWN');
+    if (cooldownUntil) mediaDownloadCooldowns.delete(jobKey);
+
+    const current = mediaDownloadJobs.get(jobKey);
+    if (current) return current;
+
+    const job = downloadMessageMediaOnce(msg);
+    mediaDownloadJobs.set(jobKey, job);
+    try {
+        const media = await job;
+        mediaDownloadCooldowns.delete(jobKey);
+        return media;
+    } catch (error) {
+        if (error?.message === 'MEDIA_DOWNLOAD_TIMEOUT') {
+            mediaDownloadCooldowns.set(jobKey, Date.now() + MEDIA_DOWNLOAD_COOLDOWN_MS);
+        }
+        throw error;
+    } finally {
+        if (mediaDownloadJobs.get(jobKey) === job) mediaDownloadJobs.delete(jobKey);
+    }
 }
 
 function incrementLocalBotSend(key, expiresAt = Date.now() + 20000, redisMarked = false) {
@@ -166,7 +270,7 @@ async function persistMessageMedia(instanceId, phone, msg, options = {}) {
 
     if (options.requireExistingChat && !await hasAuthoritativeMessage(instanceId, phone, messageId)) return null;
 
-    const media = await msg.downloadMedia();
+    const media = await downloadMessageMedia(msg, `${instanceId}:${phone}`);
 
     if (!media?.data) {
         throw new Error('MEDIA_DOWNLOAD_EMPTY');
@@ -1366,6 +1470,92 @@ async function sendPresence(instanceId, phone) {
 }
 
 // 📥 КЛИЕНТТЕН КЕЛГЕН СУРЕТ/АУДИОНЫ ЖҮКТЕП АЛУ (Base64 форматына)
+async function findMessageForMediaRecovery(client, phone, messageId) {
+    const initialChatId = toWhatsAppChatId(phone, jidMap);
+    if (!client || !initialChatId || !messageId) return null;
+
+    const chatIds = [initialChatId];
+    const phoneChatId = `${phone}@c.us`;
+    if (!chatIds.includes(phoneChatId)) chatIds.push(phoneChatId);
+    if (typeof client.getContactLidAndPhone === 'function') {
+        const mappings = await withTimeout(
+            client.getContactLidAndPhone([phoneChatId]), 3000, 'MEDIA_LID_LOOKUP_TIMEOUT'
+        ).catch(() => []);
+        for (const mapping of Array.isArray(mappings) ? mappings : []) {
+            if (normalizePhoneFromCandidates([mapping?.pn]) !== phone) continue;
+            for (const candidate of [mapping?.lid, mapping?.pn]) {
+                const chatId = String(candidate || '').trim();
+                if (chatId && !chatIds.includes(chatId)) chatIds.push(chatId);
+            }
+        }
+    }
+
+    for (const chatId of chatIds) {
+        if (typeof client.getMessageById === 'function') {
+            const direct = await withTimeout(
+                client.getMessageById(`false_${chatId}_${messageId}`), 3000, 'MEDIA_MESSAGE_LOOKUP_TIMEOUT'
+            ).catch(() => null);
+            if (String(direct?.id?.id || '') === messageId) {
+                jidMap.set(phone, chatId);
+                return direct;
+            }
+        }
+        const chat = await withTimeout(client.getChatById(chatId), 3000, 'MEDIA_CHAT_LOOKUP_TIMEOUT').catch(() => null);
+        if (!chat || typeof chat.fetchMessages !== 'function') continue;
+        const messages = await withTimeout(
+            chat.fetchMessages({ limit: 200 }), 5000, 'MEDIA_HISTORY_LOOKUP_TIMEOUT'
+        ).catch(() => []);
+        const found = messages.find(message => String(message?.id?.id || '') === messageId);
+        if (found) {
+            jidMap.set(phone, chatId);
+            return found;
+        }
+    }
+    return null;
+}
+
+async function recoverChatMedia(instanceId, phone, messageId) {
+    const cleanPhone = normalizePhoneFromCandidates([phone]);
+    const cleanMessageId = String(messageId || '').trim();
+    if (!redisClient.isOpen || !isValidChatPhone(cleanPhone) || !cleanMessageId) return null;
+
+    const existing = await redisClient.sendCommand(['GET', chatMediaKey(instanceId, cleanMessageId)]).catch(() => '');
+    if (existing) return existing;
+    if (!await hasAuthoritativeMessage(instanceId, cleanPhone, cleanMessageId)) return null;
+
+    const recoveryKey = `${instanceId}:${cleanPhone}:${cleanMessageId}`;
+    if (mediaRecoveryMisses.has(recoveryKey)) return null;
+    const current = mediaRecoveryJobs.get(recoveryKey);
+    if (current) return current;
+
+    const job = (async () => {
+        const client = await getReadyClient(instanceId);
+        if (!client) return null;
+        const message = await withTimeout(
+            findMessageForMediaRecovery(client, cleanPhone, cleanMessageId), 15000, 'MEDIA_RECOVERY_LOOKUP_TIMEOUT'
+        ).catch(() => null);
+        if (!isAudioCandidate(message)) return null;
+        const persisted = await persistMessageMedia(instanceId, cleanPhone, message, {
+            requireExistingChat: true,
+            publishReady: true
+        });
+        return persisted?.mediaUrl || null;
+    })();
+    mediaRecoveryJobs.set(recoveryKey, job);
+    try {
+        const mediaData = await job;
+        if (mediaData) mediaRecoveryMisses.delete(recoveryKey);
+        else {
+            mediaRecoveryMisses.add(recoveryKey);
+            const expiry = setTimeout(() => mediaRecoveryMisses.delete(recoveryKey), 5000);
+            expiry.unref?.();
+        }
+        return mediaData;
+    } finally {
+        if (mediaRecoveryJobs.get(recoveryKey) === job) mediaRecoveryJobs.delete(recoveryKey);
+    }
+}
+
 async function getBase64Media(instanceId, keyObj) {
     try {
         const actualMessageId = (typeof keyObj === 'object') ? keyObj.id : keyObj;
@@ -1387,6 +1577,7 @@ module.exports = {
     markAsRead,
     sendPresence,
     getBase64Media,
+    recoverChatMedia,
     shutdownWhatsAppClients,
     __test: {
         isChromiumProfileLockError,
@@ -1394,9 +1585,16 @@ module.exports = {
         isConnectedState,
         isQualifiedAudio,
         deliveryStatusFromAck,
+        MAX_MEDIA_BYTES,
         MAX_MEDIA_BASE64_LENGTH,
         validateAudioBase64,
         shouldRetryMediaError,
+        downloadMessageMedia,
+        findMessageForMediaRecovery,
+        clearMediaDownloadJobs() {
+            mediaDownloadJobs.clear();
+            mediaDownloadCooldowns.clear();
+        },
         incrementLocalBotSend,
         consumeLocalBotSend,
         releaseLocalBotSend,

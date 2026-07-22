@@ -75,14 +75,16 @@ test('chat audio hydration delegates playback and ranges to the native media URL
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   const markup = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.html'), 'utf8');
   const hydration = source.slice(source.indexOf('async function loadAudio'), source.indexOf('async function loadInbox'));
-  assert.match(hydration, /bindAudio\(wrapper, audio, mediaUrl\)/);
+  assert.match(hydration, /bindAudio\(wrapper, audio, mediaUrl,/);
   assert.doesNotMatch(hydration, /response\.blob\(\)|response\.arrayBuffer\(\)|response\.json\(\)|URL\.createObjectURL/);
   assert.doesNotMatch(hydration, /canPlayType\(/);
   assert.match(hydration, /query\.set\('fmt', 'mp4'\)/);
   assert.match(hydration, /localStorage\.getItem\('token_key'\)/);
   assert.match(hydration, /query\.set\('token', mediaToken\)/);
+  assert.match(hydration, /query\.set\('phone', state\.activePhone\)/);
   const audioTemplate = source.slice(source.indexOf("content = '<div class=\"audio-player\""), source.indexOf("'<button class=\"audio-speed\""));
   assert.doesNotMatch(audioTemplate, /\sdisabled(?:\s|>)/);
+  assert.match(audioTemplate, /preload="none"/);
   assert.match(source, /el\.messages\.addEventListener\('click', handleAudioPlayClick\)/);
   assert.match(source, /var eventsBound = false;/);
   assert.match(source, /function bindEvents\(\) \{\s*if \(eventsBound\) return;\s*eventsBound = true;/);
