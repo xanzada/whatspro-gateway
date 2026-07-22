@@ -156,7 +156,7 @@ async function loadTenantConfig(instance, cacheKey) {
   let transportFailed = false;
   let record = null;
 
-  for (const column of ['instance', 'instance_id', 'restaurant_instance', 'restaurantInstance']) {
+  for (const column of ['instance_id', 'instance', 'restaurant_instance', 'restaurantInstance']) {
     try {
       record = await queryByColumn(instance, column);
       if (record) break;
