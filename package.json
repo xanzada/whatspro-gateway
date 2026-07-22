@@ -10,6 +10,7 @@
     "check": "node --check src/server.js && node --check public/chat.js && node --check public/chat-core.js && node --check services/chatMedia.js && node --check services/chatStore.js && node --check services/chatEvents.js && node --check services/incomingWebhook.js && node --check services/whatsappManager.js && node --check services/operatorLock.js && node --check services/phoneUtils.js && node --check services/nocodbConfig.js && node --check config/redis.js"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "axios": "^1.18.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -19,6 +20,7 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "redis": "^6.0.1",
+    "undici": "6.27.0",
     "whatsapp-web.js": "^1.34.7"
   }
 }

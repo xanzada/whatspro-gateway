@@ -1,7 +1,7 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
-const axios = require('axios');
 const crypto = require('node:crypto');
+const { Agent, Dispatcher } = require('undici');
 const qrcode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const { redisClient } = require('../config/redis');
@@ -29,6 +29,7 @@ const mediaDownloadCooldowns = new Map();
 const mediaRecoveryJobs = new Map();
 const mediaRecoveryMisses = new Set();
 let activeMediaDownloads = 0;
+let baileysMediaDownloaderPromise;
 
 function isValidChatPhone(phone) {
     return /^\d{10,15}$/.test(String(phone || ''));
@@ -92,104 +93,150 @@ function shouldRetryMediaError(error) {
     return error?.permanent !== true;
 }
 
-function decodeWhatsAppBase64(value, code) {
-    if (Buffer.isBuffer(value)) return Buffer.from(value);
-    const raw = String(value || '').trim().replace(/-/g, '+').replace(/_/g, '/');
-    if (!raw || !/^[A-Za-z0-9+/]*={0,2}$/.test(raw)) throw new Error(code);
-    const padded = raw.padEnd(Math.ceil(raw.length / 4) * 4, '=');
-    const decoded = Buffer.from(padded, 'base64');
-    if (!decoded.length) throw new Error(code);
-    return decoded;
-}
-
-function verifyWhatsAppSha256(data, expected, code) {
-    if (!expected) return;
-    const expectedHash = decodeWhatsAppBase64(expected, code);
-    const actualHash = crypto.createHash('sha256').update(data).digest();
-    if (expectedHash.length !== actualHash.length || !crypto.timingSafeEqual(expectedHash, actualHash)) {
-        throw new Error(code);
+function verifyMediaFileHash(bytes, expectedHash) {
+    if (!expectedHash) return;
+    const raw = String(expectedHash).trim().replace(/-/g, '+').replace(/_/g, '/');
+    const expected = Buffer.from(raw.padEnd(Math.ceil(raw.length / 4) * 4, '='), 'base64');
+    const actual = crypto.createHash('sha256').update(bytes).digest();
+    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+        throw new Error('MEDIA_CDN_FILE_HASH_INVALID');
     }
 }
 
-function decryptWhatsAppMedia(encryptedData, mediaKey, mediaType = 'audio') {
-    const encrypted = Buffer.isBuffer(encryptedData) ? encryptedData : Buffer.from(encryptedData || []);
-    if (encrypted.length < 27 || encrypted.length > MAX_MEDIA_BYTES + 1024) {
-        throw new Error('MEDIA_CDN_PAYLOAD_INVALID');
+async function getBaileysMediaDownloader() {
+    if (!baileysMediaDownloaderPromise) {
+        baileysMediaDownloaderPromise = import('@whiskeysockets/baileys')
+            .then(module => module.downloadContentFromMessage)
+            .catch(error => {
+                baileysMediaDownloaderPromise = null;
+                throw error;
+            });
     }
-    const key = decodeWhatsAppBase64(mediaKey, 'MEDIA_CDN_KEY_INVALID');
-    if (key.length !== 32) throw new Error('MEDIA_CDN_KEY_INVALID');
-    const type = String(mediaType || 'audio').toLowerCase();
-    const label = type === 'ptt' || type === 'audio' ? 'Audio' : type.charAt(0).toUpperCase() + type.slice(1);
-    const expanded = Buffer.from(crypto.hkdfSync(
-        'sha256', key, Buffer.alloc(32), Buffer.from(`WhatsApp ${label} Keys`), 112
-    ));
-    const iv = expanded.subarray(0, 16);
-    const cipherKey = expanded.subarray(16, 48);
-    const macKey = expanded.subarray(48, 80);
-    const ciphertext = encrypted.subarray(0, -10);
-    const receivedMac = encrypted.subarray(-10);
-    const expectedMac = crypto.createHmac('sha256', macKey)
-        .update(Buffer.concat([iv, ciphertext]))
-        .digest()
-        .subarray(0, 10);
-    if (!crypto.timingSafeEqual(receivedMac, expectedMac)) throw new Error('MEDIA_CDN_MAC_INVALID');
-    try {
-        const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
-        const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-        if (!decrypted.length || decrypted.length > MAX_MEDIA_BYTES) throw new Error('MEDIA_CDN_PAYLOAD_INVALID');
-        return decrypted;
-    } catch (error) {
-        if (error?.message === 'MEDIA_CDN_PAYLOAD_INVALID') throw error;
-        throw new Error('MEDIA_CDN_DECRYPT_FAILED');
-    }
+    return baileysMediaDownloaderPromise;
 }
 
-async function fetchWhatsAppMediaBytes(url) {
-    try {
-        const response = await axios.get(url, {
-            responseType: 'arraybuffer',
-            timeout: MEDIA_CDN_TIMEOUT_MS,
-            maxRedirects: 0,
-            maxContentLength: MAX_MEDIA_BYTES + 1024,
-            maxBodyLength: MAX_MEDIA_BYTES + 1024,
-            headers: {
-                Accept: '*/*',
-                Origin: 'https://web.whatsapp.com',
-                Referer: 'https://web.whatsapp.com/'
-            }
+async function collectMediaStream(stream, maxBytes = MAX_MEDIA_BYTES) {
+    if (!stream || typeof stream[Symbol.asyncIterator] !== 'function') {
+        throw new Error('MEDIA_STREAM_INVALID');
+    }
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of stream) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk || []);
+        total += bytes.length;
+        if (total > maxBytes) {
+            if (typeof stream.destroy === 'function') stream.destroy();
+            throw permanentMediaError('MEDIA_TOO_LARGE');
+        }
+        chunks.push(bytes);
+    }
+    if (!total) throw new Error('MEDIA_DOWNLOAD_EMPTY');
+    return Buffer.concat(chunks, total);
+}
+
+class RestrictedMediaDispatcher extends Dispatcher {
+    constructor(origin, timeoutMs = MEDIA_CDN_TIMEOUT_MS) {
+        super();
+        this.allowedOrigin = new URL(origin).origin;
+        this.agent = new Agent({
+            connect: { timeout: timeoutMs },
+            headersTimeout: timeoutMs,
+            bodyTimeout: timeoutMs,
+            keepAliveTimeout: 1,
+            keepAliveMaxTimeout: 1
         });
-        return Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data || []);
-    } catch (error) {
-        const status = Number(error?.response?.status || 0);
-        throw new Error(status ? `MEDIA_CDN_HTTP_${status}` : 'MEDIA_CDN_REQUEST_FAILED');
+    }
+
+    dispatch(options, handler) {
+        let requestedOrigin;
+        try {
+            requestedOrigin = new URL(String(options.origin)).origin;
+        } catch {
+            requestedOrigin = '';
+        }
+        if (requestedOrigin !== this.allowedOrigin) {
+            const error = new Error('MEDIA_CDN_HOST_INVALID');
+            error.code = 'MEDIA_CDN_HOST_INVALID';
+            queueMicrotask(() => handler.onError(error));
+            return false;
+        }
+        return this.agent.dispatch(options, handler);
+    }
+
+    close() {
+        return this.agent.close();
+    }
+
+    destroy(error) {
+        return this.agent.destroy(error);
     }
 }
 
-async function downloadEncryptedMessageMedia(msg, requestBinary = fetchWhatsAppMediaBytes) {
+function createMediaDispatcher(origin, timeoutMs) {
+    return new RestrictedMediaDispatcher(origin, timeoutMs);
+}
+
+function baileysMediaSource(msg) {
     const data = msg?._data || {};
     const mediaData = data.mediaData || {};
-    const directPath = String(data.directPath || mediaData.directPath || msg?.directPath || '').trim();
+    const rawDirectPath = String(data.directPath || mediaData.directPath || msg?.directPath || '').trim();
+    const rawUrl = String(
+        data.clientUrl || mediaData.clientUrl || data.url || mediaData.url ||
+        data.deprecatedMms3Url || mediaData.deprecatedMms3Url || msg?.url || ''
+    ).trim();
     const mediaKey = msg?.mediaKey || data.mediaKey || mediaData.mediaKey;
-    if (!directPath || !mediaKey) return null;
-
+    if ((!rawDirectPath && !rawUrl) || !mediaKey) return null;
     let parsed;
     try {
-        parsed = new URL(directPath, 'https://mmg.whatsapp.net');
+        parsed = new URL(rawDirectPath || rawUrl, rawUrl || 'https://mmg.whatsapp.net');
     } catch {
         throw new Error('MEDIA_CDN_PATH_INVALID');
     }
-    const downloadUrl = `https://mmg.whatsapp.net${parsed.pathname}${parsed.search}`;
-    const downloaded = await requestBinary(downloadUrl);
-    const encrypted = Buffer.isBuffer(downloaded) ? downloaded : Buffer.from(downloaded || []);
-    verifyWhatsAppSha256(encrypted, data.encFilehash || mediaData.encFilehash, 'MEDIA_CDN_ENCRYPTED_HASH_INVALID');
-    const decrypted = decryptWhatsAppMedia(encrypted, mediaKey, msg?.type || data.type || 'audio');
-    verifyWhatsAppSha256(decrypted, data.filehash || mediaData.filehash, 'MEDIA_CDN_FILE_HASH_INVALID');
+    const hostname = parsed.hostname.toLowerCase();
+    if (parsed.protocol !== 'https:' || (hostname !== 'whatsapp.net' && !hostname.endsWith('.whatsapp.net'))) {
+        throw new Error('MEDIA_CDN_HOST_INVALID');
+    }
     return {
-        data: decrypted.toString('base64'),
-        mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || 'audio/ogg',
-        filename: data.filename || mediaData.filename || msg?.filename,
-        filesize: decrypted.length
+        mediaKey,
+        directPath: rawDirectPath ? `${parsed.pathname}${parsed.search}` : null,
+        url: rawUrl || parsed.href,
+        host: parsed.host
     };
+}
+
+async function downloadBaileysMessageMedia(msg, injectedDownloader, testOptions = {}) {
+    const source = baileysMediaSource(msg);
+    if (!source) return null;
+    const data = msg?._data || {};
+    const mediaData = data.mediaData || {};
+    const expectedHash = data.filehash || mediaData.filehash;
+    if (!expectedHash) return null;
+    const downloader = injectedDownloader || await getBaileysMediaDownloader();
+    const timeoutMs = Number(testOptions.timeoutMs) > 0 ? Number(testOptions.timeoutMs) : MEDIA_CDN_TIMEOUT_MS;
+    const dispatcher = testOptions.dispatcher || createMediaDispatcher(`https://${source.host}`, timeoutMs);
+    const task = (async () => {
+        const stream = await downloader({
+            mediaKey: source.mediaKey,
+            directPath: source.directPath,
+            url: source.url
+        }, 'audio', {
+            host: source.host,
+            options: { dispatcher }
+        });
+        const decrypted = await collectMediaStream(stream);
+        verifyMediaFileHash(decrypted, expectedHash);
+        return {
+            data: decrypted.toString('base64'),
+            mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || 'audio/ogg',
+            filename: data.filename || mediaData.filename || msg?.filename,
+            filesize: decrypted.length
+        };
+    })();
+    try {
+        return await withTimeout(task, timeoutMs, 'MEDIA_CDN_TIMEOUT');
+    } finally {
+        await dispatcher.destroy().catch(() => {});
+    }
 }
 
 function mediaFailureCode(error) {
@@ -217,7 +264,7 @@ async function downloadMessageMediaOnce(msg) {
     if (declaredSize > MAX_MEDIA_BYTES) throw permanentMediaError('MEDIA_TOO_LARGE');
 
     try {
-        const media = await downloadEncryptedMessageMedia(msg);
+        const media = await downloadBaileysMessageMedia(msg);
         if (media?.data) return media;
     } catch (error) {
         cdnDownloadError = error;
@@ -1726,9 +1773,9 @@ module.exports = {
         MAX_MEDIA_BASE64_LENGTH,
         validateAudioBase64,
         shouldRetryMediaError,
-        decryptWhatsAppMedia,
-        fetchWhatsAppMediaBytes,
-        downloadEncryptedMessageMedia,
+        collectMediaStream,
+        createMediaDispatcher,
+        downloadBaileysMessageMedia,
         downloadMessageMedia,
         findMessageForMediaRecovery,
         clearMediaDownloadJobs() {

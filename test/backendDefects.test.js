@@ -1,11 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const axios = require('axios');
+const http = require('node:http');
+const { Readable } = require('node:stream');
 
 const { __test: whatsappTest } = require('../services/whatsappManager');
 
-function encryptedWhatsAppAudioFixture(plaintext, mediaKey) {
+const { __test: webhookTest } = require('../services/incomingWebhook');
+const { __test: serverTest } = require('../src/server');
+
+function encryptedWhatsAppAudio(plaintext, mediaKey) {
   const expanded = Buffer.from(crypto.hkdfSync('sha256', mediaKey, Buffer.alloc(32), Buffer.from('WhatsApp Audio Keys'), 112));
   const iv = expanded.subarray(0, 16);
   const cipherKey = expanded.subarray(16, 48);
@@ -15,8 +19,6 @@ function encryptedWhatsAppAudioFixture(plaintext, mediaKey) {
   const mac = crypto.createHmac('sha256', macKey).update(Buffer.concat([iv, ciphertext])).digest().subarray(0, 10);
   return Buffer.concat([ciphertext, mac]);
 }
-const { __test: webhookTest } = require('../services/incomingWebhook');
-const { __test: serverTest } = require('../src/server');
 
 test('audio requires hasMedia and an audio MIME type', () => {
   assert.equal(whatsappTest.isQualifiedAudio({ hasMedia: true }, { mimetype: 'audio/ogg; codecs=opus' }), true);
@@ -93,61 +95,112 @@ test('base64 validation rejects malformed and oversized media as permanent failu
   assert.equal(whatsappTest.shouldRetryMediaError(new Error('temporary download failure')), true);
 });
 
-test('audio downloader decrypts WhatsApp CDN media without the broken browser download API', async () => {
+test('audio downloader uses the Baileys media stream for WhatsApp PTT messages', async () => {
   const plaintext = Buffer.from('OggS\u0000\u0002WhatsPro-OpusHead-voice-note');
-  const mediaKey = Buffer.alloc(32, 7);
-  const encrypted = encryptedWhatsAppAudioFixture(plaintext, mediaKey);
-  let requestedUrl = '';
+  const mediaKey = Buffer.alloc(32, 7).toString('base64');
   const msg = {
     hasMedia: true,
     type: 'ptt',
-    mimetype: 'audio/ogg',
-    mediaKey: mediaKey.toString('base64'),
+    mimetype: 'audio/ogg; codecs=opus',
+    mediaKey,
     _data: {
       directPath: '/v/t62.7117-24/test-audio.enc?ccb=11-4',
-      filehash: crypto.createHash('sha256').update(plaintext).digest('base64'),
-      encFilehash: crypto.createHash('sha256').update(encrypted).digest('base64')
+      clientUrl: 'https://mmg-fna.whatsapp.net/v/t62.7117-24/test-audio.enc?ccb=11-4',
+      filehash: crypto.createHash('sha256').update(plaintext).digest('base64')
     }
   };
 
-  const media = await whatsappTest.downloadEncryptedMessageMedia(msg, async url => {
-    requestedUrl = url;
-    return encrypted;
+  let received;
+  const media = await whatsappTest.downloadBaileysMessageMedia(msg, async (...args) => {
+    received = args;
+    return Readable.from([plaintext.subarray(0, 8), plaintext.subarray(8)]);
   });
-  assert.equal(requestedUrl, 'https://mmg.whatsapp.net/v/t62.7117-24/test-audio.enc?ccb=11-4');
+  assert.deepEqual(received[0], {
+    mediaKey,
+    directPath: '/v/t62.7117-24/test-audio.enc?ccb=11-4',
+    url: 'https://mmg-fna.whatsapp.net/v/t62.7117-24/test-audio.enc?ccb=11-4'
+  });
+  assert.equal(received[1], 'audio');
+  assert.equal(received[2].host, 'mmg-fna.whatsapp.net');
+  assert.equal(typeof received[2].options.dispatcher?.dispatch, 'function');
   assert.deepEqual(media, {
     data: plaintext.toString('base64'),
-    mimetype: 'audio/ogg',
+    mimetype: 'audio/ogg; codecs=opus',
     filename: undefined,
     filesize: plaintext.length
   });
+});
 
-  const corrupted = Buffer.from(encrypted);
-  corrupted[corrupted.length - 1] ^= 1;
+test('Baileys media stream is stopped before it can exceed the audio size limit', async () => {
   await assert.rejects(
-    () => whatsappTest.downloadEncryptedMessageMedia(msg, async () => corrupted),
-    /MEDIA_CDN_ENCRYPTED_HASH_INVALID|MEDIA_CDN_MAC_INVALID/
+    () => whatsappTest.collectMediaStream(Readable.from([Buffer.alloc(5), Buffer.alloc(6)]), 10),
+    error => error?.permanent === true && error?.code === 'MEDIA_TOO_LARGE'
   );
 });
 
-test('WhatsApp CDN requests reject redirects instead of following them outside the allowlist', async () => {
-  const originalGet = axios.get;
-  let requestOptions;
-  axios.get = async (url, options) => {
-    assert.equal(url, 'https://mmg.whatsapp.net/redirect-test');
-    requestOptions = options;
-    const error = new Error('redirect');
-    error.response = { status: 302, headers: { location: 'http://127.0.0.1/private' } };
-    throw error;
+test('media dispatcher rejects redirects outside the original CDN origin', async t => {
+  const target = http.createServer((request, response) => response.end('private'));
+  const source = http.createServer((request, response) => {
+    response.writeHead(302, { Location: `http://localhost:${target.address().port}/private` });
+    response.end();
+  });
+  await Promise.all([target, source].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))));
+  t.after(() => Promise.all([target, source].map(server => new Promise(resolve => server.close(resolve)))));
+  const origin = `http://127.0.0.1:${source.address().port}`;
+  const dispatcher = whatsappTest.createMediaDispatcher(origin, 1000);
+  t.after(() => dispatcher.destroy().catch(() => {}));
+  await assert.rejects(
+    () => fetch(`${origin}/audio`, { dispatcher }),
+    error => error?.cause?.code === 'MEDIA_CDN_HOST_INVALID'
+  );
+});
+
+test('Baileys timeout destroys the underlying media dispatcher', async () => {
+  let destroyed = 0;
+  const dispatcher = {
+    dispatch() {},
+    destroy: async () => { destroyed += 1; }
+  };
+  const plaintext = Buffer.from('OggS-timeout');
+  await assert.rejects(() => whatsappTest.downloadBaileysMessageMedia({
+    hasMedia: true,
+    type: 'ptt',
+    mediaKey: Buffer.alloc(32, 3).toString('base64'),
+    _data: {
+      directPath: '/v/t62.7117-24/stalled.enc',
+      mimetype: 'audio/ogg',
+      filehash: crypto.createHash('sha256').update(plaintext).digest('base64')
+    }
+  }, async () => new Promise(() => {}), { timeoutMs: 20, dispatcher }), /MEDIA_CDN_TIMEOUT/);
+  assert.equal(destroyed, 1);
+});
+
+test('installed Baileys downloader decrypts the exact WhatsApp audio payload', async () => {
+  const plaintext = Buffer.from('OggS\u0000\u0002OpusHead-WhatsPro-voice-note');
+  const mediaKey = Buffer.alloc(32, 9);
+  const encrypted = encryptedWhatsAppAudio(plaintext, mediaKey);
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options) => {
+    assert.equal(String(url), 'https://mmg.whatsapp.net/v/t62.7117-24/real-baileys.enc');
+    assert.equal(options.headers.Origin, 'https://web.whatsapp.com');
+    return new Response(encrypted, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
   };
   try {
-    await assert.rejects(
-      () => whatsappTest.fetchWhatsAppMediaBytes('https://mmg.whatsapp.net/redirect-test'),
-      /MEDIA_CDN_HTTP_302/
-    );
-    assert.equal(requestOptions.maxRedirects, 0);
+    const { downloadContentFromMessage } = await import('@whiskeysockets/baileys');
+    const media = await whatsappTest.downloadBaileysMessageMedia({
+      hasMedia: true,
+      type: 'ptt',
+      mediaKey: mediaKey.toString('base64'),
+      _data: {
+        directPath: '/v/t62.7117-24/real-baileys.enc',
+        clientUrl: 'https://mmg.whatsapp.net/v/t62.7117-24/real-baileys.enc',
+        mimetype: 'audio/ogg; codecs=opus',
+        filehash: crypto.createHash('sha256').update(plaintext).digest('base64')
+      }
+    }, downloadContentFromMessage);
+    assert.deepEqual(Buffer.from(media.data, 'base64'), plaintext);
   } finally {
-    axios.get = originalGet;
+    global.fetch = originalFetch;
   }
 });
 
