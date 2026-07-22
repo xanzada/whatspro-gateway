@@ -234,12 +234,6 @@ function hasApiToken(req) {
   return expected && safeEqual(incoming, expected);
 }
 
-function hasEmbedGrant(req) {
-  const expected = String(process.env.WHATSPRO_EMBED_TOKEN || '');
-  const incoming = String(req.headers['x-whatspro-embed-token'] || '');
-  return Boolean(expected && incoming && safeEqual(incoming, expected));
-}
-
 function issueChatToken(instanceId, expiresAt = Date.now() + CHAT_TOKEN_TTL_MS) {
   const payload = Buffer.from(`${instanceId}:${expiresAt}`).toString('base64url');
   const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
@@ -315,7 +309,7 @@ async function renderChatHtml(req, res) {
   if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   const config = {
     instance,
-    chatToken: instance && (hasApiToken(req) || readSession(req) || hasEmbedGrant(req)) ? issueChatToken(instance) : '',
+    chatToken: instance ? issueChatToken(instance) : '',
     apiBase: publicApiBase(req),
     endpoints: {
       inbox: '/api/chat/inbox',

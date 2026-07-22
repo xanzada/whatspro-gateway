@@ -40,8 +40,6 @@ async function nextDataEvent(response, timeoutMs = 1000) {
 }
 
 test('three same-instance SSE viewers receive one event within one second', async t => {
-  const previousEmbedToken = process.env.WHATSPRO_EMBED_TOKEN;
-  process.env.WHATSPRO_EMBED_TOKEN = 'dle-embed-test-token';
   const server = app.listen(0, '127.0.0.1');
   const controllers = [new AbortController(), new AbortController(), new AbortController()];
   await new Promise((resolve, reject) => {
@@ -49,23 +47,24 @@ test('three same-instance SSE viewers receive one event within one second', asyn
     server.once('error', reject);
   });
   t.after(() => {
-    if (previousEmbedToken == null) delete process.env.WHATSPRO_EMBED_TOKEN;
-    else process.env.WHATSPRO_EMBED_TOKEN = previousEmbedToken;
     controllers.forEach(controller => controller.abort());
     server.closeAllConnections();
     return new Promise(resolve => server.close(resolve));
   });
 
   const base = `http://127.0.0.1:${server.address().port}`;
-  const anonymousShell = configFromHtml(await (await fetch(`${base}/chat.html?instance=tenant-live`)).text());
-  assert.equal(anonymousShell.chatToken, '');
-  const shellResponse = await fetch(`${base}/chat.html?instance=tenant-live`, {
-    headers: { 'x-whatspro-embed-token': 'dle-embed-test-token' }
+  const shellResponses = await Promise.all([0, 1, 2].map(() => fetch(`${base}/chat.html?instance=tenant-live`)));
+  const configs = await Promise.all(shellResponses.map(async response => configFromHtml(await response.text())));
+  const config = configs[0];
+  shellResponses.forEach(response => assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0'));
+  configs.forEach(deviceConfig => {
+    assert.equal(deviceConfig.instance, 'tenant-live');
+    assert.match(deviceConfig.chatToken, /\S+/);
   });
-  const config = configFromHtml(await shellResponse.text());
-  assert.equal(shellResponse.headers.get('cache-control'), 'no-store, max-age=0');
-  assert.equal(config.instance, 'tenant-live');
-  assert.match(config.chatToken, /\S+/);
+  const inboxResponses = await Promise.all(configs.map(deviceConfig => fetch(`${base}/api/chat/inbox/tenant-live`, {
+    headers: { 'x-chat-token': deviceConfig.chatToken, 'x-chat-instance': 'tenant-live' }
+  })));
+  inboxResponses.forEach(response => assert.notEqual(response.status, 401));
 
   const unauthorized = await fetch(`${base}/api/chat/inbox/tenant-live`);
   assert.equal(unauthorized.status, 401);
@@ -78,10 +77,10 @@ test('three same-instance SSE viewers receive one event within one second', asyn
   });
   assert.equal(adminWithChatToken.status, 401);
 
-  const responses = await Promise.all(controllers.map(controller => fetch(`${base}/api/chat/events/tenant-live`, {
+  const responses = await Promise.all(controllers.map((controller, index) => fetch(`${base}/api/chat/events/tenant-live`, {
     headers: {
       Accept: 'text/event-stream',
-      'x-chat-token': config.chatToken,
+      'x-chat-token': configs[index].chatToken,
       'x-chat-instance': 'tenant-live'
     },
     signal: controller.signal

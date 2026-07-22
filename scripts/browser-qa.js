@@ -16,7 +16,7 @@ fs.mkdirSync(outputDir, { recursive: true });
     localStorage.setItem('token_key', 'qa-media-token');
     const nativeCanPlayType = HTMLMediaElement.prototype.canPlayType;
     HTMLMediaElement.prototype.canPlayType = function (type) {
-      if (String(type).toLowerCase().includes('audio/ogg')) return '';
+      if (String(type).toLowerCase().includes('audio/ogg')) return 'probably';
       return nativeCanPlayType.call(this, type);
     };
     HTMLMediaElement.prototype.play = function () {

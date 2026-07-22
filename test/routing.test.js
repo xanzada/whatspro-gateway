@@ -77,7 +77,7 @@ test('chat audio hydration delegates playback and ranges to the native media URL
   const hydration = source.slice(source.indexOf('async function loadAudio'), source.indexOf('async function loadInbox'));
   assert.match(hydration, /bindAudio\(wrapper, audio, mediaUrl\)/);
   assert.doesNotMatch(hydration, /response\.blob\(\)|response\.arrayBuffer\(\)|response\.json\(\)|URL\.createObjectURL/);
-  assert.match(hydration, /canPlayType\('audio\/ogg; codecs="opus"'\)/);
+  assert.doesNotMatch(hydration, /canPlayType\(/);
   assert.match(hydration, /query\.set\('fmt', 'mp4'\)/);
   assert.match(hydration, /localStorage\.getItem\('token_key'\)/);
   assert.match(hydration, /query\.set\('token', mediaToken\)/);

@@ -331,7 +331,7 @@
         }
         var query = new URLSearchParams();
         if (mediaToken) query.set('token', mediaToken);
-        if (!audio.canPlayType('audio/ogg; codecs="opus"')) query.set('fmt', 'mp4');
+        query.set('fmt', 'mp4');
         var mediaUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
         if (query.toString()) mediaUrl += '?' + query.toString();
         bindAudio(wrapper, audio, mediaUrl);
