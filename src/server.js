@@ -21,6 +21,7 @@ const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/oper
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
+const { getTenantChatConfig } = require('../services/nocodbConfig');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -308,8 +309,10 @@ function publicApiBase(req) {
 async function renderChatHtml(req, res) {
   const instance = String(req.query.instance || '').trim();
   if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const tenant = instance ? await getTenantChatConfig(instance) : null;
   const config = {
     instance,
+    branding: tenant?.branding || { name: instance || 'WhatsPro' },
     chatToken: instance ? issueChatToken(instance) : '',
     apiBase: publicApiBase(req),
     endpoints: {
@@ -508,7 +511,9 @@ async function applyOperatorSendEffects(data) {
   if (!redisClient.isOpen) throw new Error('REDIS_NOT_CONNECTED');
   const { instanceId, phone, entry, expiresAt } = data;
   const remainingTtl = remainingOperatorTtl(expiresAt);
-  const stored = await chatStore.appendMessageOnce(instanceId, phone, entry, { state: 'operator' });
+  const stored = await chatStore.appendMessageOnce(instanceId, phone, entry, {
+    state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
+  });
   if (stored.stale) return;
   if (remainingTtl > 0) {
     const lockScript = [
@@ -522,7 +527,7 @@ async function applyOperatorSendEffects(data) {
       operatorActiveKey(instanceId, phone), `mute:${instanceId}:${phone}`, String(entry.createdAt), String(remainingTtl)]));
     if (locked !== 1) return;
   }
-  const events = [publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state: 'operator' })];
+  const events = [publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state: stored.state || 'operator' })];
   if (remainingTtl > 0) events.push(publishChatEvent({ type: 'lock.changed', instanceId, phone, ttl: remainingTtl, expiresAt }));
   await Promise.all(events);
 }

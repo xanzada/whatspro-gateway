@@ -7,6 +7,7 @@
   var params = new URLSearchParams(window.location.search);
   var config = window.__CHAT_CONFIG__ || {};
   var instanceId = String(params.get('instance') || config.instance || 'prestige').trim();
+  var branding = config.branding || {};
 
   function safeApiBase(value) {
     try {
@@ -175,7 +176,7 @@
     document.querySelectorAll('[data-i18n]').forEach(function (node) { node.textContent = t(node.dataset.i18n); });
     document.querySelectorAll('[data-i18n-title]').forEach(function (node) { var value = t(node.dataset.i18nTitle); node.title = value; node.setAttribute('aria-label', value); });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(function (node) { node.placeholder = t(node.dataset.i18nPlaceholder); });
-    el.instanceTitle.textContent = instanceId.toUpperCase();
+    el.instanceTitle.textContent = String(branding.name || instanceId || 'WhatsPro');
     el.langBtn.textContent = state.lang === 'ru' ? 'KZ' : 'RU';
   }
 
@@ -198,10 +199,9 @@
   }
 
   function updateComposer() {
-    var archived = core.chatState(currentChat()) === 'archive';
-    var disabled = !state.activePhone || archived || state.sending || state.actionBusy;
+    var disabled = !state.activePhone || state.sending || state.actionBusy;
     el.messageInput.disabled = disabled;
-    el.messageInput.placeholder = archived ? t('archived') : t('reply');
+    el.messageInput.placeholder = t('reply');
     el.sendBtn.disabled = disabled || !el.messageInput.value.trim();
   }
 

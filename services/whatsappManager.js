@@ -11,7 +11,7 @@ const path = require('path');
 const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
-const { appendMessage, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
+const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
@@ -906,9 +906,12 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source, mess
 
     const entry = buildOperatorHistoryEntry(instanceId, phone, text, source, messageId, media);
 
-    await appendMessage(instanceId, phone, entry, { state: 'operator' });
-    await publishChatEvent({ type: 'history.append', instanceId, phone, message: entry });
-    return entry;
+    const stored = await appendMessageOnce(instanceId, phone, entry, {
+        state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
+    });
+    if (stored.stale) return null;
+    if (stored.inserted) await publishChatEvent({ type: 'history.append', instanceId, phone, message: stored });
+    return stored;
 }
 
 async function getContactInfoFromMessage(msg) {

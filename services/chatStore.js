@@ -182,27 +182,37 @@ function createChatStore(redis, options = {}) {
     const script = [
       "local deletedAt = tonumber(redis.call('GET', KEYS[3]) or '0')",
       'if deletedAt >= tonumber(ARGV[3]) then return -1 end',
+      'local targetState = ARGV[5]',
+      'local ttl = ARGV[6]',
+      'local expiresAt = ARGV[7]',
+      "if ARGV[10] == '1' and (redis.call('GET', KEYS[5]) == 'archive' or redis.call('EXISTS', KEYS[7]) == 1) then targetState = 'archive'; ttl = ARGV[11]; expiresAt = ARGV[12] end",
       "local inserted = redis.call('SADD', KEYS[2], ARGV[1])",
-      "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]); if ARGV[9] ~= '' then redis.call('SET', KEYS[9], ARGV[9], 'EX', ARGV[6]); redis.call('SADD', KEYS[10], ARGV[1]); redis.call('EXPIRE', KEYS[10], ARGV[6]) end end",
-      "if inserted == 0 and ARGV[8] == '1' then return 0 end",
+      "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]); if ARGV[9] ~= '' then redis.call('SET', KEYS[9], ARGV[9], 'EX', ttl); redis.call('SADD', KEYS[10], ARGV[1]); redis.call('EXPIRE', KEYS[10], ttl) end end",
+      "if inserted == 0 and ARGV[8] == '1' then return { 0, redis.call('GET', KEYS[5]) or targetState } end",
       "redis.call('ZADD', KEYS[4], ARGV[3], ARGV[4])",
-      "redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[6])",
-      "redis.call('ZADD', KEYS[6], ARGV[7], ARGV[4])",
-      "redis.call('EXPIRE', KEYS[1], ARGV[6])",
-      "redis.call('EXPIRE', KEYS[2], ARGV[6])",
-      "if ARGV[5] ~= 'archive' then redis.call('DEL', KEYS[7]); redis.call('SREM', KEYS[8], ARGV[4]) end",
-      'return inserted'
+      "redis.call('SET', KEYS[5], targetState, 'EX', ttl)",
+      "redis.call('ZADD', KEYS[6], expiresAt, ARGV[4])",
+      "redis.call('EXPIRE', KEYS[1], ttl)",
+      "redis.call('EXPIRE', KEYS[2], ttl)",
+      "if targetState == 'archive' then redis.call('SADD', KEYS[8], ARGV[4]); redis.call('SET', KEYS[7], ARGV[3], 'EX', ttl) else redis.call('DEL', KEYS[7]); redis.call('SREM', KEYS[8], ARGV[4]) end",
+      'return { inserted, targetState }'
     ].join('\n');
-    const result = Number(await command(['EVAL', script, '10', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
+    const rawResult = await command(['EVAL', script, '10', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
       keys.deleted(instanceId, phone), keys.inbox(instanceId), keys.state(instanceId, phone), keys.expiry(instanceId),
       keys.archiveMarker(instanceId, phone), keys.archive(instanceId), keys.media(instanceId, normalized.id), keys.mediaIds(instanceId, phone),
       String(normalized.id), JSON.stringify(normalized), String(normalized.createdAt), phone, state, String(ttl),
-      String(now() + ttl * 1000), options.preserveStateOnDuplicate ? '1' : '0', encodedMedia]));
+      String(now() + ttl * 1000), options.preserveStateOnDuplicate ? '1' : '0', encodedMedia,
+      options.preserveArchive ? '1' : '0', String(ARCHIVE_TTL_SECONDS), String(now() + ARCHIVE_TTL_SECONDS * 1000)]);
+    const result = Number(Array.isArray(rawResult) ? rawResult[0] : rawResult);
+    const appliedState = Array.isArray(rawResult) ? String(rawResult[1] || state) : state;
     if (result < 0) return { ...normalized, inserted: false, stale: true };
     if (result === 1 && normalized.hasMedia && !encodedMedia) {
       console.warn(`[CHAT STORE] ${instanceId}/${phone}/${normalized.id}: media data is missing`);
     }
-    return { ...normalized, inserted: result === 1, stale: false };
+    if (result === 1 && appliedState === 'archive') {
+      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS, 'archive');
+    }
+    return { ...normalized, state: appliedState, inserted: result === 1, stale: false };
   }
 
   async function getHistory(instanceId, rawPhone, limit = 1000) {

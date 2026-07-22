@@ -130,16 +130,24 @@ class FakeRedis {
           mediaIds.value.add(messageId); this.data.set(args[12], mediaIds); this.expires.set(args[12], Number(args[18]));
         }
       }
-      if (!inserted && args[20] === '1') return 0;
-      const phone = args[16]; const state = args[17]; const ttl = Number(args[18]);
+      if (!inserted && args[20] === '1') return [0, this.data.get(args[7])?.value || args[17]];
+      const phone = args[16];
+      const preserveArchive = args[22] === '1' && (this.data.get(args[7])?.value === 'archive' || this.data.has(args[9]));
+      const state = preserveArchive ? 'archive' : args[17];
+      const ttl = preserveArchive ? Number(args[23]) : Number(args[18]);
+      const expiresAt = preserveArchive ? Number(args[24]) : Number(args[19]);
       const inbox = this.data.get(args[6]) || { type: 'zset', value: new Map() };
       inbox.value.set(phone, createdAt); this.data.set(args[6], inbox);
       this.data.set(args[7], { type: 'string', value: state }); this.expires.set(args[7], ttl);
       const expiry = this.data.get(args[8]) || { type: 'zset', value: new Map() };
-      expiry.value.set(phone, Number(args[19])); this.data.set(args[8], expiry);
+      expiry.value.set(phone, expiresAt); this.data.set(args[8], expiry);
       this.expires.set(historyKey, ttl); this.expires.set(idsKey, ttl);
-      if (state !== 'archive') { this.data.delete(args[9]); this.data.get(args[10])?.value?.delete(phone); }
-      return inserted ? 1 : 0;
+      if (state === 'archive') {
+        const archive = this.data.get(args[10]) || { type: 'set', value: new Set() };
+        archive.value.add(phone); this.data.set(args[10], archive);
+        this.data.set(args[9], { type: 'string', value: String(createdAt) }); this.expires.set(args[9], ttl);
+      } else { this.data.delete(args[9]); this.data.get(args[10])?.value?.delete(phone); }
+      return [inserted ? 1 : 0, state];
     }
     throw new Error(`Unsupported command ${command}`);
   }
@@ -168,6 +176,60 @@ test('incoming, viewed, operator and archive are exclusive states', async () => 
   assert.equal(redis.expires.get('chatwoot:history:acme:77001234567'), ARCHIVE_TTL_SECONDS);
   await store.applyAction('acme', '77001234567', 'restore');
   assert.equal(await store.getState('acme', '77001234567'), 'all');
+});
+
+test('operator reply is stored while preserving archive state and its 72 hour TTL', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 5000 });
+  const phone = '77001234567';
+  await store.saveEntry('acme', phone, { id: 'm1', text: 'hello', direction: 'incoming' }, { state: 'new' });
+  await store.applyAction('acme', phone, 'archive');
+
+  const reply = await store.appendMessageOnce('acme', phone, {
+    id: 'operator-1', text: 'reply from archive', role: 'operator', source: 'operator_panel', createdAt: 5001
+  }, { state: 'operator', preserveArchive: true });
+
+  assert.equal(reply.inserted, true);
+  assert.equal(reply.state, 'archive');
+  assert.equal(await store.getState('acme', phone), 'archive');
+  assert.equal(redis.expires.get('chatwoot:history:acme:77001234567'), ARCHIVE_TTL_SECONDS);
+  assert.equal((await store.getHistory('acme', phone)).at(-1).text, 'reply from archive');
+});
+
+test('operator reply preserves a legacy archive marker when the state key is missing', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 6000 });
+  const phone = '77001234567';
+  await store.appendMessageOnce('legacy', phone, { id: 'before', text: 'old', createdAt: 5000 }, { state: 'new' });
+  await store.applyAction('legacy', phone, 'archive');
+  redis.data.delete(store.keys.state('legacy', phone));
+
+  const reply = await store.appendMessageOnce('legacy', phone, {
+    id: 'operator-legacy', text: 'reply', role: 'operator', createdAt: 6000
+  }, { state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true });
+
+  assert.equal(reply.state, 'archive');
+  assert.equal(await store.getState('legacy', phone), 'archive');
+});
+
+test('duplicate archived delivery does not extend retention', async () => {
+  const redis = new FakeRedis();
+  let currentTime = 10_000;
+  const store = createChatStore(redis, { now: () => currentTime });
+  const phone = '77001234567';
+  const entry = { id: 'same-id', text: 'once', createdAt: 9000 };
+  await store.appendMessageOnce('duplicate-archive', phone, entry, { state: 'new' });
+  await store.applyAction('duplicate-archive', phone, 'archive');
+  const expiryKey = store.keys.expiry('duplicate-archive');
+  const expiryBefore = redis.data.get(expiryKey).value.get(phone);
+
+  currentTime += 60_000;
+  const duplicate = await store.appendMessageOnce('duplicate-archive', phone, entry, {
+    state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
+  });
+
+  assert.equal(duplicate.inserted, false);
+  assert.equal(redis.data.get(expiryKey).value.get(phone), expiryBefore);
 });
 
 test('media is stored separately, omitted from history, and follows chat TTL', async () => {

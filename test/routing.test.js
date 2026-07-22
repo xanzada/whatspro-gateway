@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
 const { app } = require('../src/server');
 
@@ -111,4 +112,41 @@ test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings'
   assert.match(source, /phoneQuery\.charAt\(0\) === '8' && phoneQuery\.length > 1/);
   assert.match(source, /phoneQuery = '7' \+ phoneQuery\.slice\(1\)/);
   assert.match(source, /phone\.indexOf\(phoneQuery\) >= 0/);
+});
+
+test('chat header uses tenant brand config and archived chats keep the composer enabled', async t => {
+  const nocodb = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ list: [{ instance: 'brandtenant', brand: 'Astana Grill' }] }));
+  });
+  await new Promise((resolve, reject) => { nocodb.listen(0, '127.0.0.1', resolve); nocodb.once('error', reject); });
+  t.after(() => new Promise(resolve => nocodb.close(resolve)));
+
+  const previous = {
+    url: process.env.NOCODB_URL,
+    table: process.env.NOCODB_RESTAURANTS_TABLE_ID,
+    token: process.env.NOCODB_TOKEN
+  };
+  process.env.NOCODB_URL = `http://127.0.0.1:${nocodb.address().port}`;
+  process.env.NOCODB_RESTAURANTS_TABLE_ID = 'restaurants';
+  process.env.NOCODB_TOKEN = 'test-token';
+  t.after(() => {
+    if (previous.url == null) delete process.env.NOCODB_URL; else process.env.NOCODB_URL = previous.url;
+    if (previous.table == null) delete process.env.NOCODB_RESTAURANTS_TABLE_ID; else process.env.NOCODB_RESTAURANTS_TABLE_ID = previous.table;
+    if (previous.token == null) delete process.env.NOCODB_TOKEN; else process.env.NOCODB_TOKEN = previous.token;
+  });
+
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/chat.html?instance=brandtenant`);
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(html, /"branding":\{"name":"Astana Grill"/);
+
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
+  assert.match(source, /var branding = config\.branding/);
+  assert.match(source, /branding\.name/);
+  const composer = source.slice(source.indexOf('function updateComposer()'), source.indexOf('function renderReceipt'));
+  assert.doesNotMatch(composer, /disabled\s*=.*archived/);
 });
