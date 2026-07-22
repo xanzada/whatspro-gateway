@@ -108,19 +108,23 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   };
 }
 
-async function saveIncomingMessage(payload) {
+async function saveIncomingMessage(payload, dependencies = {}) {
+  const store = dependencies.store || chatStore;
+  const publishEvent = dependencies.publishEvent || publishChatEvent;
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
-  if (!redisClient.isOpen) return { skipped: true, reason: 'redis_not_connected' };
+  const redisOpen = dependencies.redisOpen ?? redisClient.isOpen;
+  if (!redisOpen) return { skipped: true, reason: 'redis_not_connected' };
 
   const rawTimestamp = Number(payload.timestamp || payload.messageTimestamp || payload.data?.messageTimestamp || 0);
   const timestamp = rawTimestamp > 0 ? (rawTimestamp < 1e12 ? rawTimestamp * 1000 : rawTimestamp) : Date.now();
   const entry = buildHistoryEntry(payload, instanceId, phone, timestamp);
 
   const state = entry.direction === 'incoming' ? 'new' : undefined;
-  await chatStore.appendMessage(instanceId, phone, entry, { state });
-  await publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state }).catch(() => {});
+  const stored = await store.appendMessageOnce(instanceId, phone, entry, { state, preserveStateOnDuplicate: true });
+  if (stored.stale || !stored.inserted) return { skipped: true, reason: stored.stale ? 'stale_message' : 'duplicate_message', instanceId, phone, timestamp };
+  await publishEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state }).catch(() => {});
 
   return { saved: true, instanceId, phone, timestamp };
 }
@@ -180,5 +184,5 @@ module.exports = {
   getOpenBotWebhookUrl,
   getOpenBotWebhookToken,
   saveIncomingMessage,
-  __test: { buildHistoryEntry }
+  __test: { buildHistoryEntry, saveIncomingMessage }
 };

@@ -30,11 +30,8 @@ const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
 const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSPRO_API_TOKEN || crypto.randomBytes(32).toString('hex');
-const SSE_MAX_CONNECTIONS_PER_CLIENT = 20;
-const SSE_MAX_CONNECTIONS_TOTAL = 500;
 const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
-const sseConnections = new Map();
-let sseConnectionTotal = 0;
+const CHAT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const loginAttempts = new Map();
 const operatorEffectJobs = new Map();
 const sendCompletionJobs = new Map();
@@ -237,10 +234,41 @@ function hasApiToken(req) {
   return expected && safeEqual(incoming, expected);
 }
 
+function hasEmbedGrant(req) {
+  const expected = String(process.env.WHATSPRO_EMBED_TOKEN || '');
+  const incoming = String(req.headers['x-whatspro-embed-token'] || '');
+  return Boolean(expected && incoming && safeEqual(incoming, expected));
+}
+
+function issueChatToken(instanceId, expiresAt = Date.now() + CHAT_TOKEN_TTL_MS) {
+  const payload = Buffer.from(`${instanceId}:${expiresAt}`).toString('base64url');
+  const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function hasScopedChatToken(req, tokenOverride = '') {
+  try {
+    const incoming = String(tokenOverride || req.headers['x-chat-token'] || req.query?.token || '');
+    const [payload, signature, extra] = incoming.split('.');
+    if (!payload || !signature || extra) return false;
+    const expectedSignature = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+    if (!safeEqual(signature, expectedSignature)) return false;
+    const decoded = Buffer.from(payload, 'base64url').toString('utf8');
+    const separator = decoded.lastIndexOf(':');
+    if (separator < 1) return false;
+    const tokenInstance = decoded.slice(0, separator);
+    const expiresAt = Number(decoded.slice(separator + 1));
+    const requestedInstance = String(req.params?.instanceId || req.headers['x-chat-instance'] || '').trim();
+    return isValidInstanceId(tokenInstance) && requestedInstance === tokenInstance && expiresAt > Date.now();
+  } catch {
+    return false;
+  }
+}
+
 function hasChatMediaToken(req) {
   const expected = process.env.WHATSPRO_API_TOKEN || '';
   const incoming = String(req.headers['x-chat-token'] || '') || String(req.query?.token || '');
-  return Boolean(expected && incoming && safeEqual(incoming, expected));
+  return Boolean((expected && incoming && safeEqual(incoming, expected)) || hasScopedChatToken(req, incoming));
 }
 
 function requireApi(req, res, next) {
@@ -250,6 +278,11 @@ function requireApi(req, res, next) {
 
 function requireUiOrApi(req, res, next) {
   if (hasApiToken(req) || readSession(req)) return next();
+  return res.status(401).json({ error: 'AUTH_REQUIRED' });
+}
+
+function requireChatUiOrApi(req, res, next) {
+  if (hasApiToken(req) || hasScopedChatToken(req) || readSession(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
@@ -282,6 +315,7 @@ async function renderChatHtml(req, res) {
   if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   const config = {
     instance,
+    chatToken: instance && (hasApiToken(req) || readSession(req) || hasEmbedGrant(req)) ? issueChatToken(instance) : '',
     apiBase: publicApiBase(req),
     endpoints: {
       inbox: '/api/chat/inbox',
@@ -295,7 +329,7 @@ async function renderChatHtml(req, res) {
   };
   const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
-  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
   const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
   ? html.replace('<!--__CHAT_CONFIG__-->', script)
   : html.replace('</head>', `${script}</head>`);
@@ -779,7 +813,7 @@ app.get('/api/wa/scan-invitations', requireUiOrApi, async (req, res) => {
   res.status(201).json({ success: true, request: { id: requestId } });
 });
 
-app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
@@ -847,19 +881,9 @@ app.get('/api/chat/inbox/:instanceId', requireUiOrApi, async (req, res) => {
   res.json({ success: true, instanceId, items });
 });
 
-app.get('/api/chat/events/:instanceId', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/events/:instanceId', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  const sessionToken = parseCookies(req).whatspro_session || '';
-  const incomingApiToken = String(req.headers.authorization || req.headers['x-api-key'] || '');
-  const principal = crypto.createHash('sha256').update(sessionToken || incomingApiToken || req.ip).digest('hex').slice(0, 24);
-  const connectionKey = `${principal}:${instanceId}`;
-  const connectionCount = sseConnections.get(connectionKey) || 0;
-  if (connectionCount >= SSE_MAX_CONNECTIONS_PER_CLIENT || sseConnectionTotal >= SSE_MAX_CONNECTIONS_TOTAL) {
-    return res.status(429).json({ error: 'TOO_MANY_EVENT_STREAMS' });
-  }
-  sseConnections.set(connectionKey, connectionCount + 1);
-  sseConnectionTotal += 1;
 
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -869,9 +893,14 @@ app.get('/api/chat/events/:instanceId', requireUiOrApi, async (req, res) => {
   });
   res.flushHeaders();
   res.write('retry: 3000\n\n');
+  res.flush?.();
 
   let unsubscribe = () => {};
-  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 20000);
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) return;
+    res.write(': heartbeat\n\n');
+    res.flush?.();
+  }, 20000);
   const maxLifetime = setTimeout(() => res.end(), SSE_MAX_LIFETIME_MS);
   let cleanedUp = false;
   const cleanup = () => {
@@ -880,16 +909,15 @@ app.get('/api/chat/events/:instanceId', requireUiOrApi, async (req, res) => {
     clearInterval(heartbeat);
     clearTimeout(maxLifetime);
     unsubscribe();
-    const remaining = Math.max(0, (sseConnections.get(connectionKey) || 1) - 1);
-    if (remaining) sseConnections.set(connectionKey, remaining);
-    else sseConnections.delete(connectionKey);
-    sseConnectionTotal = Math.max(0, sseConnectionTotal - 1);
   };
   req.once('close', cleanup);
+  res.once('close', cleanup);
 
   try {
     const teardown = await subscribeChatEvents(instanceId, event => {
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (res.writableEnded) return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      res.flush?.();
     });
     if (cleanedUp || req.destroyed) teardown();
     else unsubscribe = teardown;
@@ -899,7 +927,7 @@ app.get('/api/chat/events/:instanceId', requireUiOrApi, async (req, res) => {
   }
 });
 
-app.get('/api/chat/inbox-legacy/:instanceId', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/inbox-legacy/:instanceId', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
@@ -946,7 +974,7 @@ app.get('/api/chat/inbox-legacy/:instanceId', requireUiOrApi, async (req, res) =
   res.json({ success: true, instanceId, items });
 });
 
-app.get('/api/chat/history/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/history/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -982,7 +1010,7 @@ app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (r
 
     return serveChatMedia(req, res);
 });
-app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = String(req.params.phone || '').replace(/\D/g, '');
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
@@ -1098,7 +1126,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireUiOrApi, async (req, res) =
     await Promise.race([effectsJob, new Promise(resolve => setTimeout(resolve, 1000))]);
     res.status(completed ? 200 : 202).json({ ...responsePayload, persistencePending: !completed });
 });
-app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
@@ -1107,7 +1135,7 @@ app.get('/api/chat/operator-lock/:instanceId/:phone', requireUiOrApi, async (req
   return res.json({ success: true, instanceId, phone, ttl: safeTtl, expiresAt: safeTtl ? Date.now() + safeTtl * 1000 : 0 });
 });
 
-app.post('/api/chat/action/:instanceId/:phone', requireUiOrApi, async (req, res) => {
+app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   const action = String(req.body?.action || '').trim().toLowerCase();

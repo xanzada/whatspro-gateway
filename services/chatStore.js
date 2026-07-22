@@ -34,6 +34,16 @@ function isPhone(phone) {
   return /^\d{10,15}$/.test(String(phone || ''));
 }
 
+function encodeMedia(data, mimeType = 'audio/ogg') {
+  const raw = String(data || '').trim();
+  const comma = raw.indexOf(',');
+  const base64 = (/^data:[^;,]+;base64,/i.test(raw) ? raw.slice(comma + 1) : raw).replace(/\s+/g, '');
+  if (!base64 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error('INVALID_OR_OVERSIZED_MEDIA');
+  }
+  return `data:${String(mimeType || 'audio/ogg').split(';')[0]};base64,${base64}`;
+}
+
 function cleanEntry(entry, now) {
   const copy = { ...entry };
   delete copy.mediaData;
@@ -89,18 +99,13 @@ function createChatStore(redis, options = {}) {
   async function setState(instanceId, phone, state) {
     if (!CHAT_STATES.has(state)) throw new Error('INVALID_CHAT_STATE');
     const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
-    await command(['SET', keys.state(instanceId, phone), state, 'EX', String(ttl)]);
-    if (state === 'archive') {
-      await Promise.all([
-        command(['SADD', keys.archive(instanceId), phone]),
-        command(['SET', keys.archiveMarker(instanceId, phone), String(now()), 'EX', String(ttl)])
-      ]);
-    } else {
-      await Promise.all([
-        command(['SREM', keys.archive(instanceId), phone], 0),
-        command(['DEL', keys.archiveMarker(instanceId, phone)], 0)
-      ]);
-    }
+    const script = [
+      "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
+      "if ARGV[2] == 'archive' then redis.call('SADD', KEYS[2], ARGV[1]); redis.call('SET', KEYS[3], ARGV[4], 'EX', ARGV[3]) else redis.call('SREM', KEYS[2], ARGV[1]); redis.call('DEL', KEYS[3]) end",
+      'return 1'
+    ].join('\n');
+    await command(['EVAL', script, '3', keys.state(instanceId, phone), keys.archive(instanceId), keys.archiveMarker(instanceId, phone),
+      phone, state, String(ttl), String(now())]);
     return state;
   }
 
@@ -110,29 +115,28 @@ function createChatStore(redis, options = {}) {
     return [...new Set([...stored, ...fromHistory])];
   }
 
-  async function applyTtl(instanceId, phone, ttl) {
+  async function applyTtl(instanceId, phone, ttl, expectedState = '') {
     const history = await getHistory(instanceId, phone, 2000);
     const ids = await mediaIds(instanceId, phone, history);
     const chatKeys = [
       keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
       keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.messageIds(instanceId, phone), keys.receipts(instanceId, phone)
     ];
-    await Promise.all([
-      command(['ZADD', keys.expiry(instanceId), String(now() + ttl * 1000), phone]),
-      ...chatKeys.map(key => command(['EXPIRE', key, String(ttl)], 0)),
-      ...ids.map(id => command(['EXPIRE', keys.media(instanceId, id), String(ttl)], 0))
-    ]);
+    const expiryKeys = [...new Set([...chatKeys, ...ids.map(id => keys.media(instanceId, id))])];
+    const ttlScript = [
+      "if ARGV[1] ~= '' and redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end",
+      "redis.call('ZADD', KEYS[2], ARGV[2], ARGV[3])",
+      "for i = 3, #KEYS do redis.call('EXPIRE', KEYS[i], ARGV[4]) end",
+      'return 1'
+    ].join('\n');
+    const result = await command(['EVAL', ttlScript, String(2 + expiryKeys.length), keys.state(instanceId, phone), keys.expiry(instanceId),
+      ...expiryKeys, expectedState, String(now() + ttl * 1000), phone, String(ttl)], 0);
+    return Number(result) === 1;
   }
 
   async function storeMedia(instanceId, phone, messageId, data, mimeType = 'audio/ogg', ttl) {
     if (!messageId || !data) return false;
-    const raw = String(data).trim();
-    const comma = raw.indexOf(',');
-    const base64 = (/^data:[^;,]+;base64,/i.test(raw) ? raw.slice(comma + 1) : raw).replace(/\s+/g, '');
-    if (!base64 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-      throw new Error('INVALID_OR_OVERSIZED_MEDIA');
-    }
-    const encoded = `data:${String(mimeType || 'audio/ogg').split(';')[0]};base64,${base64}`;
+    const encoded = encodeMedia(data, mimeType);
     const effectiveTtl = ttl || await ttlFor(instanceId, phone);
     await Promise.all([
       command(['SET', keys.media(instanceId, messageId), encoded, 'EX', String(effectiveTtl)]),
@@ -171,6 +175,7 @@ function createChatStore(redis, options = {}) {
     if (!isPhone(phone) || !entry?.id) throw new Error('INVALID_CHAT_MESSAGE');
     const createdAt = Number(entry.createdAt || entry.timestamp || now());
     const normalized = cleanEntry({ ...entry, instanceId, phone, createdAt }, now);
+    const encodedMedia = entry.mediaData ? encodeMedia(entry.mediaData, entry.mediaType) : '';
     await ensureInboxSortedSet(instanceId);
     const state = CHAT_STATES.has(options.state) ? options.state : await getState(instanceId, phone);
     const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
@@ -178,7 +183,8 @@ function createChatStore(redis, options = {}) {
       "local deletedAt = tonumber(redis.call('GET', KEYS[3]) or '0')",
       'if deletedAt >= tonumber(ARGV[3]) then return -1 end',
       "local inserted = redis.call('SADD', KEYS[2], ARGV[1])",
-      "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]) end",
+      "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]); if ARGV[9] ~= '' then redis.call('SET', KEYS[9], ARGV[9], 'EX', ARGV[6]); redis.call('SADD', KEYS[10], ARGV[1]); redis.call('EXPIRE', KEYS[10], ARGV[6]) end end",
+      "if inserted == 0 and ARGV[8] == '1' then return 0 end",
       "redis.call('ZADD', KEYS[4], ARGV[3], ARGV[4])",
       "redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[6])",
       "redis.call('ZADD', KEYS[6], ARGV[7], ARGV[4])",
@@ -187,11 +193,15 @@ function createChatStore(redis, options = {}) {
       "if ARGV[5] ~= 'archive' then redis.call('DEL', KEYS[7]); redis.call('SREM', KEYS[8], ARGV[4]) end",
       'return inserted'
     ].join('\n');
-    const result = Number(await command(['EVAL', script, '8', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
+    const result = Number(await command(['EVAL', script, '10', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
       keys.deleted(instanceId, phone), keys.inbox(instanceId), keys.state(instanceId, phone), keys.expiry(instanceId),
-      keys.archiveMarker(instanceId, phone), keys.archive(instanceId), String(normalized.id), JSON.stringify(normalized),
-      String(normalized.createdAt), phone, state, String(ttl), String(now() + ttl * 1000)]));
+      keys.archiveMarker(instanceId, phone), keys.archive(instanceId), keys.media(instanceId, normalized.id), keys.mediaIds(instanceId, phone),
+      String(normalized.id), JSON.stringify(normalized), String(normalized.createdAt), phone, state, String(ttl),
+      String(now() + ttl * 1000), options.preserveStateOnDuplicate ? '1' : '0', encodedMedia]));
     if (result < 0) return { ...normalized, inserted: false, stale: true };
+    if (result === 1 && normalized.hasMedia && !encodedMedia) {
+      console.warn(`[CHAT STORE] ${instanceId}/${phone}/${normalized.id}: media data is missing`);
+    }
     return { ...normalized, inserted: result === 1, stale: false };
   }
 
@@ -380,18 +390,20 @@ function createChatStore(redis, options = {}) {
         currentState === 'new' ? setState(instanceId, phone, 'all') : Promise.resolve(currentState),
         command(['ZADD', keys.viewed(instanceId), String(now()), phone])
       ]);
-      await applyTtl(instanceId, phone, currentState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS);
+      await applyTtl(instanceId, phone, currentState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS, currentState === 'new' ? 'all' : currentState);
     } else if (normalizedAction === 'archive') {
       await setState(instanceId, phone, 'archive');
-      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS);
+      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS, 'archive');
     } else if (normalizedAction === 'restore') {
       await setState(instanceId, phone, 'all');
-      await applyTtl(instanceId, phone, STANDARD_TTL_SECONDS);
+      await applyTtl(instanceId, phone, STANDARD_TTL_SECONDS, 'all');
     } else if (normalizedAction === 'delete') {
       const history = await getHistory(instanceId, phone, 5000);
       const ids = await mediaIds(instanceId, phone, history);
       const deleteScript = [
         "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
+        "local storedMediaIds = redis.call('SMEMBERS', KEYS[6])",
+        "for _, mediaId in ipairs(storedMediaIds) do redis.call('DEL', ARGV[4] .. mediaId) end",
         "for i = 2, 10 do redis.call('DEL', KEYS[i]) end",
         "redis.call('ZREM', KEYS[11], ARGV[1])",
         "redis.call('ZREM', KEYS[12], ARGV[1])",
@@ -403,7 +415,7 @@ function createChatStore(redis, options = {}) {
         keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone),
         keys.mediaIds(instanceId, phone), keys.messageIds(instanceId, phone), keys.receipts(instanceId, phone),
         keys.operator(instanceId, phone), keys.mute(instanceId, phone), keys.inbox(instanceId), keys.viewed(instanceId),
-        keys.expiry(instanceId), keys.archive(instanceId), phone, String(now()), String(ARCHIVE_TTL_SECONDS)]);
+        keys.expiry(instanceId), keys.archive(instanceId), phone, String(now()), String(ARCHIVE_TTL_SECONDS), `chatwoot:media:${instanceId}:`]);
       await Promise.all(ids.map(id => command(['DEL', keys.media(instanceId, id)], 0)));
     } else {
       throw new Error('INVALID_CHAT_ACTION');

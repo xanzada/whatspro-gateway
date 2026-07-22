@@ -85,7 +85,9 @@
     }));
     var data = await response.json().catch(function () { return {}; });
     if (!response.ok) {
-      throw new Error(data.error || 'HTTP_' + response.status);
+      var requestError = new Error(data.error || 'HTTP_' + response.status);
+      requestError.status = response.status;
+      throw requestError;
     }
     return data;
   }
@@ -356,6 +358,8 @@
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
       if (state.activePhone && !currentChat()) closeChat();
     } catch (error) {
+      if (error && (error.status === 401 || error.status === 403)) console.error('Auth failed for instance', instanceId, 'inbox', error);
+      else console.error('Inbox load failed for instance', instanceId, error);
       if (force) el.contactList.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loadFailed')) + '</p></div>';
     } finally {
       state.inboxBusy = false;
@@ -376,6 +380,8 @@
       state.history = history;
       if (force || signature !== state.historySignature) { state.historySignature = signature; renderHistory(forceScroll); }
     } catch (error) {
+      if (error && (error.status === 401 || error.status === 403)) console.error('Auth failed for instance', instanceId, 'history', error);
+      else console.error('History load failed for instance', instanceId, error);
       if (requestedPhone === state.activePhone) el.messages.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loadFailed')) + '</p></div>';
     } finally {
       state.historyBusy = false;

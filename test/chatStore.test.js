@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const express = require('express');
+const os = require('node:os');
+const path = require('node:path');
+const fs = require('node:fs/promises');
 
 const { createChatStore, STANDARD_TTL_SECONDS, ARCHIVE_TTL_SECONDS } = require('../services/chatStore');
+const { createChatMediaHandler } = require('../services/chatMedia');
 
 class FakeRedis {
   constructor() {
@@ -72,17 +77,46 @@ class FakeRedis {
     if (command === 'SMEMBERS') return value?.type === 'set' ? [...value.value] : [];
     if (command === 'SISMEMBER') return value?.type === 'set' && value.value.has(args[2]) ? 1 : 0;
     if (command === 'RENAME') { this.data.set(args[2], value); this.data.delete(key); return 'OK'; }
+    if (command === 'EVAL' && args[2] === '3' && args[1].includes("ARGV[2] == 'archive'")) {
+      const stateKey = args[3]; const archiveKey = args[4]; const markerKey = args[5];
+      const phone = args[6]; const state = args[7]; const ttl = Number(args[8]);
+      this.data.set(stateKey, { type: 'string', value: state }); this.expires.set(stateKey, ttl);
+      if (state === 'archive') {
+        const archive = this.data.get(archiveKey) || { type: 'set', value: new Set() };
+        archive.value.add(phone); this.data.set(archiveKey, archive);
+        this.data.set(markerKey, { type: 'string', value: args[9] }); this.expires.set(markerKey, ttl);
+      } else {
+        this.data.get(archiveKey)?.value?.delete(phone); this.data.delete(markerKey); this.expires.delete(markerKey);
+      }
+      if (this.afterSetState) {
+        const hook = this.afterSetState; this.afterSetState = null; await hook();
+      }
+      return 1;
+    }
+    if (command === 'EVAL' && args[1].includes("ARGV[1] ~= ''")) {
+      const keyCount = Number(args[2]); const argumentStart = 3 + keyCount;
+      const expectedState = args[argumentStart];
+      if (expectedState && this.data.get(args[3])?.value !== expectedState) return 0;
+      const expiry = this.data.get(args[4]) || { type: 'zset', value: new Map() };
+      expiry.value.set(args[argumentStart + 2], Number(args[argumentStart + 1])); this.data.set(args[4], expiry);
+      const ttl = Number(args[argumentStart + 3]);
+      for (const expiryKey of args.slice(5, 3 + keyCount)) if (this.data.has(expiryKey)) this.expires.set(expiryKey, ttl);
+      return 1;
+    }
     if (command === 'EVAL' && args[2] === '14') {
+      if (this.beforeDeleteEval) await this.beforeDeleteEval();
       const deletedKey = args[3]; const member = args[17]; const deletedAt = args[18]; const ttl = Number(args[19]);
       this.data.set(deletedKey, { type: 'string', value: deletedAt }); this.expires.set(deletedKey, ttl);
+      const storedMediaIds = this.data.get(args[8]);
+      if (storedMediaIds?.type === 'set') for (const id of storedMediaIds.value) this.data.delete(args[20] + id);
       for (const item of args.slice(4, 13)) { this.data.delete(item); this.expires.delete(item); }
       for (const item of args.slice(13, 16)) this.data.get(item)?.value?.delete(member);
       this.data.get(args[16])?.value?.delete(member);
       return 1;
     }
-    if (command === 'EVAL' && args[2] === '8' && args[1].includes("SADD")) {
+    if (command === 'EVAL' && args[2] === '10' && args[1].includes("SADD")) {
       const historyKey = args[3]; const idsKey = args[4]; const deletedKey = args[5];
-      const messageId = args[11]; const json = args[12]; const createdAt = Number(args[13]);
+      const messageId = args[13]; const json = args[14]; const createdAt = Number(args[15]);
       if (Number(this.data.get(deletedKey)?.value || 0) >= createdAt) return -1;
       const ids = this.data.get(idsKey) || { type: 'set', value: new Set() };
       const inserted = !ids.value.has(messageId);
@@ -90,13 +124,19 @@ class FakeRedis {
         ids.value.add(messageId); this.data.set(idsKey, ids);
         const history = this.data.get(historyKey) || { type: 'list', value: [] };
         history.value.push(json); this.data.set(historyKey, history);
+        if (args[21]) {
+          this.data.set(args[11], { type: 'string', value: args[21] }); this.expires.set(args[11], Number(args[18]));
+          const mediaIds = this.data.get(args[12]) || { type: 'set', value: new Set() };
+          mediaIds.value.add(messageId); this.data.set(args[12], mediaIds); this.expires.set(args[12], Number(args[18]));
+        }
       }
-      const phone = args[14]; const state = args[15]; const ttl = Number(args[16]);
+      if (!inserted && args[20] === '1') return 0;
+      const phone = args[16]; const state = args[17]; const ttl = Number(args[18]);
       const inbox = this.data.get(args[6]) || { type: 'zset', value: new Map() };
       inbox.value.set(phone, createdAt); this.data.set(args[6], inbox);
       this.data.set(args[7], { type: 'string', value: state }); this.expires.set(args[7], ttl);
       const expiry = this.data.get(args[8]) || { type: 'zset', value: new Map() };
-      expiry.value.set(phone, Number(args[17])); this.data.set(args[8], expiry);
+      expiry.value.set(phone, Number(args[19])); this.data.set(args[8], expiry);
       this.expires.set(historyKey, ttl); this.expires.set(idsKey, ttl);
       if (state !== 'archive') { this.data.delete(args[9]); this.data.get(args[10])?.value?.delete(phone); }
       return inserted ? 1 : 0;
@@ -237,4 +277,96 @@ test('idempotent operator append repairs metadata and respects delete tombstones
   assert.equal(redis.data.has(store.keys.messageIds('acme', '77001234567')), false);
   const stale = await store.appendMessageOnce('acme', '77001234567', entry, { state: 'operator' });
   assert.equal(stale.stale, true);
+});
+
+test('idempotent append stores media once with TTL and serves it over the media handler', async t => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1_700_000_000_000 });
+  const fixture = Buffer.from('RIFF\u0010\u0000\u0000\u0000WAVEfmt ', 'binary');
+  const entry = {
+    id: 'voice-once',
+    type: 'audio',
+    hasMedia: true,
+    mediaType: 'audio/wav',
+    mediaData: fixture.toString('base64'),
+    createdAt: 1_700_000_000_000
+  };
+  assert.equal((await store.appendMessageOnce('acme', '77001234567', entry, { state: 'new' })).inserted, true);
+  const mediaKey = store.keys.media('acme', 'voice-once');
+  assert.equal(await redis.sendCommand(['GET', mediaKey]), `data:audio/wav;base64,${entry.mediaData}`);
+  assert.equal(redis.expires.get(mediaKey), STANDARD_TTL_SECONDS);
+
+  await store.appendMessageOnce('acme', '77001234567', { ...entry, mediaData: Buffer.from('changed').toString('base64') }, { state: 'new' });
+  assert.equal(await redis.sendCommand(['GET', mediaKey]), `data:audio/wav;base64,${entry.mediaData}`);
+  await store.applyAction('acme', '77001234567', 'archive');
+  assert.equal(redis.expires.get(mediaKey), ARCHIVE_TTL_SECONDS);
+  await store.applyAction('acme', '77001234567', 'restore');
+  assert.equal(redis.expires.get(mediaKey), STANDARD_TTL_SECONDS);
+
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whatspro-store-media-'));
+  t.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
+  const app = express();
+  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({ cacheDir, readMedia: store.readMedia }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/acme/voice-once`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture);
+});
+
+test('idempotent append warns when media metadata has no payload', async t => {
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(String(message)));
+  const store = createChatStore(new FakeRedis(), { now: () => 1_700_000_000_000 });
+  await store.appendMessageOnce('tenant-warning', '77001234567', {
+    id: 'voice-missing', type: 'ptt', hasMedia: true, mediaType: 'audio/ogg', createdAt: 1_700_000_000_000
+  }, { state: 'new' });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /tenant-warning\/77001234567\/voice-missing.*media data is missing/i);
+});
+
+test('incoming duplicate preserves archive state and inbox ordering', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1_700_000_100_000 });
+  const entry = { id: 'incoming-once', text: 'hello', direction: 'incoming', createdAt: 1_700_000_000_000 };
+  await store.appendMessageOnce('tenant-state', '77001234567', entry, { state: 'new', preserveStateOnDuplicate: true });
+  await store.applyAction('tenant-state', '77001234567', 'archive');
+  const inboxKey = store.keys.inbox('tenant-state');
+  const scoreBefore = redis.data.get(inboxKey).value.get('77001234567');
+  const duplicate = await store.appendMessageOnce('tenant-state', '77001234567', entry, { state: 'new', preserveStateOnDuplicate: true });
+  assert.equal(duplicate.inserted, false);
+  assert.equal(await store.getState('tenant-state', '77001234567'), 'archive');
+  assert.equal(redis.data.get(inboxKey).value.get('77001234567'), scoreBefore);
+});
+
+test('hard delete racing media persistence cannot recreate audio', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1_700_000_100_000 });
+  redis.beforeDeleteEval = async () => {
+    redis.beforeDeleteEval = null;
+    await store.appendMessageOnce('tenant-delete', '77001234567', {
+      id: 'deleted-voice', type: 'ptt', hasMedia: true, mediaType: 'audio/ogg', mediaData: 'YWJj', createdAt: 1_700_000_000_000
+    }, { state: 'new', preserveStateOnDuplicate: true });
+  };
+  await store.applyAction('tenant-delete', '77001234567', 'delete');
+  assert.equal(await store.readMedia('tenant-delete', 'deleted-voice'), null);
+  assert.equal(redis.data.has(store.keys.mediaIds('tenant-delete', '77001234567')), false);
+});
+
+test('stale archive TTL propagation cannot override a newer incoming message', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1_700_000_200_000 });
+  await store.appendMessageOnce('tenant-ttl-race', '77001234567', {
+    id: 'voice-before', hasMedia: true, mediaType: 'audio/ogg', mediaData: 'YWJj', createdAt: 1_700_000_000_000
+  }, { state: 'new', preserveStateOnDuplicate: true });
+  redis.afterSetState = async () => {
+    await store.appendMessageOnce('tenant-ttl-race', '77001234567', {
+      id: 'voice-after', hasMedia: true, mediaType: 'audio/ogg', mediaData: 'ZGVm', createdAt: 1_700_000_100_000
+    }, { state: 'new', preserveStateOnDuplicate: true });
+  };
+  await store.applyAction('tenant-ttl-race', '77001234567', 'archive');
+  assert.equal(await store.getState('tenant-ttl-race', '77001234567'), 'new');
+  assert.equal(redis.expires.get(store.keys.media('tenant-ttl-race', 'voice-before')), STANDARD_TTL_SECONDS);
+  assert.equal(redis.expires.get(store.keys.media('tenant-ttl-race', 'voice-after')), STANDARD_TTL_SECONDS);
 });

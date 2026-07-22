@@ -21,6 +21,21 @@ test('audio requires hasMedia and an audio MIME type', () => {
   assert.equal(system.hasMedia, false);
 });
 
+test('incoming ingestion forwards audio data and MIME through the idempotent append path', async () => {
+  const captured = [];
+  const dependencies = {
+    redisOpen: true,
+    store: { appendMessageOnce: async (...args) => { captured.push(args); return { inserted: true, stale: false }; } },
+    publishEvent: async () => {}
+  };
+  await webhookTest.saveIncomingMessage({
+    instanceId: 'acme', phone: '77001234567', messageId: 'voice1', type: 'ptt',
+    hasMedia: true, mediaType: 'audio/ogg', mediaData: 'YWJj'
+  }, dependencies);
+  assert.equal(captured[0][2].mediaData, 'YWJj');
+  assert.equal(captured[0][2].mediaType, 'audio/ogg');
+});
+
 test('WhatsApp ACK values map to sent, delivered and read', () => {
   assert.equal(whatsappTest.deliveryStatusFromAck(1), 'sent');
   assert.equal(whatsappTest.deliveryStatusFromAck(2), 'delivered');

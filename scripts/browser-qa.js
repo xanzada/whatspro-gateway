@@ -62,6 +62,9 @@ fs.mkdirSync(outputDir, { recursive: true });
       return setTimeout(() => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, ttl: 60, expiresAt: Date.now() + 60000 }) }), 150);
     }
     if (url.includes('/api/chat/action/')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+    if (request.resourceType() === 'document' && url.startsWith(baseUrl) && process.env.QA_EMBED_TOKEN) {
+      return request.continue({ headers: { ...request.headers(), 'x-whatspro-embed-token': process.env.QA_EMBED_TOKEN } });
+    }
     return request.continue();
   });
 
@@ -81,8 +84,10 @@ fs.mkdirSync(outputDir, { recursive: true });
   await page.waitForSelector('.message-row.operator');
   await page.waitForFunction(() => {
     const src = document.querySelector('.audio-player audio')?.src || '';
-    return src.includes('/api/chat/media/') && src.includes('token=qa-media-token') && src.includes('fmt=mp4');
+    const token = src ? new URL(src).searchParams.get('token') : '';
+    return src.includes('/api/chat/media/') && token === window.__CHAT_CONFIG__.chatToken && src.includes('fmt=mp4');
   });
+  const configuredChatToken = await page.evaluate(() => window.__CHAT_CONFIG__.chatToken);
   await page.evaluate(() => { window.__qaOriginalPlayButton = document.querySelector('.audio-play'); });
   await page.click('#lang-btn');
   await page.waitForFunction(() => {
@@ -120,7 +125,7 @@ fs.mkdirSync(outputDir, { recursive: true });
   });
   if (audioClick.disabled || audioClick.cursor === 'not-allowed' || !audioClick.rerendered || audioClick.directCalls !== 1 || !audioClick.directTarget || audioClick.nestedCalls !== 1 || !audioClick.nestedTarget) throw new Error(`AUDIO_CLICK_${JSON.stringify(audioClick)}`);
   if (!consoleMessages.some(message => message.includes('PLAY BUTTON CLICKED')) || !consoleMessages.some(message => message.includes('CALLING AUDIO PLAY'))) throw new Error('AUDIO_CLICK_LOGS');
-  if (!mediaRequestUrl.includes('token=qa-media-token') || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
+  if (new URL(mediaRequestUrl).searchParams.get('token') !== configuredChatToken || !mediaRequestUrl.includes('fmt=mp4')) throw new Error(`AUDIO_MEDIA_URL_${mediaRequestUrl}`);
   const layout = await page.evaluate(() => {
     const client = document.querySelector('.message-row.client .bubble').getBoundingClientRect();
     const operator = document.querySelector('.message-row.operator .bubble').getBoundingClientRect();
