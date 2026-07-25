@@ -15,6 +15,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const DEFAULT_CACHE_DIR = path.join(os.tmpdir(), 'whatspro-audio-cache');
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const EXTENSIONS = new Map([
   ['audio/ogg', '.ogg'], ['audio/opus', '.ogg'], ['audio/webm', '.webm'],
   ['audio/mpeg', '.mp3'], ['audio/mp4', '.m4a'], ['audio/wav', '.wav'], ['audio/x-wav', '.wav']
@@ -45,6 +46,23 @@ function decodeAudioDataUri(value) {
     throw mediaError('INVALID_OGG_OPUS', 422);
   }
   return { buffer, extension, mimeType: mimeType === 'audio/opus' ? 'audio/ogg' : mimeType };
+}
+
+function decodeImageDataUri(value) {
+  const match = String(value || '').trim().match(/^data:(image\/[a-z0-9][a-z0-9.+_-]*);base64,([\s\S]+)$/i);
+  if (!match) throw mediaError('INVALID_IMAGE_DATA_URI', 422);
+  const mimeType = match[1].toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mimeType)) throw mediaError('UNSUPPORTED_IMAGE_TYPE', 415);
+  const base64 = match[2].replace(/\s+/g, '');
+  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw mediaError('INVALID_IMAGE_BASE64', 422);
+  const buffer = Buffer.from(base64, 'base64');
+  if (!buffer.length || buffer.length > MAX_IMAGE_BYTES || buffer.toString('base64') !== base64) throw mediaError(buffer.length > MAX_IMAGE_BYTES ? 'IMAGE_TOO_LARGE' : 'INVALID_IMAGE_BASE64', 422);
+  const valid = (mimeType === 'image/jpeg' && buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ||
+    (mimeType === 'image/png' && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) ||
+    (mimeType === 'image/gif' && ['GIF87a','GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) ||
+    (mimeType === 'image/webp' && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP');
+  if (!valid) throw mediaError('IMAGE_SIGNATURE_INVALID', 422);
+  return { buffer, mimeType };
 }
 
 async function cacheAudioFile(cacheDir, media) {
@@ -153,6 +171,18 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
         res.set('Retry-After', '3');
         return res.status(404).json({ error: 'MEDIA_NOT_READY' });
       }
+      if (/^data:image\//i.test(mediaData)) {
+        if (req.query?.fmt) throw mediaError('UNSUPPORTED_OUTPUT_FORMAT', 400);
+        const image = decodeImageDataUri(mediaData);
+        res.set({
+          'Cache-Control': 'private, max-age=3600',
+          'Content-Disposition': 'inline',
+          'Content-Length': String(image.buffer.length),
+          'Content-Type': image.mimeType,
+          'X-Content-Type-Options': 'nosniff'
+        });
+        return res.status(200).send(image.buffer);
+      }
       const media = decodeAudioDataUri(mediaData);
       const requestedFormat = String(req.query?.fmt || '').toLowerCase();
       if (requestedFormat && requestedFormat !== 'mp4') throw mediaError('UNSUPPORTED_OUTPUT_FORMAT', 400);
@@ -175,4 +205,4 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
   };
 }
 
-module.exports = { createChatMediaHandler, decodeAudioDataUri, resolveFfmpegPath };
+module.exports = { createChatMediaHandler, decodeAudioDataUri, decodeImageDataUri, resolveFfmpegPath };

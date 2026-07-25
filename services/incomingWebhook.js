@@ -84,8 +84,10 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const type = String(payload.type || '').trim().toLowerCase();
   const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
   const hasAudio = !isSystem && Boolean(payload.hasMedia) && rawMediaType.startsWith('audio/');
-  const mediaData = hasAudio ? rawMediaData : '';
-  const mediaType = hasAudio ? rawMediaType : '';
+  const hasImage = !isSystem && Boolean(payload.hasMedia) && (rawMediaType.startsWith('image/') || type === 'image');
+  const hasSupportedMedia = hasAudio || hasImage;
+  const mediaData = hasSupportedMedia ? rawMediaData : '';
+  const mediaType = hasImage && !rawMediaType ? 'image/jpeg' : hasSupportedMedia ? rawMediaType : '';
   const mediaKind = String(payload.mediaKind || payload.type || '').trim();
   const contactName = String(payload.contactName || payload.data?.contactName || payload.contact?.name || payload.data?.contact?.name || '').trim();
   return {
@@ -97,7 +99,7 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
     body,
     text: body,
     type: payload.type || 'chat',
-    hasMedia: hasAudio,
+    hasMedia: hasSupportedMedia,
     mediaData,
     mediaType,
     mediaKind,

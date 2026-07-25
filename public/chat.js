@@ -27,33 +27,33 @@
   var dictionary = {
     kk: {
       title: 'Оператор чаты', operator: 'Оператор', search: 'Аты, телефоны немесе хабар бойынша іздеу',
-      tabs: { new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
+      tabs: { sos: 'SOS', new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
       select: 'Чатты таңдаңыз', selectHint: 'Толық хат алмасу тарихы осы жерде шығады.',
       noChats: 'Бұл бөлімде чаттар жоқ', noResults: 'Ештеңе табылмады', noMessages: 'Хабарламалар жоқ',
       loading: 'Жүктелуде…', loadFailed: 'Жүктеу мүмкін болмады', reply: 'Жауап жазу…', archived: 'Чат архивте',
       send: 'Жіберу', back: 'Артқа', refresh: 'Жаңарту', refreshed: 'Жаңартылды', sendFailed: 'Хабар жіберілмеді',
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Жүйе', unknown: 'Сақталмаған контакт',
-      newBadge: 'Жаңа', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот өшірулі',
+      sosBadge: 'SOS', newBadge: 'Жаңа', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот өшірулі',
       archive: 'Архивке жіберу', restore: 'Архивтен қайтару', remove: 'Біржола өшіру',
       confirmArchive: 'Бұл чатты архивке жіберу керек пе?', confirmRestore: 'Бұл чатты архивтен қайтару керек пе?',
       confirmDelete: 'Чатты және барлық хабарламаны біржола өшіру керек пе? Бұл әрекетті қайтару мүмкін емес.',
       archiveDone: 'Чат архивке жіберілді', restoreDone: 'Чат қайтарылды', deleteDone: 'Чат өшірілді',
-      audioFailed: 'Аудио жүктелмеді', play: 'Ойнату', pause: 'Кідірту', direct: function (phone) { return '+' + phone + ' нөміріне жазу'; }
+      audioFailed: 'Аудио жүктелмеді', imageFailed: 'Фото жүктелмеді', photo: 'Фото', play: 'Ойнату', pause: 'Кідірту', direct: function (phone) { return '+' + phone + ' нөміріне жазу'; }
     },
     ru: {
       title: 'Чат оператора', operator: 'Оператор', search: 'Поиск по имени, телефону или сообщению',
-      tabs: { new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
+      tabs: { sos: 'SOS', new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
       select: 'Выберите чат', selectHint: 'Здесь появится полная история сообщений.',
       noChats: 'В этом разделе нет чатов', noResults: 'Ничего не найдено', noMessages: 'Нет сообщений',
       loading: 'Загрузка…', loadFailed: 'Не удалось загрузить', reply: 'Написать ответ…', archived: 'Чат в архиве',
       send: 'Отправить', back: 'Назад', refresh: 'Обновить', refreshed: 'Обновлено', sendFailed: 'Сообщение не отправлено',
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Система', unknown: 'Несохранённый контакт',
-      newBadge: 'Новое', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот отключён',
+      sosBadge: 'SOS', newBadge: 'Новое', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот отключён',
       archive: 'Отправить в архив', restore: 'Вернуть из архива', remove: 'Удалить навсегда',
       confirmArchive: 'Отправить этот чат в архив?', confirmRestore: 'Вернуть этот чат из архива?',
       confirmDelete: 'Навсегда удалить чат и все сообщения? Это действие нельзя отменить.',
       archiveDone: 'Чат отправлен в архив', restoreDone: 'Чат восстановлен', deleteDone: 'Чат удалён',
-      audioFailed: 'Не удалось загрузить аудио', play: 'Воспроизвести', pause: 'Пауза', direct: function (phone) { return 'Написать +' + phone; }
+      audioFailed: 'Не удалось загрузить аудио', imageFailed: 'Не удалось загрузить фото', photo: 'Фото', play: 'Воспроизвести', pause: 'Пауза', direct: function (phone) { return 'Написать +' + phone; }
     }
   };
 
@@ -113,7 +113,7 @@
     return String(chat && (chat.contactName || chat.name || chat.displayName || chat.pushName) || '').trim();
   }
 
-  function chatMatchesTab(chat) { return core.chatState(chat) === state.activeTab; }
+  function chatMatchesTab(chat) { return core.chatColumn(chat) === state.activeTab; }
 
   function filteredChats() {
     var query = el.searchInput.value.trim().toLowerCase();
@@ -131,10 +131,11 @@
   }
 
   function renderTabs() {
-    var counts = { new: 0, all: 0, operator: 0, archive: 0 };
-    state.chats.forEach(function (chat) { var key = core.chatState(chat); if (counts[key] != null) counts[key] += 1; });
-    el.tabs.innerHTML = ['new', 'all', 'operator', 'archive'].map(function (key) {
-      return '<button class="tab" type="button" role="tab" aria-selected="' + (state.activeTab === key) + '" data-tab="' + key + '">' +
+    var counts = { sos: 0, new: 0, all: 0, operator: 0, archive: 0 };
+    var sosUnread = 0;
+    state.chats.forEach(function (chat) { var key = core.chatColumn(chat); if (counts[key] != null) counts[key] += 1; if (key === 'sos' && chat.sosUnread) sosUnread += 1; });
+    el.tabs.innerHTML = ['sos', 'new', 'all', 'operator', 'archive'].map(function (key) {
+      return '<button class="tab' + (key === 'sos' && sosUnread ? ' has-sos-alert' : '') + '" type="button" role="tab" aria-selected="' + (state.activeTab === key) + '" data-tab="' + key + '">' +
         core.escapeHtml(t('tabs')[key]) + (counts[key] ? ' · ' + counts[key] : '') + '</button>';
     }).join('');
   }
@@ -155,14 +156,16 @@
     el.contactList.innerHTML = chats.map(function (chat) {
       var phone = core.normalizePhone(chat.phone);
       var tabState = core.chatState(chat);
+      var column = core.chatColumn(chat);
       var name = contactName(chat) || t('unknown');
-      var badge = tabState === 'new' ? t('newBadge') : tabState === 'operator' ? t('operatorBadge') : tabState === 'archive' ? t('archiveBadge') : '';
-      return '<button type="button" class="contact-item ' + tabState + (phone === state.activePhone ? ' active' : '') + '" data-phone="' + core.escapeHtml(phone) + '">' +
-        '<span class="contact-avatar"><i class="fa-solid fa-user"></i></span><span class="contact-copy">' +
+      var badge = column === 'sos' ? t('sosBadge') : tabState === 'new' ? t('newBadge') : tabState === 'operator' ? t('operatorBadge') : tabState === 'archive' ? t('archiveBadge') : '';
+      var sosPulse = column === 'sos' && chat.sosUnread ? '<span class="sos-pulse" aria-label="SOS"></span>' : '';
+      return '<button type="button" class="contact-item ' + tabState + (column === 'sos' ? ' sos' : '') + (phone === state.activePhone ? ' active' : '') + '" data-phone="' + core.escapeHtml(phone) + '">' +
+        '<span class="contact-avatar"><i class="fa-solid fa-user"></i>' + sosPulse + '</span><span class="contact-copy">' +
         '<span class="contact-name truncate">' + core.escapeHtml(name) + '</span><span class="contact-phone truncate">+' + core.escapeHtml(phone) + '</span>' +
         '<span class="contact-snippet truncate">' + core.escapeHtml(chat.lastText || chat.lastMessage || t('noMessages')) + '</span></span>' +
         '<span class="contact-meta"><span class="contact-time">' + core.escapeHtml(core.formatTime(chat.lastAt || chat.updatedAt, state.lang)) + '</span>' +
-        (badge ? '<span class="badge">' + core.escapeHtml(badge) + '</span>' : '') + '</span></button>';
+        (badge ? '<span class="badge ' + (column === 'sos' ? 'sos-badge' : '') + '">' + core.escapeHtml(badge) + '</span>' : '') + '</span></button>';
     }).join('');
   }
 
@@ -223,7 +226,17 @@
         '<input class="audio-seek" type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="audio-duration">0:00</span>' +
         '<button class="audio-speed" type="button">1x</button></div>';
     }
-    return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : '') + '">' +
+    if (part.kind === 'image') {
+      var query = new URLSearchParams();
+      var mediaToken = chatToken;
+      if (!mediaToken) { try { mediaToken = String(localStorage.getItem('token_key') || ''); } catch (_) {} }
+      if (mediaToken) query.set('token', mediaToken);
+      if (state.activePhone) query.set('phone', state.activePhone);
+      var imageUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(part.id));
+      if (query.toString()) imageUrl += '?' + query.toString();
+      content = '<a class="chat-image-link" href="' + core.escapeHtml(imageUrl) + '" target="_blank" rel="noopener"><img class="chat-image" src="' + core.escapeHtml(imageUrl) + '" alt="' + core.escapeHtml(t('photo')) + '" loading="lazy"><span class="image-error"><i class="fa-solid fa-image"></i> ' + core.escapeHtml(t('imageFailed')) + '</span></a>';
+    }
+    return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : part.kind === 'image' ? 'image-bubble' : '') + '">' +
       (role === 'system' ? '' : '<div class="role">' + core.escapeHtml(label) + '</div>') + content +
       '<div class="bubble-foot"><time>' + core.escapeHtml(timestamp) + '</time>' + renderReceipt(item, role) + '</div></div></div>';
   }
@@ -250,6 +263,13 @@
       return core.messageParts(item).map(function (part) { return messageBubble(item, part); }).join('');
     }).join('');
     hydrateAudio();
+    el.messages.querySelectorAll('.chat-image').forEach(function (image) {
+      image.addEventListener('error', function () {
+        var link = image.closest('.chat-image-link');
+        if (link) link.classList.add('failed');
+        image.remove();
+      }, { once: true });
+    });
     if (shouldScroll) scrollBottom(!forceScroll);
   }
 
@@ -379,12 +399,12 @@
     if (state.inboxBusy) { state.inboxDirty = true; return; }
     state.inboxBusy = true;
     try {
-      var data = await getJson(endpoint('inbox', '/' + encodeURIComponent(instanceId) + '?limit=500'));
+      var data = await getJson(endpoint('inbox', '/' + encodeURIComponent(instanceId) + '?limit=1000'));
       var chats = Array.isArray(data.items) ? data.items : Array.isArray(data.chats) ? data.chats : [];
-      var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed]; }));
+      var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt]; }));
       state.chats = chats;
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
-      if (state.activePhone && !currentChat()) closeChat();
+      if (state.activePhone && (!currentChat() || (state.activeTab === 'sos' && core.chatColumn(currentChat()) !== 'sos'))) closeChat();
     } catch (error) {
       if (error && (error.status === 401 || error.status === 403)) console.error('Auth failed for instance', instanceId, 'inbox', error);
       else console.error('Inbox load failed for instance', instanceId, error);
@@ -404,7 +424,7 @@
       var data = await getJson(endpoint('history', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(requestedPhone) + '?limit=500'));
       if (requestedPhone !== state.activePhone) return;
       var history = Array.isArray(data.history) ? data.history : Array.isArray(data.items) ? data.items : [];
-      var signature = JSON.stringify(history.map(function (item) { return [item.id, item.createdAt, item.role, item.source, item.text, item.type, item.mediaType, item.deliveryStatus, item.ack]; }));
+      var signature = JSON.stringify(history.map(function (item) { return [item.id, item.createdAt, item.role, item.source, item.text, item.type, item.hasMedia, item.mediaType, item.deliveryStatus, item.ack]; }));
       state.history = history;
       if (force || signature !== state.historySignature) { state.historySignature = signature; renderHistory(forceScroll); }
     } catch (error) {
@@ -450,7 +470,8 @@
     if (!phone) return;
     state.activePhone = phone; state.history = []; state.historySignature = ''; state.lockUntil = 0;
     var chat = currentChat();
-    if (chat && core.chatState(chat) === 'new') { chat.state = 'all'; chat.unread = false; state.activeTab = 'all'; }
+    if (chat && chat.sosUnread) chat.sosUnread = false;
+    if (chat && core.chatState(chat) === 'new') { chat.state = 'all'; chat.unread = false; if (core.chatColumn(chat) !== 'sos') state.activeTab = 'all'; }
     el.app.classList.add('chat-open'); el.messageInput.value = ''; el.messageInput.style.height = 'auto';
     renderContacts(); renderHeader();
     el.messages.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loading')) + '</p></div>';
@@ -561,7 +582,7 @@
     el.tabs.addEventListener('click', function (event) {
       var tab = event.target.closest('[data-tab]'); if (!tab) return;
       state.activeTab = tab.dataset.tab;
-      if (state.activePhone && core.chatState(currentChat()) !== state.activeTab) closeChat();
+      if (state.activePhone && core.chatColumn(currentChat()) !== state.activeTab) closeChat();
       else renderContacts();
     });
     el.searchInput.addEventListener('input', renderContacts);

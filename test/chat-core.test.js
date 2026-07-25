@@ -31,6 +31,8 @@ test('text and audio are split into independent render parts', () => {
   assert.equal(core.isAudio({ hasMedia: true, mediaType: 'video/mp4', audioMessage: true }), false);
   assert.equal(core.isAudio({ role: 'system', hasMedia: true, mediaType: 'audio/ogg' }), false);
   assert.equal(core.isAudio({ type: 'notification_template', hasMedia: true, mediaType: 'audio/ogg' }), false);
+  assert.equal(core.isImage({ id: 'photo1', type: 'image', hasMedia: true, mediaType: 'image/jpeg' }), true);
+  assert.deepEqual(core.messageParts({ id: 'photo1', type: 'image', hasMedia: true, mediaType: 'image/jpeg' }), [{ kind: 'image', id: 'photo1' }]);
 });
 
 test('receipt state maps WhatsApp ACK progression monotonically', () => {

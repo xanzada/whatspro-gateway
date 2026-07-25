@@ -5,18 +5,25 @@ services:
     build: .
     restart: unless-stopped
     depends_on:
-      - redis_local
+      redis_local:
+        condition: service_healthy
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis_local:6379
+      - REDIS_URL=${REDIS_URL:-redis://redis_local:6379}
       - NODE_ENV=production
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
 
-  redis_local: # <--- МІНЕ! Осы сөздің алдында міндетті түрде 2 бос орын (пробел) болуы керек.
+  redis_local:
     image: redis:7-alpine
     restart: always
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     volumes:
       - whatspro_redis_data:/data
 

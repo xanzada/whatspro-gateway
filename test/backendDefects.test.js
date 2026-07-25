@@ -20,15 +20,19 @@ function encryptedWhatsAppAudio(plaintext, mediaKey) {
   return Buffer.concat([ciphertext, mac]);
 }
 
-test('audio requires hasMedia and an audio MIME type', () => {
+test('chat media accepts audio and photos while rejecting unsupported media', () => {
   assert.equal(whatsappTest.isQualifiedAudio({ hasMedia: true }, { mimetype: 'audio/ogg; codecs=opus' }), true);
   assert.equal(whatsappTest.isQualifiedAudio({ hasMedia: true, type: 'ptt' }, { mimetype: 'image/jpeg' }), false);
   assert.equal(whatsappTest.isQualifiedAudio({ hasMedia: false }, { mimetype: 'audio/ogg' }), false);
   assert.equal(whatsappTest.isQualifiedAudio({ hasMedia: true, type: 'notification_template' }, { mimetype: 'audio/ogg' }), false);
 
-  const nonAudio = webhookTest.buildHistoryEntry({ hasMedia: true, mediaType: 'image/jpeg', mediaData: 'YWJj' }, 'acme', '77001234567', 1);
-  assert.equal(nonAudio.hasMedia, false);
-  assert.equal(nonAudio.mediaData, '');
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const image = webhookTest.buildHistoryEntry({ type: 'image', hasMedia: true, mediaType: 'image/jpeg', mediaData: jpeg }, 'acme', '77001234567', 1);
+  assert.equal(image.hasMedia, true);
+  assert.equal(image.mediaData, jpeg);
+  assert.equal(whatsappTest.isQualifiedImage({ hasMedia: true, type: 'image', mimetype: 'image/jpeg' }), true);
+  assert.equal(whatsappTest.validateImageBase64(jpeg, 'image/jpeg'), jpeg);
+  assert.throws(() => whatsappTest.validateImageBase64('YWJj', 'image/jpeg'), /IMAGE_SIGNATURE_INVALID/);
   const audio = webhookTest.buildHistoryEntry({ hasMedia: true, mediaType: 'audio/webm', mediaData: 'YWJj' }, 'acme', '77001234567', 1);
   assert.equal(audio.hasMedia, true);
   assert.equal(audio.mediaType, 'audio/webm');

@@ -150,3 +150,11 @@ test('chat header uses tenant brand config and archived chats keep the composer 
   const composer = source.slice(source.indexOf('function updateComposer()'), source.indexOf('function renderReceipt'));
   assert.doesNotMatch(composer, /disabled\s*=.*archived/);
 });
+
+
+test('Redis compose keeps shared override support and durable local AOF', async () => {
+  const compose = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'docker-compose.yml'), 'utf8');
+  assert.match(compose, /REDIS_URL=\$\{REDIS_URL:-redis:\/\/redis_local:6379\}/);
+  assert.match(compose, /--appendonly["']?,?\s*["']yes/);
+  assert.match(compose, /--appendfsync["']?,?\s*["']everysec/);
+});

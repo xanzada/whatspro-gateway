@@ -24,6 +24,8 @@ class FakeRedis {
     if (command === 'EXPIRE') { if (!value) return 0; this.expires.set(key, Number(args[2])); return 1; }
     if (command === 'TTL') return this.expires.get(key) ?? (value ? -1 : -2);
     if (command === 'GET') return value?.value ?? null;
+    if (command === 'EXISTS') return value ? 1 : 0;
+    if (command === 'ZSCORE') return value?.type === 'zset' && value.value.has(args[2]) ? String(value.value.get(args[2])) : null;
     if (command === 'HGET') return value?.type === 'hash' ? value.value.get(args[2]) ?? null : null;
     if (command === 'HSET') {
       const row = value || { type: 'hash', value: new Map() };
@@ -77,16 +79,23 @@ class FakeRedis {
     if (command === 'SMEMBERS') return value?.type === 'set' ? [...value.value] : [];
     if (command === 'SISMEMBER') return value?.type === 'set' && value.value.has(args[2]) ? 1 : 0;
     if (command === 'RENAME') { this.data.set(args[2], value); this.data.delete(key); return 'OK'; }
-    if (command === 'EVAL' && args[2] === '3' && args[1].includes("ARGV[2] == 'archive'")) {
+    if (command === 'EVAL' && args[1].includes("ARGV[2] == 'archive'")) {
+      const keyCount = Number(args[2]);
+      const argumentStart = 3 + keyCount;
       const stateKey = args[3]; const archiveKey = args[4]; const markerKey = args[5];
-      const phone = args[6]; const state = args[7]; const ttl = Number(args[8]);
+      const phone = args[argumentStart]; const state = args[argumentStart + 1]; const ttl = Number(args[argumentStart + 2]);
       this.data.set(stateKey, { type: 'string', value: state }); this.expires.set(stateKey, ttl);
       if (state === 'archive') {
         const archive = this.data.get(archiveKey) || { type: 'set', value: new Set() };
         archive.value.add(phone); this.data.set(archiveKey, archive);
-        this.data.set(markerKey, { type: 'string', value: args[9] }); this.expires.set(markerKey, ttl);
+        this.data.set(markerKey, { type: 'string', value: args[argumentStart + 3] }); this.expires.set(markerKey, ttl);
       } else {
         this.data.get(archiveKey)?.value?.delete(phone); this.data.delete(markerKey); this.expires.delete(markerKey);
+      }
+      if (keyCount >= 4) {
+        const expiry = this.data.get(args[6]) || { type: 'zset', value: new Map() };
+        expiry.value.set(phone, Number(args[argumentStart + 4])); this.data.set(args[6], expiry);
+        for (const ttlKey of args.slice(7, argumentStart)) if (this.data.has(ttlKey)) this.expires.set(ttlKey, ttl);
       }
       if (this.afterSetState) {
         const hook = this.afterSetState; this.afterSetState = null; await hook();
@@ -149,6 +158,24 @@ class FakeRedis {
       } else { this.data.delete(args[9]); this.data.get(args[10])?.value?.delete(phone); }
       return [inserted ? 1 : 0, state];
     }
+    if (command === 'EVAL' && args[2] === '8' && args[1].includes('local maxTtl')) {
+      const expiryKey = args[3]; const inboxKey = args[4]; const viewedKey = args[5]; const archiveKey = args[6];
+      const authoritativeKeys = args.slice(7, 11); const phone = args[11]; const cutoff = Number(args[12]);
+      const expiry = this.data.get(expiryKey);
+      const score = expiry?.value?.get(phone);
+      if (score == null || score > cutoff) return 0;
+      const maxTtl = Math.max(...authoritativeKeys.map(item => this.expires.get(item) ?? (this.data.has(item) ? -1 : -2)));
+      if (maxTtl > 0) { expiry.value.set(phone, cutoff + maxTtl * 1000); return 2; }
+      if (authoritativeKeys.some(item => this.data.has(item))) {
+        const state = this.data.get(authoritativeKeys[2])?.value;
+        const ttl = state === 'archive' || this.data.has(authoritativeKeys[3]) ? Number(args[14]) : Number(args[13]);
+        for (const item of authoritativeKeys) if (this.data.has(item)) this.expires.set(item, ttl);
+        expiry.value.set(phone, cutoff + ttl * 1000); return 3;
+      }
+      expiry?.value?.delete(phone); this.data.get(inboxKey)?.value?.delete(phone);
+      this.data.get(viewedKey)?.value?.delete(phone); this.data.get(archiveKey)?.value?.delete(phone);
+      return 1;
+    }
     throw new Error(`Unsupported command ${command}`);
   }
 
@@ -157,6 +184,19 @@ class FakeRedis {
     for (const key of this.data.keys()) if (key.startsWith(prefix)) yield key;
   }
 }
+
+test('stale expiry metadata cannot remove a chat whose Redis history still has TTL', async () => {
+  let currentTime = 1000;
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => currentTime });
+  const phone = '77001234567';
+  await store.appendMessageOnce('expiry-repair', phone, { id: 'm1', text: 'hello', direction: 'incoming', createdAt: 1000 }, { state: 'new' });
+  const expiryKey = store.keys.expiry('expiry-repair');
+  redis.data.get(expiryKey).value.set(phone, 999);
+  await store.pruneExpired('expiry-repair');
+  assert.equal(redis.data.get(store.keys.inbox('expiry-repair')).value.has(phone), true);
+  assert.ok(redis.data.get(expiryKey).value.get(phone) > currentTime);
+});
 
 test('incoming, viewed, operator and archive are exclusive states', async () => {
   const redis = new FakeRedis();

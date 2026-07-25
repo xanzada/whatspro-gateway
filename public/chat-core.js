@@ -23,6 +23,10 @@
     return chat && chat.hasOperator ? 'operator' : 'all';
   }
 
+  function chatColumn(chat) {
+    return chat && chat.sos === true && Number(chat.sosExpiresAt || 0) > Date.now() ? 'sos' : chatState(chat);
+  }
+
   function roleOf(item) {
     var role = String(item && item.role || '').toLowerCase();
     var source = String(item && item.source || '').toLowerCase();
@@ -41,6 +45,12 @@
     return Boolean(item && !system && item.hasMedia === true && /^audio\//.test(mime));
   }
 
+  function isImage(item) {
+    var mime = String(item && item.mediaType || '').trim().toLowerCase();
+    var type = String(item && item.type || '').trim().toLowerCase();
+    return Boolean(item && item.hasMedia === true && item.id && (mime.indexOf('image/') === 0 || type === 'image'));
+  }
+
   function receiptState(item) {
     var ack = item && (item.ack != null ? item.ack : (item.ackStatus != null ? item.ackStatus : item.status));
     if (typeof ack === 'number') return ack >= 3 ? 'read' : ack >= 2 ? 'delivered' : 'sent';
@@ -56,6 +66,7 @@
       .trim();
     if (text) parts.push({ kind: 'text', text: text });
     if (isAudio(item) && item && item.id) parts.push({ kind: 'audio', id: String(item.id) });
+    if (isImage(item)) parts.push({ kind: 'image', id: String(item.id) });
     return parts;
   }
 
@@ -74,10 +85,12 @@
   }
 
   return {
+    chatColumn: chatColumn,
     chatState: chatState,
     escapeHtml: escapeHtml,
     formatTime: formatTime,
     isAudio: isAudio,
+    isImage: isImage,
     messageParts: messageParts,
     normalizePhone: normalizePhone,
     receiptState: receiptState,

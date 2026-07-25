@@ -19,6 +19,7 @@ const {
 const { normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
+const { sosStore } = require('../services/sosStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
@@ -818,8 +819,11 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
 
-  const limit = parseLimit(req.query.limit, 100, 500);
-  const inboxRows = await readInboxEntries(instanceId, limit * 2);
+  const limit = parseLimit(req.query.limit, 100, 1000);
+  const [inboxRows, sosRows] = await Promise.all([
+    readInboxEntries(instanceId, limit * 2),
+    sosStore.list(instanceId, limit)
+  ]);
   const legacyHistoryKeys = [];
   for await (const key of redisClient.scanIterator({ MATCH: `history:${instanceId}:*`, COUNT: 100 })) {
     const phone = normalizePhone(String(key).slice(`history:${instanceId}:`.length));
@@ -828,7 +832,7 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   const candidates = [];
   const seen = new Set();
 
-  for (const row of [...inboxRows, ...legacyHistoryKeys]) {
+  for (const row of [...sosRows.map(row => ({ phone: row.phone, updatedAt: row.sosCreatedAt || 0 })), ...inboxRows, ...legacyHistoryKeys]) {
     const phone = normalizePhone(row.phone);
     if (!isValidChatPhone(phone) || seen.has(phone)) continue;
     seen.add(phone);
@@ -836,10 +840,11 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
     if (candidates.length >= limit) break;
   }
 
+  const sosByPhone = new Map(sosRows.map(row => [row.phone, row]));
   const [archiveRows, histories, openbotHistories, viewedScores, states] = await Promise.all([
     redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-80', '-1']).catch(() => []))),
+    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => []))),
+    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => []))),
     Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null))),
     Promise.all(candidates.map(item => chatStore.getState(instanceId, item.phone)))
   ]);
@@ -854,18 +859,22 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
       return;
     }
     const summary = summarizeChat(item, historyRows, Number(viewedScores[index]) || 0, archiveSet.has(item.phone));
-    if (!summary.hasCustomerMessage) {
-      stalePhones.push(item.phone);
-      return;
-    }
     const state = states[index] || (summary.closed ? 'archive' : summary.hasOperator ? 'operator' : summary.unread ? 'new' : 'all');
+    const sos = sosByPhone.get(item.phone) || null;
     items.push({
       ...summary,
       state,
       unread: state === 'new',
       viewed: state === 'all',
       hasOperator: state === 'operator',
-      closed: state === 'archive'
+      closed: state === 'archive',
+      sos: Boolean(sos),
+      sosUnread: Boolean(sos?.sosUnread),
+      sosCreatedAt: Number(sos?.sosCreatedAt || 0),
+      sosExpiresAt: Number(sos?.sosExpiresAt || 0),
+      sosKind: String(sos?.sosKind || ''),
+      sosSummary: String(sos?.sosSummary || ''),
+      sosCaseId: String(sos?.sosCaseId || '')
     });
   });
 
@@ -1144,7 +1153,9 @@ app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, 
   if (!['view', 'close', 'archive', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
   await chatStore.applyAction(instanceId, phone, action);
-  await publishChatEvent({ type: 'chat.action', instanceId, phone, action }).catch(() => {});
+  if (action === 'view') await sosStore.acknowledge(instanceId, phone);
+  if (action === 'delete') await sosStore.clear(instanceId, phone);
+  await publishChatEvent({ type: action === 'view' ? 'sos.acknowledged' : 'chat.action', instanceId, phone, action }).catch(() => {});
   return res.json({ success: true, instanceId, phone, action });
 });
 

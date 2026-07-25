@@ -99,13 +99,22 @@ function createChatStore(redis, options = {}) {
   async function setState(instanceId, phone, state) {
     if (!CHAT_STATES.has(state)) throw new Error('INVALID_CHAT_STATE');
     const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    const history = await getHistory(instanceId, phone, 2000);
+    const ids = await mediaIds(instanceId, phone, history);
+    const ttlKeys = [
+      keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.mediaIds(instanceId, phone),
+      keys.messageIds(instanceId, phone), keys.receipts(instanceId, phone), ...ids.map(id => keys.media(instanceId, id))
+    ];
     const script = [
       "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
       "if ARGV[2] == 'archive' then redis.call('SADD', KEYS[2], ARGV[1]); redis.call('SET', KEYS[3], ARGV[4], 'EX', ARGV[3]) else redis.call('SREM', KEYS[2], ARGV[1]); redis.call('DEL', KEYS[3]) end",
+      "redis.call('ZADD', KEYS[4], ARGV[5], ARGV[1])",
+      "for i = 5, #KEYS do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], ARGV[3]) end end",
       'return 1'
     ].join('\n');
-    await command(['EVAL', script, '3', keys.state(instanceId, phone), keys.archive(instanceId), keys.archiveMarker(instanceId, phone),
-      phone, state, String(ttl), String(now())]);
+    await command(['EVAL', script, String(4 + ttlKeys.length), keys.state(instanceId, phone), keys.archive(instanceId),
+      keys.archiveMarker(instanceId, phone), keys.expiry(instanceId), ...ttlKeys,
+      phone, state, String(ttl), String(now()), String(now() + ttl * 1000)]);
     return state;
   }
 
@@ -209,8 +218,9 @@ function createChatStore(redis, options = {}) {
     if (result === 1 && normalized.hasMedia && !encodedMedia) {
       console.warn(`[CHAT STORE] ${instanceId}/${phone}/${normalized.id}: media data is missing`);
     }
-    if (result === 1 && appliedState === 'archive') {
-      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS, 'archive');
+    if (result === 1) {
+      const appliedTtl = appliedState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+      await applyTtl(instanceId, phone, appliedTtl, appliedState);
     }
     return { ...normalized, state: appliedState, inserted: result === 1, stale: false };
   }
@@ -370,6 +380,10 @@ function createChatStore(redis, options = {}) {
     const pruneScript = [
       "local score = redis.call('ZSCORE', KEYS[1], ARGV[1])",
       'if not score or tonumber(score) > tonumber(ARGV[2]) then return 0 end',
+      "local maxTtl = math.max(redis.call('TTL', KEYS[5]), redis.call('TTL', KEYS[6]), redis.call('TTL', KEYS[7]), redis.call('TTL', KEYS[8]))",
+      "if maxTtl > 0 then redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + maxTtl * 1000, ARGV[1]); return 2 end",
+      "local hasChat = redis.call('EXISTS', KEYS[5]) + redis.call('EXISTS', KEYS[6]) + redis.call('EXISTS', KEYS[7]) + redis.call('EXISTS', KEYS[8])",
+      "if hasChat > 0 then local repairTtl = ARGV[3]; if redis.call('GET', KEYS[7]) == 'archive' or redis.call('EXISTS', KEYS[8]) == 1 then repairTtl = ARGV[4] end; for i = 5, 8 do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], repairTtl) end end; redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + tonumber(repairTtl) * 1000, ARGV[1]); return 3 end",
       "redis.call('ZREM', KEYS[1], ARGV[1])",
       "redis.call('ZREM', KEYS[2], ARGV[1])",
       "redis.call('ZREM', KEYS[3], ARGV[1])",
@@ -377,11 +391,18 @@ function createChatStore(redis, options = {}) {
       'return 1'
     ].join('\n');
     await Promise.all(expiredPhones.filter(isPhone).map(async phone => {
-      const result = await command(['EVAL', pruneScript, '4', keys.expiry(instanceId), keys.inbox(instanceId),
-        keys.viewed(instanceId), keys.archive(instanceId), phone, String(cutoff)], null);
+      const result = await command(['EVAL', pruneScript, '8', keys.expiry(instanceId), keys.inbox(instanceId),
+        keys.viewed(instanceId), keys.archive(instanceId), keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
+        keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone), phone, String(cutoff),
+        String(STANDARD_TTL_SECONDS), String(ARCHIVE_TTL_SECONDS)], null);
       if (result !== null) return;
       const score = Number(await command(['ZSCORE', keys.expiry(instanceId), phone], Infinity));
       if (score > cutoff) return;
+      const authoritativeTypes = await Promise.all([
+        command(['TYPE', keys.history(instanceId, phone)], 'none'), command(['TYPE', keys.legacyHistory(instanceId, phone)], 'none'),
+        command(['TYPE', keys.state(instanceId, phone)], 'none'), command(['TYPE', keys.archiveMarker(instanceId, phone)], 'none')
+      ]);
+      if (authoritativeTypes.some(type => type !== 'none')) return;
       await Promise.all([
         command(['ZREM', keys.inbox(instanceId), phone], 0), command(['ZREM', keys.viewed(instanceId), phone], 0),
         command(['ZREM', keys.expiry(instanceId), phone], 0), command(['SREM', keys.archive(instanceId), phone], 0)
@@ -400,13 +421,10 @@ function createChatStore(redis, options = {}) {
         currentState === 'new' ? setState(instanceId, phone, 'all') : Promise.resolve(currentState),
         command(['ZADD', keys.viewed(instanceId), String(now()), phone])
       ]);
-      await applyTtl(instanceId, phone, currentState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS, currentState === 'new' ? 'all' : currentState);
     } else if (normalizedAction === 'archive') {
       await setState(instanceId, phone, 'archive');
-      await applyTtl(instanceId, phone, ARCHIVE_TTL_SECONDS, 'archive');
     } else if (normalizedAction === 'restore') {
       await setState(instanceId, phone, 'all');
-      await applyTtl(instanceId, phone, STANDARD_TTL_SECONDS, 'all');
     } else if (normalizedAction === 'delete') {
       const history = await getHistory(instanceId, phone, 5000);
       const ids = await mediaIds(instanceId, phone, history);

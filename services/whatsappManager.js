@@ -22,6 +22,7 @@ const MEDIA_PIPELINE_TIMEOUT_MS = 30000;
 const MAX_CONCURRENT_MEDIA_DOWNLOADS = 2;
 const MEDIA_DOWNLOAD_COOLDOWN_MS = 15000;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const localBotSends = new Map();
 const permanentMediaFailures = new Set();
 const mediaDownloadJobs = new Map();
@@ -58,6 +59,16 @@ function isAudioCandidate(msg) {
     return Boolean(msg?.hasMedia) && (hintedMime.startsWith('audio/') || ['audio', 'ptt'].includes(String(msg?.type || '').toLowerCase()));
 }
 
+function isQualifiedImage(msg, media) {
+    const type = String(msg?.type || '').trim().toLowerCase();
+    const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
+    return !isSystem && Boolean(msg?.hasMedia) && (mediaMimeFrom(msg, media).startsWith('image/') || type === 'image');
+}
+
+function isChatMediaCandidate(msg) {
+    return isAudioCandidate(msg) || isQualifiedImage(msg);
+}
+
 function deliveryStatusFromAck(ack) {
     const value = Number(ack);
     if (value >= 3) return 'read';
@@ -86,6 +97,22 @@ function validateAudioBase64(value) {
     if (!decoded.length || decoded.toString('base64') !== base64) {
         throw permanentMediaError('MEDIA_BASE64_INVALID');
     }
+    return base64;
+}
+
+function validateImageBase64(value, mimeType) {
+    const raw = String(value || '').trim();
+    const dataUrl = raw.match(/^data:image\/[^;,]+(?:;[^;,]+)*;base64,([\s\S]+)$/i);
+    const base64 = String(dataUrl ? dataUrl[1] : raw).replace(/\s+/g, '');
+    if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw permanentMediaError('MEDIA_BASE64_INVALID');
+    const decoded = Buffer.from(base64, 'base64');
+    if (!decoded.length || decoded.length > MAX_IMAGE_BYTES || decoded.toString('base64') !== base64) throw permanentMediaError(decoded.length > MAX_IMAGE_BYTES ? 'MEDIA_TOO_LARGE' : 'MEDIA_BASE64_INVALID');
+    const mime = normalizeMediaMime(mimeType || 'image/jpeg');
+    const valid = (mime === 'image/jpeg' && decoded.length >= 3 && decoded[0] === 0xff && decoded[1] === 0xd8 && decoded[2] === 0xff) ||
+      (mime === 'image/png' && decoded.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) ||
+      (mime === 'image/gif' && ['GIF87a','GIF89a'].includes(decoded.subarray(0, 6).toString('ascii'))) ||
+      (mime === 'image/webp' && decoded.subarray(0, 4).toString('ascii') === 'RIFF' && decoded.subarray(8, 12).toString('ascii') === 'WEBP');
+    if (!valid) throw permanentMediaError('IMAGE_SIGNATURE_INVALID');
     return base64;
 }
 
@@ -219,7 +246,7 @@ async function downloadBaileysMessageMedia(msg, injectedDownloader, testOptions 
             mediaKey: source.mediaKey,
             directPath: source.directPath,
             url: source.url
-        }, 'audio', {
+        }, isQualifiedImage(msg) ? 'image' : 'audio', {
             host: source.host,
             options: { dispatcher }
         });
@@ -227,7 +254,7 @@ async function downloadBaileysMessageMedia(msg, injectedDownloader, testOptions 
         verifyMediaFileHash(decrypted, expectedHash);
         return {
             data: decrypted.toString('base64'),
-            mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || 'audio/ogg',
+            mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || (String(msg?.type || '').toLowerCase() === 'image' ? 'image/jpeg' : 'audio/ogg'),
             filename: data.filename || mediaData.filename || msg?.filename,
             filesize: decrypted.length
         };
@@ -307,7 +334,7 @@ async function downloadMessageMediaOnce(msg) {
 
                 return {
                     data,
-                    mimetype: source.mimetype || blob.type || 'audio/ogg',
+                    mimetype: source.mimetype || blob.type || (String(msg?.type || '').toLowerCase() === 'image' ? 'image/jpeg' : 'audio/ogg'),
                     filename: source.filename,
                     filesize: source.size || blob.size
                 };
@@ -425,7 +452,7 @@ async function removeOrphanedMedia(instanceId, phone, messageId) {
     ]);
 }
 
-async function updatePersistedAudioMetadata(instanceId, phone, messageId, mediaType) {
+async function updatePersistedMediaMetadata(instanceId, phone, messageId, mediaType) {
     if (!redisClient.isOpen) return false;
     const key = `chatwoot:history:${instanceId}:${phone}`;
     const rows = await redisClient.sendCommand(['LRANGE', key, '-500', '-1']).catch(() => []);
@@ -460,10 +487,12 @@ async function persistMessageMedia(instanceId, phone, msg, options = {}) {
         throw new Error('MEDIA_DOWNLOAD_EMPTY');
     }
 
-    if (!isQualifiedAudio(msg, media)) throw permanentMediaError('MEDIA_NOT_AUDIO');
-    const mediaType = mediaMimeFrom(msg, media);
+    const isAudio = isQualifiedAudio(msg, media);
+    const isImage = isQualifiedImage(msg, media);
+    if (!isAudio && !isImage) throw permanentMediaError('MEDIA_TYPE_UNSUPPORTED');
+    const mediaType = mediaMimeFrom(msg, media) || (isImage ? 'image/jpeg' : 'audio/ogg');
 
-    const base64 = validateAudioBase64(media.data);
+    const base64 = isImage ? validateImageBase64(media.data, mediaType) : validateAudioBase64(media.data);
     const decoded = Buffer.from(base64, 'base64');
     if (!decoded.length) throw permanentMediaError('MEDIA_BASE64_INVALID');
 
@@ -474,7 +503,7 @@ async function persistMessageMedia(instanceId, phone, msg, options = {}) {
         return null;
     }
     if (options.publishReady) {
-        const updated = await updatePersistedAudioMetadata(instanceId, phone, messageId, mediaType);
+        const updated = await updatePersistedMediaMetadata(instanceId, phone, messageId, mediaType);
         if (!updated) {
             await removeOrphanedMedia(instanceId, phone, messageId);
             return null;
@@ -493,7 +522,7 @@ async function persistMessageMedia(instanceId, phone, msg, options = {}) {
 }
 
 function scheduleMediaPersist(instanceId, phone, msg) {
-    if (!isAudioCandidate(msg)) return;
+    if (!isChatMediaCandidate(msg)) return;
 
     const delays = [1000, 3000, 7000, 15000, 30000];
     const failureKey = `${instanceId}:${phone}:${String(msg?.id?.id || '')}`;
@@ -1243,20 +1272,22 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         scheduleMediaPersist(instanceId, cleanNumber, msg);
 
         let downloadedMedia = null;
-        if (isAudioCandidate(msg)) {
+        if (isChatMediaCandidate(msg)) {
             try {
                 downloadedMedia = (await persistMessageMedia(instanceId, cleanNumber, msg))?.media || null;
             } catch (error) {
                 if (!shouldRetryMediaError(error)) {
                     permanentMediaFailures.add(`${instanceId}:${cleanNumber}:${String(msg?.id?.id || '')}`);
                 }
-                console.warn(`[MEDIA CACHE] ${instanceId}: audio download skipped: ${error.message}`);
+                console.warn(`[MEDIA CACHE] ${instanceId}: media download skipped: ${error.message}`);
             }
         }
 
         const hintedMediaType = mediaMimeFrom(msg);
-        const effectiveMediaType = downloadedMedia?.mimetype || hintedMediaType;
+        const effectiveMediaType = downloadedMedia?.mimetype || hintedMediaType || (msg.type === 'image' ? 'image/jpeg' : '');
         const hasAudio = isQualifiedAudio(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
+        const hasImage = isQualifiedImage(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
+        const hasSupportedMedia = hasAudio || hasImage;
         const messagePayload = { conversation: msg.body };
         if (msg.hasMedia) {
             if (msg.type === 'image') messagePayload.imageMessage = { caption: msg.body };
@@ -1278,9 +1309,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 timestamp: Number(msg.timestamp || 0) ? Number(msg.timestamp) * 1000 : Date.now(),
                 fromMe: msg.fromMe,
                 type: msg.type,
-                hasMedia: hasAudio,
+                hasMedia: hasSupportedMedia,
                 mediaData: downloadedMedia?.data || '',
-                mediaType: hasAudio ? effectiveMediaType : '',
+                mediaType: hasSupportedMedia ? effectiveMediaType : '',
                 mediaKind: msg.type,
                 body: msg.body || '',
                 pushName: msg._data?.notifyName || contactInfo.pushName || contactInfo.name || 'Client',
@@ -1290,7 +1321,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     normalizedPhone: cleanNumber,
                     senderPhone: cleanNumber,
                     mediaData: downloadedMedia?.data || '',
-                    mediaType: hasAudio ? effectiveMediaType : '',
+                    mediaType: hasSupportedMedia ? effectiveMediaType : '',
                     mediaKind: msg.type,
                     key: {
                         remoteJid: realSender,
@@ -1304,7 +1335,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     isMyContact: Boolean(contactInfo.isMyContact)
                 }
             });
-            if (downloadedMedia && hasAudio) {
+            if (downloadedMedia && hasSupportedMedia) {
                 await publishChatEvent({
                     type: 'media.ready',
                     instanceId,
@@ -1721,7 +1752,7 @@ async function recoverChatMedia(instanceId, phone, messageId) {
         const message = await withTimeout(
             findMessageForMediaRecovery(client, cleanPhone, cleanMessageId), 15000, 'MEDIA_RECOVERY_LOOKUP_TIMEOUT'
         ).catch(() => null);
-        if (!isAudioCandidate(message)) return null;
+        if (!isChatMediaCandidate(message)) return null;
         const persisted = await persistMessageMedia(instanceId, cleanPhone, message, {
             requireExistingChat: true,
             publishReady: true
@@ -1771,10 +1802,14 @@ module.exports = {
         isChromiumResourceError,
         isConnectedState,
         isQualifiedAudio,
+        isQualifiedImage,
+        isChatMediaCandidate,
         deliveryStatusFromAck,
         MAX_MEDIA_BYTES,
+        MAX_IMAGE_BYTES,
         MAX_MEDIA_BASE64_LENGTH,
         validateAudioBase64,
+        validateImageBase64,
         shouldRetryMediaError,
         collectMediaStream,
         createMediaDispatcher,
