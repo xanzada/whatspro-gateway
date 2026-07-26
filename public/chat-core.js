@@ -51,6 +51,12 @@
     return Boolean(item && item.hasMedia === true && item.id && (mime.indexOf('image/') === 0 || type === 'image'));
   }
 
+  function isDocument(item) {
+    var mime = String(item && item.mediaType || '').trim().toLowerCase();
+    var type = String(item && item.type || '').trim().toLowerCase();
+    return Boolean(item && item.hasMedia === true && item.id && (mime.indexOf('application/pdf') === 0 || type === 'document'));
+  }
+
   function receiptState(item) {
     var ack = item && (item.ack != null ? item.ack : (item.ackStatus != null ? item.ackStatus : item.status));
     if (typeof ack === 'number') return ack >= 3 ? 'read' : ack >= 2 ? 'delivered' : 'sent';
@@ -67,6 +73,7 @@
     if (text) parts.push({ kind: 'text', text: text });
     if (isAudio(item) && item && item.id) parts.push({ kind: 'audio', id: String(item.id) });
     if (isImage(item)) parts.push({ kind: 'image', id: String(item.id) });
+    if (isDocument(item)) parts.push({ kind: 'document', id: String(item.id) });
     return parts;
   }
 
@@ -90,6 +97,7 @@
     escapeHtml: escapeHtml,
     formatTime: formatTime,
     isAudio: isAudio,
+    isDocument: isDocument,
     isImage: isImage,
     messageParts: messageParts,
     normalizePhone: normalizePhone,

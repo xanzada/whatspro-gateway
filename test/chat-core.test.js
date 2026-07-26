@@ -17,6 +17,21 @@ test('message roles enforce client left and bot/operator outgoing semantics', ()
   assert.equal(core.roleOf({ source: 'operator_panel' }), 'operator');
 });
 
+test('a PDF receipt renders as its own document part and never as audio or image', () => {
+  const receipt = { id: 'm9', text: 'чек', type: 'document', hasMedia: true, mediaType: 'application/pdf' };
+  assert.equal(core.isDocument(receipt), true);
+  assert.equal(core.isAudio(receipt), false);
+  assert.equal(core.isImage(receipt), false);
+  assert.deepEqual(core.messageParts(receipt), [
+    { kind: 'text', text: 'чек' },
+    { kind: 'document', id: 'm9' }
+  ]);
+
+  assert.equal(core.isDocument({ id: 'm10', hasMedia: true, mediaType: 'image/jpeg' }), false);
+  assert.equal(core.isDocument({ id: 'm11', hasMedia: true, mediaType: 'audio/ogg' }), false);
+  assert.equal(core.isDocument({ hasMedia: true, mediaType: 'application/pdf' }), false, 'an id is required to build a media URL');
+});
+
 test('text and audio are split into independent render parts', () => {
   assert.deepEqual(core.messageParts({ id: 'm1', text: 'caption', type: 'ptt', hasMedia: true, mediaType: 'audio/ogg; codecs=opus' }), [
     { kind: 'text', text: 'caption' },

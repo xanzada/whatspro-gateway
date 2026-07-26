@@ -38,7 +38,7 @@
       confirmArchive: 'Бұл чатты архивке жіберу керек пе?', confirmRestore: 'Бұл чатты архивтен қайтару керек пе?',
       confirmDelete: 'Чатты және барлық хабарламаны біржола өшіру керек пе? Бұл әрекетті қайтару мүмкін емес.',
       archiveDone: 'Чат архивке жіберілді', restoreDone: 'Чат қайтарылды', deleteDone: 'Чат өшірілді',
-      audioFailed: 'Аудио жүктелмеді', imageFailed: 'Фото жүктелмеді', photo: 'Фото', play: 'Ойнату', pause: 'Кідірту', direct: function (phone) { return '+' + phone + ' нөміріне жазу'; }
+      audioFailed: 'Аудио жүктелмеді', imageFailed: 'Фото жүктелмеді', photo: 'Фото', document: 'PDF құжат', play: 'Ойнату', pause: 'Кідірту', direct: function (phone) { return '+' + phone + ' нөміріне жазу'; }
     },
     ru: {
       title: 'Чат оператора', operator: 'Оператор', search: 'Поиск по имени, телефону или сообщению',
@@ -53,7 +53,7 @@
       confirmArchive: 'Отправить этот чат в архив?', confirmRestore: 'Вернуть этот чат из архива?',
       confirmDelete: 'Навсегда удалить чат и все сообщения? Это действие нельзя отменить.',
       archiveDone: 'Чат отправлен в архив', restoreDone: 'Чат восстановлен', deleteDone: 'Чат удалён',
-      audioFailed: 'Не удалось загрузить аудио', imageFailed: 'Не удалось загрузить фото', photo: 'Фото', play: 'Воспроизвести', pause: 'Пауза', direct: function (phone) { return 'Написать +' + phone; }
+      audioFailed: 'Не удалось загрузить аудио', imageFailed: 'Не удалось загрузить фото', photo: 'Фото', document: 'PDF документ', play: 'Воспроизвести', pause: 'Пауза', direct: function (phone) { return 'Написать +' + phone; }
     }
   };
 
@@ -214,6 +214,16 @@
     return '<span class="ticks ' + receipt + '" aria-label="' + receipt + '">' + (receipt === 'sent' ? '✓' : '✓✓') + '</span>';
   }
 
+  function mediaUrl(id) {
+    var query = new URLSearchParams();
+    var mediaToken = chatToken;
+    if (!mediaToken) { try { mediaToken = String(localStorage.getItem('token_key') || ''); } catch (_) {} }
+    if (mediaToken) query.set('token', mediaToken);
+    if (state.activePhone) query.set('phone', state.activePhone);
+    var url = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(id));
+    return query.toString() ? url + '?' + query.toString() : url;
+  }
+
   function messageBubble(item, part) {
     var role = core.roleOf(item);
     var label = role === 'client' ? t('client') : role === 'bot' ? t('bot') : role === 'operator' ? t('operatorRole') : t('system');
@@ -227,16 +237,16 @@
         '<button class="audio-speed" type="button">1x</button></div>';
     }
     if (part.kind === 'image') {
-      var query = new URLSearchParams();
-      var mediaToken = chatToken;
-      if (!mediaToken) { try { mediaToken = String(localStorage.getItem('token_key') || ''); } catch (_) {} }
-      if (mediaToken) query.set('token', mediaToken);
-      if (state.activePhone) query.set('phone', state.activePhone);
-      var imageUrl = endpoint('media', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(part.id));
-      if (query.toString()) imageUrl += '?' + query.toString();
+      var imageUrl = mediaUrl(part.id);
       content = '<a class="chat-image-link" href="' + core.escapeHtml(imageUrl) + '" target="_blank" rel="noopener"><img class="chat-image" src="' + core.escapeHtml(imageUrl) + '" alt="' + core.escapeHtml(t('photo')) + '" loading="lazy"><span class="image-error"><i class="fa-solid fa-image"></i> ' + core.escapeHtml(t('imageFailed')) + '</span></a>';
     }
-    return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : part.kind === 'image' ? 'image-bubble' : '') + '">' +
+    if (part.kind === 'document') {
+      // The PDF is served sandboxed, so it opens in its own tab instead of an
+      // inline frame the operator page would have to trust.
+      content = '<a class="chat-document" href="' + core.escapeHtml(mediaUrl(part.id)) + '" target="_blank" rel="noopener">' +
+        '<i class="fa-solid fa-file-pdf"></i><span>' + core.escapeHtml(t('document')) + '</span></a>';
+    }
+    return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : part.kind === 'image' ? 'image-bubble' : part.kind === 'document' ? 'document-bubble' : '') + '">' +
       (role === 'system' ? '' : '<div class="role">' + core.escapeHtml(label) + '</div>') + content +
       '<div class="bubble-foot"><time>' + core.escapeHtml(timestamp) + '</time>' + renderReceipt(item, role) + '</div></div></div>';
   }

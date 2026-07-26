@@ -185,3 +185,31 @@ test('media endpoint recovers a missing persisted voice note before returning 40
   assert.deepEqual(recoveryRequest, { instanceId: 'prestige', messageId: 'audio-missing', phone: '77476884956' });
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture);
 });
+
+test('media endpoint serves a PDF receipt sandboxed and refuses a forged one', async t => {
+  const fixture = Buffer.from('%PDF-1.4\nKaspi receipt body\n%%EOF');
+  let stored = `data:application/pdf;base64,${fixture.toString('base64')}`;
+  const app = express();
+  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({ readMedia: async () => stored }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/api/chat/media/prestige/receipt-1`;
+
+  const served = await fetch(url);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'application/pdf');
+  assert.equal(served.headers.get('content-security-policy'), 'sandbox');
+  assert.equal(served.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(Number(served.headers.get('content-length')), fixture.length);
+  assert.deepEqual(Buffer.from(await served.arrayBuffer()), fixture);
+
+  const transcoded = await fetch(`${url}?fmt=mp4`);
+  assert.equal(transcoded.status, 400);
+  assert.equal((await transcoded.json()).error, 'UNSUPPORTED_OUTPUT_FORMAT');
+
+  stored = `data:application/pdf;base64,${Buffer.from('<html>not a pdf</html>').toString('base64')}`;
+  const forged = await fetch(url);
+  assert.equal(forged.status, 422);
+  assert.equal((await forged.json()).error, 'DOCUMENT_SIGNATURE_INVALID');
+});

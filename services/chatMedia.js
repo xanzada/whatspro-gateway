@@ -16,6 +16,7 @@ const DEFAULT_CACHE_DIR = path.join(os.tmpdir(), 'whatspro-audio-cache');
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 const EXTENSIONS = new Map([
   ['audio/ogg', '.ogg'], ['audio/opus', '.ogg'], ['audio/webm', '.webm'],
   ['audio/mpeg', '.mp3'], ['audio/mp4', '.m4a'], ['audio/wav', '.wav'], ['audio/x-wav', '.wav']
@@ -62,6 +63,20 @@ function decodeImageDataUri(value) {
     (mimeType === 'image/gif' && ['GIF87a','GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) ||
     (mimeType === 'image/webp' && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP');
   if (!valid) throw mediaError('IMAGE_SIGNATURE_INVALID', 422);
+  return { buffer, mimeType };
+}
+
+function decodeDocumentDataUri(value) {
+  const match = String(value || '').trim().match(/^data:(application\/pdf);base64,([\s\S]+)$/i);
+  if (!match) throw mediaError('INVALID_DOCUMENT_DATA_URI', 422);
+  const mimeType = match[1].toLowerCase();
+  const base64 = match[2].replace(/\s+/g, '');
+  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw mediaError('INVALID_DOCUMENT_BASE64', 422);
+  const buffer = Buffer.from(base64, 'base64');
+  if (!buffer.length || buffer.length > MAX_DOCUMENT_BYTES || buffer.toString('base64') !== base64) {
+    throw mediaError(buffer.length > MAX_DOCUMENT_BYTES ? 'DOCUMENT_TOO_LARGE' : 'INVALID_DOCUMENT_BASE64', 422);
+  }
+  if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') throw mediaError('DOCUMENT_SIGNATURE_INVALID', 422);
   return { buffer, mimeType };
 }
 
@@ -183,6 +198,21 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
         });
         return res.status(200).send(image.buffer);
       }
+      if (/^data:application\/pdf/i.test(mediaData)) {
+        if (req.query?.fmt) throw mediaError('UNSUPPORTED_OUTPUT_FORMAT', 400);
+        const pdf = decodeDocumentDataUri(mediaData);
+        res.set({
+          'Cache-Control': 'private, max-age=3600',
+          // A PDF can carry scripts and this is the operator's own origin, so the
+          // built-in viewer is sandboxed rather than trusted with the receipt.
+          'Content-Security-Policy': 'sandbox',
+          'Content-Disposition': 'inline; filename="document.pdf"',
+          'Content-Length': String(pdf.buffer.length),
+          'Content-Type': pdf.mimeType,
+          'X-Content-Type-Options': 'nosniff'
+        });
+        return res.status(200).send(pdf.buffer);
+      }
       const media = decodeAudioDataUri(mediaData);
       const requestedFormat = String(req.query?.fmt || '').toLowerCase();
       if (requestedFormat && requestedFormat !== 'mp4') throw mediaError('UNSUPPORTED_OUTPUT_FORMAT', 400);
@@ -205,4 +235,4 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
   };
 }
 
-module.exports = { createChatMediaHandler, decodeAudioDataUri, decodeImageDataUri, resolveFfmpegPath };
+module.exports = { createChatMediaHandler, decodeAudioDataUri, decodeDocumentDataUri, decodeImageDataUri, resolveFfmpegPath };
