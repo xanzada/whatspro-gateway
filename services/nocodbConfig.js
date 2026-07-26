@@ -198,6 +198,51 @@ async function getTenantChatConfig(instanceValue) {
   return lookup;
 }
 
+// Deliberately separate from getTenantChatConfig: that object is rendered into
+// the operator page, so a secret must never travel with it. This returns the
+// token alone, cached under its own key, and nothing else about the tenant.
+async function getTenantApiToken(instanceValue) {
+  const instance = normalizeInstance(instanceValue);
+  if (!instance) return '';
+
+  const cacheKey = `token:${instance}`;
+  const currentTime = Date.now();
+  const cached = getCached(cacheKey, currentTime);
+  if (cached !== null && cached !== undefined) return cached;
+  if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+  if (currentTime < circuitOpenUntil) return '';
+
+  const lookup = (async () => {
+    if (!await acquireLookupSlot()) return '';
+    try {
+      let record = null;
+      let transportFailed = false;
+      for (const column of ['instance_id', 'instance', 'restaurant_instance', 'restaurantInstance']) {
+        try {
+          record = await queryByColumn(instance, column);
+          if (record) break;
+        } catch (error) {
+          const status = Number(error?.response?.status || 0);
+          if (!status || status === 408 || status === 425 || status === 429 || status >= 500) {
+            transportFailed = true;
+            openCircuit(error);
+            break;
+          }
+        }
+      }
+      const token = String(pickFirst(record, ['whatspro_api_token', 'whatsproApiToken', 'api_token', 'apiToken'], '') || '').trim();
+      // A tenant whose row exists but carries no token is cached as "no token"
+      // so a missing field cannot hammer NocoDB on every request.
+      if (!transportFailed) setCached(cacheKey, token, record ? CACHE_TTL_MS : NEGATIVE_CACHE_TTL_MS);
+      return token;
+    } finally {
+      activeLookups -= 1;
+    }
+  })().finally(() => inflight.delete(cacheKey));
+  inflight.set(cacheKey, lookup);
+  return lookup;
+}
+
 function resetForTests() {
   cache.clear();
   inflight.clear();
@@ -207,6 +252,7 @@ function resetForTests() {
 }
 
 module.exports = {
+  getTenantApiToken,
   getTenantChatConfig,
   sanitizeTenantConfig,
   __test: {

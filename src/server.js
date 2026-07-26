@@ -24,6 +24,9 @@ const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvent
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { parseScoredMembers, scanKeys } = require('../services/redisReply');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
+// Called through the module object rather than destructured so the tenant-token
+// lookup stays a seam the isolation tests can stand in for.
+const nocodbConfig = require('../services/nocodbConfig');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -231,11 +234,37 @@ function readSession(req) {
   }
 }
 
-function hasApiToken(req) {
-  const expected = process.env.WHATSPRO_API_TOKEN || '';
-  const incoming = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+function incomingApiToken(req) {
+  return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
     || String(req.headers['x-api-key'] || '');
-  return expected && safeEqual(incoming, expected);
+}
+
+// The gateway-wide token belongs to the operator of the platform: it is what
+// Openbot carries and it reaches every instance. A restaurant's own token comes
+// from its NocoDB row and unlocks that instance only, so handing a tenant their
+// key can never expose the other tenants' chats.
+function hasMasterApiToken(req) {
+  const expected = process.env.WHATSPRO_API_TOKEN || '';
+  return Boolean(expected) && safeEqual(incomingApiToken(req), expected);
+}
+
+function requestedInstanceId(req) {
+  const candidate = req.params?.instanceId || req.body?.instanceId || req.query?.instance || req.headers['x-chat-instance'] || '';
+  const instanceId = String(candidate).trim();
+  return isValidInstanceId(instanceId) ? instanceId : '';
+}
+
+async function hasApiToken(req) {
+  const incoming = incomingApiToken(req);
+  if (!incoming) return false;
+  if (hasMasterApiToken(req)) return true;
+
+  // Without a named instance there is nothing to scope to — listing every
+  // instance stays an owner-only action.
+  const instanceId = requestedInstanceId(req);
+  if (!instanceId) return false;
+  const tenantToken = await nocodbConfig.getTenantApiToken(instanceId).catch(() => '');
+  return Boolean(tenantToken) && safeEqual(incoming, tenantToken);
 }
 
 function issueChatToken(instanceId, expiresAt = Date.now() + CHAT_TOKEN_TTL_MS) {
@@ -269,23 +298,23 @@ function hasChatMediaToken(req) {
   return Boolean((expected && incoming && safeEqual(incoming, expected)) || hasScopedChatToken(req, incoming));
 }
 
-function requireApi(req, res, next) {
-  if (hasApiToken(req)) return next();
+async function requireApi(req, res, next) {
+  if (await hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
-function requireUiOrApi(req, res, next) {
-  if (hasApiToken(req) || readSession(req)) return next();
+async function requireUiOrApi(req, res, next) {
+  if (readSession(req) || await hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
-function requireChatUiOrApi(req, res, next) {
-  if (hasApiToken(req) || hasScopedChatToken(req) || readSession(req)) return next();
+async function requireChatUiOrApi(req, res, next) {
+  if (readSession(req) || hasScopedChatToken(req) || await hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
-function requireChatMediaAuth(req, res, next) {
-  if (hasApiToken(req) || hasChatMediaToken(req) || readSession(req)) return next();
+async function requireChatMediaAuth(req, res, next) {
+  if (readSession(req) || hasChatMediaToken(req) || await hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
@@ -720,9 +749,9 @@ app.get('/', (req, res) => {
 
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
-app.get('/api/whatspro/session', (req, res) => {
+app.get('/api/whatspro/session', async (req, res) => {
   const session = readSession(req);
-  if (!session && !hasApiToken(req)) return res.status(401).json({ error: 'AUTH_REQUIRED' });
+  if (!session && !await hasApiToken(req)) return res.status(401).json({ error: 'AUTH_REQUIRED' });
   res.json({ authenticated: true, username: session?.username || process.env.WHATSPRO_USER || 'admin' });
 });
 
@@ -1414,5 +1443,8 @@ module.exports = {
   app,
   boot,
   renderChatHtml,
-  __test: { createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken }
+  __test: {
+    createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
+    hasApiToken, requireApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId
+  }
 };
