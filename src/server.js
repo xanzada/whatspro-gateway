@@ -258,14 +258,30 @@ function requestedInstanceId(req) {
 async function hasApiToken(req) {
   const incoming = incomingApiToken(req);
   if (!incoming) return false;
-  if (hasMasterApiToken(req)) return true;
+  if (hasMasterApiToken(req)) {
+    req.apiAuth = { scope: 'master' };
+    return true;
+  }
 
   // Without a named instance there is nothing to scope to — listing every
   // instance stays an owner-only action.
   const instanceId = requestedInstanceId(req);
   if (!instanceId) return false;
   const tenantToken = await nocodbConfig.getTenantApiToken(instanceId).catch(() => '');
-  return Boolean(tenantToken) && safeEqual(incoming, tenantToken);
+  if (!tenantToken || !safeEqual(incoming, tenantToken)) return false;
+  req.apiAuth = { scope: 'tenant', instanceId };
+  return true;
+}
+
+// On /api/send the body is parsed after authentication — a 23mb parse must not
+// run for an unauthenticated caller — so a tenant token names its instance in a
+// header. That leaves a gap the header alone cannot close: nothing stops a
+// request authenticating as beta and then asking, in the parsed body, to send as
+// alpha. This is where the two are made to agree.
+function withinApiScope(req, instanceId) {
+  const auth = req.apiAuth;
+  if (!auth || auth.scope === 'master') return true;
+  return auth.instanceId === String(instanceId || '').trim();
 }
 
 function issueChatToken(instanceId, expiresAt = Date.now() + CHAT_TOKEN_TTL_MS) {
@@ -1291,6 +1307,7 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   if (media != null && (!media || typeof media !== 'object' || Array.isArray(media))) return res.status(400).json({ error: 'INVALID_MEDIA_PAYLOAD' });
   
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!withinApiScope(req, instanceId)) return res.status(403).json({ error: 'INSTANCE_OUT_OF_SCOPE' });
   if (!phone) return res.status(400).json({ error: 'PHONE_REQUIRED' });
 
   // 1-ӨЗГЕРІС: Міндетті түрде телефонды нормализациялау (RC-7 шешімі)
@@ -1365,6 +1382,7 @@ app.post('/api/presence', requireApi, async (req, res) => {
   const cleanInstanceId = String(instanceId || instance || '').trim();
   const cleanPhone = normalizePhone(phone);
   if (!isValidInstanceId(cleanInstanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!withinApiScope(req, cleanInstanceId)) return res.status(403).json({ error: 'INSTANCE_OUT_OF_SCOPE' });
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
 
   const ok = await sendPresence(cleanInstanceId, cleanPhone);
@@ -1487,6 +1505,6 @@ module.exports = {
   renderChatHtml,
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
-    hasApiToken, requireApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId
+    hasApiToken, requireApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope
   }
 };
