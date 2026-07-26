@@ -1354,14 +1354,29 @@ async function boot() {
   console.log('[WhatsPro] Сервер қосылды. Барлық сақталған сессиялар автоматты түрде іске қосылады...');
   try {
     const instances = await listInstances();
-    for (const inst of instances) {
-       // Сессиясы болса да, болмаса да оятамыз. 
-       // Сессиясы жоқтар автоматты түрде QR код дайындап күтіп тұрады.
-       console.log(`[BOOT] Автоқосылу (QR немесе Сессия): ${inst.instanceId}`);
-       startWhatsAppInstance(inst.instanceId).catch(err => {
-           console.error(`[BOOT] ${inst.instanceId} қосылу қатесі:`, err.message);
-       });
-    }
+    // Each instance boots its own Chromium, so starting them all at once turns a
+    // restart into a thundering herd: with a tenant list of any size the host
+    // runs out of memory before the first client is ready. Start a few at a
+    // time and let each settle. Tune with WHATSPRO_BOOT_CONCURRENCY.
+    const bootConcurrency = Math.max(1, Number(process.env.WHATSPRO_BOOT_CONCURRENCY || 2));
+    const bootGap = Math.max(0, Number(process.env.WHATSPRO_BOOT_GAP_MS || 4000));
+    console.log(`[BOOT] ${instances.length} инстанс, қатарлас ${bootConcurrency}, аралық ${bootGap}ms`);
+    const queue = [...instances];
+    const startNext = async () => {
+      while (queue.length) {
+        const inst = queue.shift();
+        console.log(`[BOOT] Автоқосылу (QR немесе Сессия): ${inst.instanceId}`);
+        await startWhatsAppInstance(inst.instanceId).catch(err => {
+          console.error(`[BOOT] ${inst.instanceId} қосылу қатесі:`, err.message);
+        });
+        if (queue.length && bootGap) await new Promise(resolve => setTimeout(resolve, bootGap));
+      }
+    };
+    // Not awaited: HTTP is already listening and must stay responsive while the
+    // clients come up behind it.
+    void Promise.all(Array.from({ length: Math.min(bootConcurrency, queue.length) }, startNext))
+      .then(() => console.log('[BOOT] барлық инстанс өңделді'))
+      .catch(err => console.error('[BOOT] кезек қатесі:', err?.message || err));
   } catch (err) {
     console.error('[BOOT] Автоқосылу кезіндегі қате:', err);
   }

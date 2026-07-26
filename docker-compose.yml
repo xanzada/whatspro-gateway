@@ -14,6 +14,16 @@ services:
       - NODE_ENV=production
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
+    # Every WhatsApp instance carries its own Chromium, so this container grows
+    # with the tenant list and had no ceiling at all: one runaway client could
+    # take the host down with Redis, Traefik and the bot on it. Cap it, and let
+    # Docker restart this service alone instead of the whole machine dying.
+    deploy:
+      resources:
+        limits:
+          memory: ${WHATSPRO_MEMORY_LIMIT:-2560M}
+        reservations:
+          memory: 512M
 
   redis_local:
     image: redis:7-alpine
