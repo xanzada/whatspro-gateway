@@ -102,6 +102,24 @@ test('acknowledging clears the light but keeps the case listed', async () => {
   assert.equal(await store.acknowledge('prestige', PHONE), true);
 });
 
+test('a SCAN batch is walked key by key, not stringified whole', async () => {
+  const { scanKeys } = require('../services/redisReply');
+  const batched = {
+    async *scanIterator() {
+      yield ['chatwoot:expiry:alpha', 'chatwoot:expiry:beta'];
+      yield ['chatwoot:expiry:gamma'];
+    }
+  };
+  const seen = [];
+  for await (const key of scanKeys(batched, 'chatwoot:expiry:*')) seen.push(key);
+  assert.deepEqual(seen, ['chatwoot:expiry:alpha', 'chatwoot:expiry:beta', 'chatwoot:expiry:gamma']);
+
+  const flat = { async *scanIterator() { yield 'chatwoot:expiry:solo'; } };
+  const single = [];
+  for await (const key of scanKeys(flat, 'chatwoot:expiry:*')) single.push(key);
+  assert.deepEqual(single, ['chatwoot:expiry:solo'], 'a client that yields single keys still works');
+});
+
 test('every WITHSCORES shape a client may return is read the same way', () => {
   const expected = [{ member: '77015550101', score: 1785000000000 }];
   assert.deepEqual(parseScoredMembers([['77015550101', 1785000000000]]), expected, 'node-redis tuples');

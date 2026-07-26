@@ -182,8 +182,10 @@ class FakeRedis {
   }
 
   async *scanIterator({ MATCH }) {
+    // node-redis yields a batch of keys per SCAN round, not one key at a time.
     const prefix = MATCH.replace('*', '');
-    for (const key of this.data.keys()) if (key.startsWith(prefix)) yield key;
+    const matched = [...this.data.keys()].filter(key => key.startsWith(prefix));
+    for (let i = 0; i < matched.length; i += 2) yield matched.slice(i, i + 2);
   }
 }
 

@@ -27,4 +27,18 @@ function parseScoredMembers(rows) {
   return entries;
 }
 
-module.exports = { parseScoredMembers };
+// scanIterator yields a batch of keys per SCAN round, not one key at a time.
+// Treating a batch as a single key stringifies it into "a,b,c", which then fails
+// every validity check downstream — so with one tenant it works by accident and
+// with two the loop quietly stops doing anything.
+async function* scanKeys(redis, pattern, count = 100) {
+  for await (const batch of redis.scanIterator({ MATCH: pattern, COUNT: count })) {
+    if (Array.isArray(batch)) {
+      for (const key of batch) yield String(key);
+    } else {
+      yield String(batch);
+    }
+  }
+}
+
+module.exports = { parseScoredMembers, scanKeys };

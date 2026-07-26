@@ -22,7 +22,7 @@ const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
-const { parseScoredMembers } = require('../services/redisReply');
+const { parseScoredMembers, scanKeys } = require('../services/redisReply');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
 
 const app = express();
@@ -642,8 +642,8 @@ async function recoverSendWal() {
 
 async function sweepExpiredChatIndexes() {
   if (!redisClient.isOpen) return;
-  for await (const key of redisClient.scanIterator({ MATCH: 'chatwoot:expiry:*', COUNT: 100 })) {
-    const instanceId = String(key).slice('chatwoot:expiry:'.length);
+  for await (const key of scanKeys(redisClient, 'chatwoot:expiry:*')) {
+    const instanceId = key.slice('chatwoot:expiry:'.length);
     if (isValidInstanceId(instanceId)) await chatStore.pruneExpired(instanceId);
   }
 }
@@ -826,8 +826,8 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
     sosStore.list(instanceId, limit)
   ]);
   const legacyHistoryKeys = [];
-  for await (const key of redisClient.scanIterator({ MATCH: `history:${instanceId}:*`, COUNT: 100 })) {
-    const phone = normalizePhone(String(key).slice(`history:${instanceId}:`.length));
+  for await (const key of scanKeys(redisClient, `history:${instanceId}:*`)) {
+    const phone = normalizePhone(key.slice(`history:${instanceId}:`.length));
     if (isValidChatPhone(phone)) legacyHistoryKeys.push({ phone, updatedAt: 0 });
   }
   const candidates = [];
