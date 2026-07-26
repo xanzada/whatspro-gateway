@@ -65,8 +65,17 @@ function isQualifiedImage(msg, media) {
     return !isSystem && Boolean(msg?.hasMedia) && (mediaMimeFrom(msg, media).startsWith('image/') || type === 'image');
 }
 
+function isQualifiedDocument(msg, media) {
+    const type = String(msg?.type || '').trim().toLowerCase();
+    const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
+    const mime = mediaMimeFrom(msg, media);
+    // Kaspi receipts arrive as a document with no mimetype at all, so an untyped
+    // document is admitted here and settled by the %PDF- check after download.
+    return !isSystem && Boolean(msg?.hasMedia) && (mime === 'application/pdf' || (type === 'document' && !mime));
+}
+
 function isChatMediaCandidate(msg) {
-    return isAudioCandidate(msg) || isQualifiedImage(msg);
+    return isAudioCandidate(msg) || isQualifiedImage(msg) || isQualifiedDocument(msg);
 }
 
 function deliveryStatusFromAck(ack) {
@@ -113,6 +122,21 @@ function validateImageBase64(value, mimeType) {
       (mime === 'image/gif' && ['GIF87a','GIF89a'].includes(decoded.subarray(0, 6).toString('ascii'))) ||
       (mime === 'image/webp' && decoded.subarray(0, 4).toString('ascii') === 'RIFF' && decoded.subarray(8, 12).toString('ascii') === 'WEBP');
     if (!valid) throw permanentMediaError('IMAGE_SIGNATURE_INVALID');
+    return base64;
+}
+
+function validateDocumentBase64(value) {
+    const raw = String(value || '').trim();
+    const dataUrl = raw.match(/^data:application\/pdf(?:;[^;,]+)*;base64,([\s\S]+)$/i);
+    const base64 = String(dataUrl ? dataUrl[1] : raw).replace(/\s+/g, '');
+    if (!base64 || base64.length % 4 !== 0 || base64.length > MAX_MEDIA_BASE64_LENGTH || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+        throw permanentMediaError('MEDIA_BASE64_INVALID');
+    }
+    const decoded = Buffer.from(base64, 'base64');
+    if (!decoded.length || decoded.length > MAX_MEDIA_BYTES || decoded.toString('base64') !== base64) {
+        throw permanentMediaError(decoded.length > MAX_MEDIA_BYTES ? 'MEDIA_TOO_LARGE' : 'MEDIA_BASE64_INVALID');
+    }
+    if (decoded.subarray(0, 5).toString('ascii') !== '%PDF-') throw permanentMediaError('DOCUMENT_SIGNATURE_INVALID');
     return base64;
 }
 
@@ -246,7 +270,7 @@ async function downloadBaileysMessageMedia(msg, injectedDownloader, testOptions 
             mediaKey: source.mediaKey,
             directPath: source.directPath,
             url: source.url
-        }, isQualifiedImage(msg) ? 'image' : 'audio', {
+        }, isQualifiedImage(msg) ? 'image' : isQualifiedDocument(msg) ? 'document' : 'audio', {
             host: source.host,
             options: { dispatcher }
         });
@@ -254,7 +278,7 @@ async function downloadBaileysMessageMedia(msg, injectedDownloader, testOptions 
         verifyMediaFileHash(decrypted, expectedHash);
         return {
             data: decrypted.toString('base64'),
-            mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || (String(msg?.type || '').toLowerCase() === 'image' ? 'image/jpeg' : 'audio/ogg'),
+            mimetype: data.mimetype || mediaData.mimetype || msg?.mimetype || (String(msg?.type || '').toLowerCase() === 'image' ? 'image/jpeg' : String(msg?.type || '').toLowerCase() === 'document' ? 'application/pdf' : 'audio/ogg'),
             filename: data.filename || mediaData.filename || msg?.filename,
             filesize: decrypted.length
         };
@@ -489,10 +513,15 @@ async function persistMessageMedia(instanceId, phone, msg, options = {}) {
 
     const isAudio = isQualifiedAudio(msg, media);
     const isImage = isQualifiedImage(msg, media);
-    if (!isAudio && !isImage) throw permanentMediaError('MEDIA_TYPE_UNSUPPORTED');
-    const mediaType = mediaMimeFrom(msg, media) || (isImage ? 'image/jpeg' : 'audio/ogg');
+    const isDocument = isQualifiedDocument(msg, media);
+    if (!isAudio && !isImage && !isDocument) throw permanentMediaError('MEDIA_TYPE_UNSUPPORTED');
+    const mediaType = mediaMimeFrom(msg, media) || (isImage ? 'image/jpeg' : isDocument ? 'application/pdf' : 'audio/ogg');
 
-    const base64 = isImage ? validateImageBase64(media.data, mediaType) : validateAudioBase64(media.data);
+    const base64 = isImage
+        ? validateImageBase64(media.data, mediaType)
+        : isDocument
+            ? validateDocumentBase64(media.data)
+            : validateAudioBase64(media.data);
     const decoded = Buffer.from(base64, 'base64');
     if (!decoded.length) throw permanentMediaError('MEDIA_BASE64_INVALID');
 
@@ -1287,7 +1316,8 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         const effectiveMediaType = downloadedMedia?.mimetype || hintedMediaType || (msg.type === 'image' ? 'image/jpeg' : '');
         const hasAudio = isQualifiedAudio(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
         const hasImage = isQualifiedImage(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
-        const hasSupportedMedia = hasAudio || hasImage;
+        const hasDocument = isQualifiedDocument(msg, downloadedMedia || (effectiveMediaType ? { mimetype: effectiveMediaType } : null));
+        const hasSupportedMedia = hasAudio || hasImage || hasDocument;
         const messagePayload = { conversation: msg.body };
         if (msg.hasMedia) {
             if (msg.type === 'image') messagePayload.imageMessage = { caption: msg.body };
@@ -1803,6 +1833,7 @@ module.exports = {
         isConnectedState,
         isQualifiedAudio,
         isQualifiedImage,
+        isQualifiedDocument,
         isChatMediaCandidate,
         deliveryStatusFromAck,
         MAX_MEDIA_BYTES,
@@ -1810,6 +1841,7 @@ module.exports = {
         MAX_MEDIA_BASE64_LENGTH,
         validateAudioBase64,
         validateImageBase64,
+        validateDocumentBase64,
         shouldRetryMediaError,
         collectMediaStream,
         createMediaDispatcher,

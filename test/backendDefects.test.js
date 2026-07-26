@@ -40,6 +40,22 @@ test('chat media accepts audio and photos while rejecting unsupported media', ()
   assert.equal(system.hasMedia, false);
 });
 
+test('PDF receipts are ingested even when WhatsApp omits the document mimetype', () => {
+  const pdf = Buffer.from('%PDF-1.4 receipt').toString('base64');
+
+  assert.equal(whatsappTest.isQualifiedDocument({ hasMedia: true, type: 'document' }, { mimetype: 'application/pdf' }), true);
+  assert.equal(whatsappTest.isQualifiedDocument({ hasMedia: true, type: 'document' }), true, 'a mime-less document still reaches the signature check');
+  assert.equal(whatsappTest.isChatMediaCandidate({ hasMedia: true, type: 'document' }), true);
+
+  // Anything that is not a PDF stays out, and system frames never qualify.
+  assert.equal(whatsappTest.isQualifiedDocument({ hasMedia: true, type: 'document' }, { mimetype: 'application/msword' }), false);
+  assert.equal(whatsappTest.isQualifiedDocument({ hasMedia: true, type: 'notification_template' }), false);
+  assert.equal(whatsappTest.isQualifiedDocument({ hasMedia: false, type: 'document' }), false);
+
+  assert.equal(whatsappTest.validateDocumentBase64(pdf), pdf);
+  assert.throws(() => whatsappTest.validateDocumentBase64(Buffer.from('<html>').toString('base64')), /DOCUMENT_SIGNATURE_INVALID/);
+});
+
 test('incoming ingestion forwards audio data and MIME through the idempotent append path', async () => {
   const captured = [];
   const dependencies = {
