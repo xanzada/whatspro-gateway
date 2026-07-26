@@ -1369,6 +1369,20 @@ async function boot() {
   return server;
 }
 
+// Node exits on an unhandled rejection by default, which here means dropping
+// every live WhatsApp client over one missed .catch(). Log and keep serving,
+// then let an uncaught exception restart us deliberately once the log is out.
+// Mirrors the handlers Openbot already installs in src/server.ts.
+process.on('unhandledRejection', reason => {
+  console.error('[WhatsPro] unhandled rejection:', reason instanceof Error ? reason.stack || reason.message : reason);
+});
+
+process.on('uncaughtException', (error, origin) => {
+  console.error(`[WhatsPro] uncaught exception (${origin}):`, error?.stack || error?.message || error);
+  shutdownWhatsAppClients().catch(() => {});
+  setTimeout(() => process.exit(1), 1500).unref();
+});
+
 process.on('SIGTERM', async () => {
   await shutdownWhatsAppClients().catch(() => {});
   process.exit(0);
