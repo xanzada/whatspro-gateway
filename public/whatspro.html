@@ -1088,6 +1088,18 @@
             }
         }
 
+        // requestJson throws an Error whose message is the server's `error` code,
+        // so the login form can distinguish a misconfigured backend from a real
+        // credential mismatch instead of blaming the operator for both.
+        const LOGIN_ERROR_TEXT = {
+            LOGIN_NOT_CONFIGURED: 'Қате: Жүйе бапталмаған. (Құпия сөз кемінде 12 таңба болуы керек)',
+            TOO_MANY_LOGIN_ATTEMPTS: 'Қате: Тым көп әрекет жасалды. Біраз уақыттан соң қайталаңыз.'
+        };
+
+        function loginErrorText(error) {
+            return LOGIN_ERROR_TEXT[error?.message] || 'Логин немесе пароль қате.';
+        }
+
         async function submitLogin(event) {
             event.preventDefault();
 
@@ -1112,7 +1124,7 @@
                 if (returnTo) return location.replace(returnTo);
                 await startAdminDashboard();
             } catch (error) {
-                showLogin('Логин немесе пароль қате.');
+                showLogin(loginErrorText(error));
             } finally {
                 document.getElementById('login-submit').disabled = false;
             }
