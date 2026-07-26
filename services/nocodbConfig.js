@@ -271,6 +271,18 @@ async function listTenantRecords() {
   return lookup;
 }
 
+// After the admin panel writes a row, the caches in front of it are lying until
+// they expire. Editing a restaurant and seeing the old value for five minutes
+// reads as "the save did not work", so a write drops what it touched.
+function invalidateTenant(instanceValue = '') {
+  const instance = normalizeInstance(instanceValue);
+  if (instance) {
+    cache.delete(`chat:${instance}`);
+    cache.delete(`token:${instance}`);
+  }
+  cache.delete('rows:all');
+}
+
 function resetForTests() {
   cache.clear();
   inflight.clear();
@@ -282,6 +294,7 @@ function resetForTests() {
 module.exports = {
   getTenantApiToken,
   getTenantChatConfig,
+  invalidateTenant,
   listTenantRecords,
   sanitizeTenantConfig,
   __test: {

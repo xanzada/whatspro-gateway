@@ -242,14 +242,28 @@ function sessionCheck(instanceId, sessions = []) {
   };
 }
 
+function isActive(record) {
+  const value = record?.active;
+  // A row written before the column existed has no value, and an existing
+  // restaurant must not read as paused because of that.
+  if (value === undefined || value === null || value === '') return true;
+  if (typeof value === 'string') return !['0', 'false', 'no'].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
 function evaluateTenant(record, options = {}) {
   const instanceId = text(record, FIELDS[0].columns);
+  const active = isActive(record);
   const checks = checkFields(record);
   const extras = [];
-  if (options.sessions) extras.push(sessionCheck(instanceId, options.sessions));
+  // A paused restaurant has no session on purpose. Reporting that as a fault
+  // would make every deliberately closed branch look broken.
+  if (options.sessions && active) extras.push(sessionCheck(instanceId, options.sessions));
   return {
     instanceId,
     brand: text(record, FIELDS[8].columns) || instanceId,
+    active,
+    promptMode: text(record, ['prompt_mode']).toLowerCase() === 'custom' ? 'custom' : 'shared',
     checks: [...checks, ...extras],
     summary: summarize(checks, extras)
   };

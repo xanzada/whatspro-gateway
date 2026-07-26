@@ -28,6 +28,7 @@ const { getTenantChatConfig } = require('../services/nocodbConfig');
 // lookup stays a seam the isolation tests can stand in for.
 const nocodbConfig = require('../services/nocodbConfig');
 const { evaluateAll } = require('../services/tenantReadiness');
+const tenantAdmin = require('../services/tenantAdmin');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -853,6 +854,152 @@ app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
     ...tenant,
     collisions: report.collisions.filter(entry => entry.instances.includes(instanceId))
   });
+});
+
+// Everything below is the admin panel behind /tenants. It exists so adding a
+// restaurant is a form rather than sixteen columns, and so no human ever chooses
+// a token — that choice is how two tenants end up sharing one.
+const SHARED_PROMPT_KEY = 'whatspro:shared-prompt';
+
+async function readSharedPrompt() {
+  if (!redisClient.isOpen) return '';
+  return String(await redisClient.get(SHARED_PROMPT_KEY) || '');
+}
+
+function adminError(res, error) {
+  const status = Number(error?.statusCode || 0);
+  if (status >= 400 && status < 600) {
+    return res.status(status).json({ error: error.message, fields: error.fields || undefined });
+  }
+  console.error('[TENANT:ADMIN]', error?.message || error);
+  return res.status(502).json({ error: 'TENANT_WRITE_FAILED', message: error?.message || String(error) });
+}
+
+// The form derives an id and a domain while you type. It has to ask what the
+// suffix is rather than guess, so the same defaults hold in the browser and on
+// the server instead of drifting apart.
+app.get('/api/wa/tenant-defaults', requireUiOrApi, (req, res) => {
+  res.json({
+    success: true,
+    domainSuffix: String(process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX || '').replace(/^\.+/, ''),
+    workHours: String(process.env.WHATSPRO_DEFAULT_WORK_HOURS || '09:00 - 03:00')
+  });
+});
+
+app.get('/api/wa/shared-prompt', requireUiOrApi, async (req, res) => {
+  res.json({ success: true, prompt: await readSharedPrompt() });
+});
+
+app.put('/api/wa/shared-prompt', requireUiOrApi, async (req, res) => {
+  const prompt = String(req.body?.prompt || '').replace(/\r\n/g, '\n').trim().slice(0, 20000);
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_UNAVAILABLE' });
+  await redisClient.set(SHARED_PROMPT_KEY, prompt);
+  try {
+    // Saving without applying would leave the table disagreeing with the panel,
+    // so the write and the propagation are one action.
+    const result = await tenantAdmin.applySharedPrompt(prompt);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.get('/api/wa/tenants/:instanceId/settings', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const row = await tenantAdmin.findRow(instanceId);
+    if (!row) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    res.json({ success: true, tenant: tenantAdmin.presentableTenant(row) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/tenants', requireUiOrApi, async (req, res) => {
+  try {
+    const result = await tenantAdmin.createTenant(req.body || {}, {
+      publicBase: publicApiBase(req),
+      sharedPrompt: await readSharedPrompt()
+    });
+    // A restaurant that exists in the table but not in the instance list cannot
+    // be scanned, and scanning is the next thing the operator will want to do.
+    await saveInstance(result.instanceId, String(req.body?.brand || result.instanceId));
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.patch('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const result = await tenantAdmin.updateTenant(instanceId, req.body || {}, {
+      publicBase: publicApiBase(req),
+      sharedPrompt: await readSharedPrompt()
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/tenants/:instanceId/clone', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const result = await tenantAdmin.cloneTenant(instanceId, req.body || {}, {
+      publicBase: publicApiBase(req),
+      sharedPrompt: await readSharedPrompt()
+    });
+    await saveInstance(result.instanceId, String(req.body?.brand || result.instanceId));
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    res.json({ success: true, ...(await tenantAdmin.rotateSecrets(instanceId, { publicBase: publicApiBase(req) })) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// Pausing is not a flag the bot is asked to respect — it is the WhatsApp session
+// going away. Nothing arrives, so nothing can be answered by mistake.
+app.post('/api/wa/tenants/:instanceId/active', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const active = Boolean(req.body?.active);
+  try {
+    const result = await tenantAdmin.setActive(instanceId, active);
+    if (active) await startWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] start failed', instanceId, error?.message || error));
+    else await stopWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] stop failed', instanceId, error?.message || error));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.delete('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  // Deleting a restaurant removes its row and its session. Typing the name is
+  // what separates that from a mis-tap on a phone.
+  if (String(req.body?.confirm || '') !== instanceId) return res.status(400).json({ error: 'CONFIRM_INSTANCE_ID_REQUIRED' });
+  try {
+    const result = await tenantAdmin.deleteTenant(instanceId);
+    await stopWhatsAppInstance(instanceId).catch(() => undefined);
+    if (redisClient.isOpen) await redisClient.hDel(INSTANCE_STORE_KEY, instanceId).catch(() => undefined);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
 });
 
 app.get('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
