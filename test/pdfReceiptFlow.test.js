@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 
 const { __test: whatsappTest } = require('../services/whatsappManager');
+const { __test: webhookTest } = require('../services/incomingWebhook');
 const { createChatStore } = require('../services/chatStore');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const core = require('../public/chat-core');
@@ -64,14 +65,36 @@ test('a mime-less Kaspi PDF survives ingestion, storage, serving and rendering',
   // 2. The downloaded bytes decide the type the declaration never carried.
   assert.equal(whatsappTest.validateDocumentBase64(base64), base64);
 
-  // 3. The store keeps it verbatim under its real mime.
+  // 3. The history entry must advertise the media, or the bubble never renders
+  // even though the bytes are sitting in the store.
+  const entry = webhookTest.buildHistoryEntry(
+    { messageId, type: 'document', hasMedia: true, mediaType: 'application/pdf', mediaData: base64, body: 'Чек' },
+    instanceId,
+    phone,
+    1785083964000
+  );
+  assert.equal(entry.hasMedia, true);
+  assert.equal(entry.mediaType, 'application/pdf');
+  assert.equal(entry.mediaData, base64);
+
+  // A document WhatsApp never typed still lands as a PDF.
+  const untyped = webhookTest.buildHistoryEntry(
+    { messageId, type: 'document', hasMedia: true, mediaData: base64 },
+    instanceId,
+    phone,
+    1785083964000
+  );
+  assert.equal(untyped.hasMedia, true);
+  assert.equal(untyped.mediaType, 'application/pdf');
+
+  // 4. The store keeps it verbatim under its real mime.
   const redis = new MediaRedis();
   const store = createChatStore(redis);
   assert.equal(await store.storeMedia(instanceId, phone, messageId, base64, 'application/pdf'), true);
   const stored = await store.readMedia(instanceId, messageId);
   assert.equal(stored, `data:application/pdf;base64,${base64}`);
 
-  // 4. The operator's browser fetches it over the real handler.
+  // 5. The operator's browser fetches it over the real handler.
   const app = express();
   app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({
     readMedia: (instance, id) => store.readMedia(instance, id)
@@ -89,8 +112,7 @@ test('a mime-less Kaspi PDF survives ingestion, storage, serving and rendering',
   assert.deepEqual(delivered, pdf, 'the operator receives the exact bytes the customer sent');
   assert.equal(delivered.subarray(0, 5).toString('ascii'), '%PDF-');
 
-  // 5. The renderer turns that history entry into a document bubble.
-  const entry = { id: messageId, text: 'Чек', type: 'document', hasMedia: true, mediaType: 'application/pdf' };
+  // 6. The renderer turns that stored entry into a document bubble.
   assert.deepEqual(core.messageParts(entry), [
     { kind: 'text', text: 'Чек' },
     { kind: 'document', id: messageId }

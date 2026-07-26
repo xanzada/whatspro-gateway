@@ -85,9 +85,16 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const isSystem = ['system', 'notification', 'notification_template', 'e2e_notification', 'protocol'].includes(type);
   const hasAudio = !isSystem && Boolean(payload.hasMedia) && rawMediaType.startsWith('audio/');
   const hasImage = !isSystem && Boolean(payload.hasMedia) && (rawMediaType.startsWith('image/') || type === 'image');
-  const hasSupportedMedia = hasAudio || hasImage;
+  // A document with no declared mime is the Kaspi receipt case; whatsappManager
+  // has already settled it on the %PDF- signature before this entry is built.
+  const hasDocument = !isSystem && Boolean(payload.hasMedia) && (rawMediaType === 'application/pdf' || (type === 'document' && !rawMediaType));
+  const hasSupportedMedia = hasAudio || hasImage || hasDocument;
   const mediaData = hasSupportedMedia ? rawMediaData : '';
-  const mediaType = hasImage && !rawMediaType ? 'image/jpeg' : hasSupportedMedia ? rawMediaType : '';
+  const mediaType = hasImage && !rawMediaType
+    ? 'image/jpeg'
+    : hasDocument && !rawMediaType
+      ? 'application/pdf'
+      : hasSupportedMedia ? rawMediaType : '';
   const mediaKind = String(payload.mediaKind || payload.type || '').trim();
   const contactName = String(payload.contactName || payload.data?.contactName || payload.contact?.name || payload.data?.contact?.name || '').trim();
   return {
