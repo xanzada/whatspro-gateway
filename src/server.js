@@ -22,6 +22,7 @@ const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
+const { parseScoredMembers } = require('../services/redisReply');
 const { getTenantChatConfig } = require('../services/nocodbConfig');
 
 const app = express();
@@ -948,15 +949,14 @@ app.get('/api/chat/inbox-legacy/:instanceId', requireChatUiOrApi, async (req, re
   const phones = [];
   const seen = new Set();
 
-  for (let i = 0; i < rows.length; i += 2) {
-    const rawPhone = rows[i];
+  for (const row of parseScoredMembers(rows)) {
     // Спамды тазалау
-    const purePhone = rawPhone.split(',')[0].replace(/\D/g, '');
+    const purePhone = row.member.split(',')[0].replace(/\D/g, '');
     if (!purePhone || seen.has(purePhone)) continue;
 
     seen.add(purePhone);
     phones.push(purePhone);
-    items.push({ phone: purePhone, updatedAt: Number(rows[i + 1]) || 0 });
+    items.push({ phone: purePhone, updatedAt: row.score });
   }
 
   if (phones.length > 0) {

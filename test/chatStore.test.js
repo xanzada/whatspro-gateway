@@ -62,7 +62,9 @@ class FakeRedis {
       if (!value) return [];
       if (value.type !== 'zset') throw new Error('WRONGTYPE');
       const rows = [...value.value].sort((a, b) => b[1] - a[1]).slice(Number(args[2]), Number(args[3]) + 1);
-      return args[4] === 'WITHSCORES' ? rows.flatMap(([member, score]) => [member, String(score)]) : rows.map(([member]) => member);
+      // node-redis returns [member, score] tuples for WITHSCORES, not the flat
+      // RESP2 list. The fake used to return the flat form, which hid a real bug.
+      return args[4] === 'WITHSCORES' ? rows.map(([member, score]) => [member, score]) : rows.map(([member]) => member);
     }
     if (command === 'ZRANGEBYSCORE') {
       if (!value) return [];

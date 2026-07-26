@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { redisClient } = require('../config/redis');
 const { normalizePhone } = require('./phoneUtils');
+const { parseScoredMembers } = require('./redisReply');
 
 const STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -353,8 +354,8 @@ function createChatStore(redis, options = {}) {
     await pruneExpired(instanceId);
     const rows = await command(['ZREVRANGE', key, '0', String(limit - 1), 'WITHSCORES'], []);
     const result = [];
-    for (let i = 0; i < rows.length; i += 2) {
-      const phone = normalizePhone(rows[i]);
+    for (const row of parseScoredMembers(rows)) {
+      const phone = normalizePhone(row.member);
       if (!isPhone(phone)) continue;
       const [historyType, legacyType, stateType] = await Promise.all([
         command(['TYPE', keys.history(instanceId, phone)], 'none'),
@@ -369,7 +370,7 @@ function createChatStore(redis, options = {}) {
         ]);
         continue;
       }
-      result.push({ phone, updatedAt: Number(rows[i + 1]) || 0 });
+      result.push({ phone, updatedAt: row.score });
     }
     return result;
   }

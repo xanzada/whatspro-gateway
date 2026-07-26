@@ -2,6 +2,7 @@
 
 const { redisClient } = require('../config/redis');
 const { normalizePhone } = require('./phoneUtils');
+const { parseScoredMembers } = require('./redisReply');
 
 const SOS_TTL_SECONDS = 60 * 60;
 const keys = {
@@ -29,9 +30,9 @@ function createSosStore(redis, options = {}) {
     await command(['ZREMRANGEBYSCORE', keys.index(instanceId), '-inf', String(timestamp)], 0);
     const rows = await command(['ZRANGEBYSCORE', keys.index(instanceId), String(timestamp + 1), '+inf', 'WITHSCORES', 'LIMIT', '0', String(limit)], []);
     const entries = [];
-    for (let i = 0; i < rows.length; i += 2) {
-      const phone = normalizePhone(rows[i]);
-      const expiresAt = Number(rows[i + 1]) || 0;
+    for (const row of parseScoredMembers(rows)) {
+      const phone = normalizePhone(row.member);
+      const expiresAt = row.score;
       if (!validPhone(phone)) continue;
       const [raw, unread] = await Promise.all([
         command(['GET', keys.marker(instanceId, phone)], ''),
