@@ -243,6 +243,34 @@ async function getTenantApiToken(instanceValue) {
   return lookup;
 }
 
+// The readiness check needs whole rows, not one sanitized tenant. It is an owner
+// action, it runs when somebody is adding a restaurant rather than on every
+// request, and the rows carry tokens — so it takes its own short cache and its
+// result must never leave the process except as pass/fail.
+const TENANT_LIST_CACHE_MS = Math.min(CACHE_TTL_MS, 60000);
+
+async function listTenantRecords() {
+  const url = tableUrl();
+  if (!url || !process.env.NOCODB_TOKEN) return [];
+  const cacheKey = 'rows:all';
+  const cached = getCached(cacheKey, Date.now());
+  if (cached) return cached;
+  if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+
+  const lookup = (async () => {
+    const response = await axios.get(url, {
+      headers: nocodbHeaders(),
+      params: { limit: 1000 },
+      timeout: Number(process.env.NOCODB_TIMEOUT_MS || 8000)
+    });
+    const rows = Array.isArray(response.data?.list) ? response.data.list : [];
+    setCached(cacheKey, rows, TENANT_LIST_CACHE_MS);
+    return rows;
+  })().finally(() => inflight.delete(cacheKey));
+  inflight.set(cacheKey, lookup);
+  return lookup;
+}
+
 function resetForTests() {
   cache.clear();
   inflight.clear();
@@ -254,6 +282,7 @@ function resetForTests() {
 module.exports = {
   getTenantApiToken,
   getTenantChatConfig,
+  listTenantRecords,
   sanitizeTenantConfig,
   __test: {
     reset: resetForTests,

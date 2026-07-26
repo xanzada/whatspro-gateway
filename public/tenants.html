@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="kk">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Ресторандар дайындығы</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0a0f1a;
+            --panel: #111827;
+            --panel-2: #172235;
+            --line: #28384f;
+            --text: #f6f8fc;
+            --soft: #c9d5e4;
+            --muted: #879bb4;
+            --green: #10b981;
+            --orange: #f59e0b;
+            --red: #ef4444;
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: radial-gradient(circle at 16% 0%, rgba(16, 185, 129, .12), transparent 22rem), var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        .page { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 22px 0 48px; }
+        h1 { font-size: 20px; margin: 0 0 4px; }
+        .lede { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+        .lede a { color: var(--soft); }
+
+        .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        button {
+            font: inherit; border: 1px solid var(--line); cursor: pointer;
+            background: var(--panel-2); color: var(--text);
+            padding: 7px 14px; border-radius: var(--radius);
+        }
+        button:hover { border-color: var(--green); }
+
+        .counts { color: var(--muted); font-size: 13px; }
+        .counts strong { color: var(--text); }
+
+        .alert {
+            border: 1px solid rgba(239, 68, 68, .45);
+            background: rgba(239, 68, 68, .08);
+            border-radius: var(--radius);
+            padding: 12px 14px; margin-bottom: 16px; font-size: 13px; line-height: 1.55;
+        }
+        .alert h2 { font-size: 14px; margin: 0 0 6px; color: var(--red); }
+        .alert p { margin: 0 0 4px; color: var(--soft); }
+
+        .tenant {
+            border: 1px solid var(--line); background: var(--panel);
+            border-radius: var(--radius); margin-bottom: 12px; overflow: hidden;
+        }
+        .tenant-head {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            padding: 12px 14px; cursor: pointer; background: var(--panel-2);
+        }
+        .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+        .dot.ok { background: var(--green); }
+        .dot.warn { background: var(--orange); }
+        .dot.bad { background: var(--red); }
+        .tenant-name { font-weight: 600; }
+        .tenant-id { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .tenant-state { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+        .checks { display: none; padding: 4px 14px 12px; }
+        .tenant.open .checks { display: block; }
+        .check {
+            display: grid; grid-template-columns: 14px minmax(160px, auto) 1fr;
+            gap: 10px; align-items: start;
+            padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px;
+        }
+        .check .mark { line-height: 1.5; }
+        .check .mark.ok { color: var(--green); }
+        .check .mark.warn { color: var(--orange); }
+        .check .mark.bad { color: var(--red); }
+        .check code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--soft); font-size: 12px; }
+        .check .why { color: var(--muted); line-height: 1.5; }
+        .check .code { color: var(--muted); font-size: 11px; text-transform: lowercase; }
+
+        .empty, .error { color: var(--muted); font-size: 13px; padding: 18px 0; }
+        .error { color: var(--red); }
+    </style>
+</head>
+<body>
+<div class="page">
+    <h1>Ресторандар дайындығы</h1>
+    <p class="lede">
+        NocoDB кестесіндегі әр жол осында тексеріледі: қай баған толтырылған, қайсысы жоқ, және
+        екі ресторан бір нөмірді немесе бір токенді бөлісіп тұрма. Жаңа желі қосқанда осы бетті ашып,
+        бәрі жасыл болғанын көру жеткілікті.
+    </p>
+
+    <div class="bar">
+        <button id="refresh" type="button">Қайта тексеру</button>
+        <span class="counts" id="counts"></span>
+    </div>
+
+    <div id="collisions"></div>
+    <div id="list"></div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var listEl = document.getElementById('list');
+    var collisionsEl = document.getElementById('collisions');
+    var countsEl = document.getElementById('counts');
+    var refreshEl = document.getElementById('refresh');
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    // A missing recommended column is amber, not red: the restaurant still takes
+    // orders without an address, it just answers one question worse.
+    function markClass(check) {
+        if (check.ok) return 'ok';
+        return check.level === 'required' ? 'bad' : 'warn';
+    }
+
+    function renderCheck(check) {
+        var row = el('div', 'check');
+        var mark = el('span', 'mark ' + markClass(check), check.ok ? '✓' : (check.level === 'required' ? '✕' : '!'));
+        var name = el('div');
+        name.appendChild(el('code', null, check.column === '-' ? check.id : check.column));
+        if (!check.ok) {
+            name.appendChild(document.createElement('br'));
+            name.appendChild(el('span', 'code', check.code));
+        }
+        row.appendChild(mark);
+        row.appendChild(name);
+        row.appendChild(el('div', 'why', check.why));
+        return row;
+    }
+
+    function renderTenant(tenant) {
+        var card = el('div', 'tenant');
+        var head = el('div', 'tenant-head');
+        var state = tenant.summary.ready
+            ? (tenant.summary.warnings.length ? 'warn' : 'ok')
+            : 'bad';
+        head.appendChild(el('span', 'dot ' + state));
+        head.appendChild(el('span', 'tenant-name', tenant.brand));
+        head.appendChild(el('span', 'tenant-id', tenant.instanceId));
+        head.appendChild(el('span', 'tenant-state',
+            tenant.summary.passed + '/' + tenant.summary.total + ' · ' +
+            (tenant.summary.ready
+                ? (tenant.summary.warnings.length ? 'жұмысқа дайын, толықтыру бар' : 'толық дайын')
+                : 'дайын емес: ' + tenant.summary.blocking.join(', '))));
+        head.addEventListener('click', function () { card.classList.toggle('open'); });
+
+        var checks = el('div', 'checks');
+        tenant.checks.forEach(function (check) { checks.appendChild(renderCheck(check)); });
+
+        card.appendChild(head);
+        card.appendChild(checks);
+        // Open whatever needs attention, so nothing important hides behind a click.
+        if (state !== 'ok') card.classList.add('open');
+        return card;
+    }
+
+    function renderCollisions(collisions) {
+        collisionsEl.textContent = '';
+        if (!collisions || !collisions.length) return;
+        var box = el('div', 'alert');
+        box.appendChild(el('h2', null, 'Ресторандар арасындағы қақтығыс'));
+        collisions.forEach(function (entry) { box.appendChild(el('p', null, entry.detail)); });
+        collisionsEl.appendChild(box);
+    }
+
+    function load() {
+        listEl.textContent = '';
+        countsEl.textContent = 'тексерілуде…';
+        fetch('/api/wa/tenants', { credentials: 'same-origin' })
+            .then(function (response) {
+                return response.json().then(function (data) { return { status: response.status, data: data }; });
+            })
+            .then(function (result) {
+                if (result.status === 401) throw new Error('Кіру қажет. Алдымен WhatsPro панеліне кіріңіз.');
+                if (result.status === 503) throw new Error('NocoDB қолжетімсіз: ' + (result.data.message || ''));
+                if (!result.data.success) throw new Error(result.data.error || 'Белгісіз қате');
+
+                var report = result.data;
+                countsEl.innerHTML = '';
+                countsEl.appendChild(el('strong', null, report.ready + '/' + report.total));
+                countsEl.appendChild(document.createTextNode(' ресторан толық дайын'));
+                renderCollisions(report.collisions);
+                if (!report.tenants.length) {
+                    listEl.appendChild(el('div', 'empty', 'Кестеде instance_id толтырылған жол жоқ.'));
+                    return;
+                }
+                report.tenants
+                    .slice()
+                    .sort(function (a, b) { return Number(a.summary.ready) - Number(b.summary.ready); })
+                    .forEach(function (tenant) { listEl.appendChild(renderTenant(tenant)); });
+            })
+            .catch(function (error) {
+                countsEl.textContent = '';
+                listEl.appendChild(el('div', 'error', error.message || String(error)));
+            });
+    }
+
+    refreshEl.addEventListener('click', load);
+    load();
+})();
+</script>
+</body>
+</html>

@@ -27,6 +27,7 @@ const { getTenantChatConfig } = require('../services/nocodbConfig');
 // Called through the module object rather than destructured so the tenant-token
 // lookup stays a seam the isolation tests can stand in for.
 const nocodbConfig = require('../services/nocodbConfig');
+const { evaluateAll } = require('../services/tenantReadiness');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -734,6 +735,10 @@ app.get('/whatspro', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
 });
 
+app.get('/tenants', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'tenants.html'));
+});
+
 app.get(['/chat', '/inbox'], (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
@@ -795,6 +800,43 @@ app.post('/api/whatspro/logout', (req, res) => {
 
 app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
   res.json({ success: true, instances: await listInstances() });
+});
+
+// Onboarding a restaurant is one NocoDB row, and until now nothing told you
+// whether that row was complete. These two routes read the table and answer it,
+// including the collisions that only exist between rows. They return pass/fail
+// codes and never a field's value, so the token stays where it lives.
+app.get('/api/wa/tenants', requireUiOrApi, async (req, res) => {
+  let records;
+  try {
+    records = await nocodbConfig.listTenantRecords();
+  } catch (error) {
+    // A NocoDB outage is not a broken gateway, and saying so saves the reader
+    // from hunting a bug in the checklist itself.
+    return res.status(503).json({ error: 'NOCODB_UNREACHABLE', message: error?.message || String(error) });
+  }
+  const sessions = await listInstances().catch(() => []);
+  res.json({ success: true, ...evaluateAll(records, { sessions }) });
+});
+
+app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  let records;
+  try {
+    records = await nocodbConfig.listTenantRecords();
+  } catch (error) {
+    return res.status(503).json({ error: 'NOCODB_UNREACHABLE', message: error?.message || String(error) });
+  }
+  const sessions = await listInstances().catch(() => []);
+  const report = evaluateAll(records, { sessions });
+  const tenant = report.tenants.find(entry => entry.instanceId === instanceId);
+  if (!tenant) return res.status(404).json({ error: 'TENANT_NOT_IN_TABLE', instanceId });
+  res.json({
+    success: true,
+    ...tenant,
+    collisions: report.collisions.filter(entry => entry.instances.includes(instanceId))
+  });
 });
 
 app.get('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
