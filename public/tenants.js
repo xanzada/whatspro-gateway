@@ -6,6 +6,8 @@
   var viewEl = $('#view');
   var modalRoot = $('#modal-root');
   var appShell = $('#app-shell');
+  var loginShell = $('#login-shell');
+  var loginForm = $('#login-form');
   var searchEl = $('#global-search');
   var report = { tenants: [], total: 0 };
   var instances = [];
@@ -24,6 +26,8 @@
   var qrTimer = 0;
   var qrInstanceId = '';
   var previousFocus = null;
+  var appStarted = false;
+  var authUsername = '';
   var defaults = { domainSuffix: '', workHours: '09:00 - 03:00' };
   var locale = localStorage.getItem('whatspro_locale') === 'ru' ? 'ru' : 'kk';
   var theme = localStorage.getItem('whatspro_theme') === 'light' ? 'light' : 'dark';
@@ -62,6 +66,7 @@
       connecting: 'Қосылуда', offline: 'Қосылмаған', unknown: 'Тексерілуде',
       whatsappSource: 'WhatsPro сессиясы', sharedPrompt: 'Ортақ промпт',
       actions: 'Әрекеттер', viewDetails: 'Толығырақ', edit: 'Өзгерту',
+      duplicate: 'Дубликат жасау', duplicateSuffix: 'көшірмесі', duplicateRestaurant: 'Ресторанды дубликаттау',
       restart: 'Қайта іске қосу', reconnect: 'Қайта қосу', qrCode: 'QR код', delete: 'Өшіру',
       general: 'Жалпы', whatsapp: 'WhatsApp', prompt: 'Промпт', health: 'Күй',
       configuration: 'Конфигурация', back: 'Артқа', address: 'Мекенжай', hours: 'Жұмыс уақыты',
@@ -92,6 +97,12 @@
       deleted: 'Ресторан өшірілді', copyDone: 'Көшірілді', virtualTenant: 'WhatsPro-дан табылды',
       menuFor: 'Ресторан әрекеттері', noPhone: 'Телефон көрсетілмеген', notSet: 'Көрсетілмеген',
       realTime: 'Нақты уақытта', signOutFailed: 'Шығу мүмкін болмады', sessionExpired: 'Әкімші сессиясының мерзімі аяқталды.',
+      loginEyebrow: 'ҚАУІПСІЗ КІРУ', loginTitle: 'Әкімші панеліне кіру',
+      loginDescription: 'Ресторандар мен WhatsApp сессияларын басқару үшін Environment ішінде сақталған деректермен кіріңіз.',
+      login: 'Логин', password: 'Құпиясөз', rememberLogin: 'Логин мен сессияны сақтау',
+      signIn: 'Кіру', signingIn: 'Кіру орындалуда…', protectedWorkspace: 'Қорғалған әкімші кеңістігі',
+      invalidCredentials: 'Логин немесе құпиясөз дұрыс емес.', loginNotConfigured: 'Dokploy Environment ішінде WHATSPRO_USER және WHATSPRO_PASSWORD бапталмаған.',
+      loginRequired: 'Логин мен құпиясөзді толтырыңыз.', copyInstance: 'Instance ID көшіру',
       instanceExists: 'Бұл instance WhatsPro тізімінде бар', instanceMissing: 'WhatsPro тізімінде жоқ',
       statusConnected: 'connected', statusQr: 'qr_ready', statusOffline: 'offline'
     },
@@ -121,6 +132,7 @@
       connecting: 'Подключается', offline: 'Не подключён', unknown: 'Проверяется',
       whatsappSource: 'Сессия WhatsPro', sharedPrompt: 'Общий промпт',
       actions: 'Действия', viewDetails: 'Подробнее', edit: 'Изменить',
+      duplicate: 'Дублировать', duplicateSuffix: 'копия', duplicateRestaurant: 'Дублировать ресторан',
       restart: 'Перезапустить', reconnect: 'Подключить заново', qrCode: 'QR-код', delete: 'Удалить',
       general: 'Общее', whatsapp: 'WhatsApp', prompt: 'Промпт', health: 'Состояние',
       configuration: 'Конфигурация', back: 'Назад', address: 'Адрес', hours: 'Часы работы',
@@ -151,6 +163,12 @@
       deleted: 'Ресторан удалён', copyDone: 'Скопировано', virtualTenant: 'Найден в WhatsPro',
       menuFor: 'Действия ресторана', noPhone: 'Телефон не указан', notSet: 'Не указано',
       realTime: 'В реальном времени', signOutFailed: 'Не удалось выйти', sessionExpired: 'Сессия администратора истекла.',
+      loginEyebrow: 'БЕЗОПАСНЫЙ ВХОД', loginTitle: 'Вход в панель администратора',
+      loginDescription: 'Войдите с данными из Environment, чтобы управлять ресторанами и WhatsApp-сессиями.',
+      login: 'Логин', password: 'Пароль', rememberLogin: 'Сохранить логин и сессию',
+      signIn: 'Войти', signingIn: 'Вход…', protectedWorkspace: 'Защищённое пространство администратора',
+      invalidCredentials: 'Неверный логин или пароль.', loginNotConfigured: 'В Dokploy Environment не настроены WHATSPRO_USER и WHATSPRO_PASSWORD.',
+      loginRequired: 'Введите логин и пароль.', copyInstance: 'Скопировать Instance ID',
       instanceExists: 'Instance есть в списке WhatsPro', instanceMissing: 'Instance отсутствует в WhatsPro',
       statusConnected: 'connected', statusQr: 'qr_ready', statusOffline: 'offline'
     }
@@ -198,11 +216,67 @@
           var message = response.status === 401 ? t('sessionExpired') : (data.message || data.error || ('HTTP ' + response.status));
           var requestError = new Error(message);
           requestError.fields = data.fields || [];
+          requestError.code = data.error || '';
           requestError.status = response.status;
+          if (response.status === 401 && path !== '/api/whatspro/login' && path !== '/api/whatspro/session') showLogin();
           throw requestError;
         }
         return data;
       });
+    });
+  }
+  function setLoginError(message) {
+    var error = $('#login-error');
+    error.textContent = message || '';
+    error.hidden = !message;
+    $('#login-username').setAttribute('aria-invalid', message ? 'true' : 'false');
+    $('#login-password').setAttribute('aria-invalid', message ? 'true' : 'false');
+    if (message) {
+      $('#login-username').setAttribute('aria-describedby', 'login-error');
+      $('#login-password').setAttribute('aria-describedby', 'login-error');
+    } else {
+      $('#login-username').removeAttribute('aria-describedby');
+      $('#login-password').removeAttribute('aria-describedby');
+    }
+  }
+  function stopAppTimers() {
+    window.clearInterval(statusTimer);
+    window.clearInterval(instanceTimer);
+    statusTimer = 0;
+    instanceTimer = 0;
+  }
+  function showLogin() {
+    stopAppTimers();
+    appShell.hidden = true;
+    loginShell.hidden = false;
+    var remembered = localStorage.getItem('whatspro_remember_login') === '1';
+    $('#login-remember').checked = remembered;
+    $('#login-username').value = remembered ? (localStorage.getItem('whatspro_login_username') || '') : '';
+    $('#login-password').value = '';
+    window.setTimeout(function () { (remembered ? $('#login-password') : $('#login-username')).focus(); }, 0);
+  }
+  function startApp(username) {
+    authUsername = String(username || t('admin'));
+    loginShell.hidden = true;
+    appShell.hidden = false;
+    setLoginError('');
+    $('#profile-name').textContent = authUsername;
+    if (!appStarted) {
+      appStarted = true;
+      statusTimer = window.setInterval(syncLiveStatuses, 5000);
+      instanceTimer = window.setInterval(syncInstances, 15000);
+    } else {
+      if (!statusTimer) statusTimer = window.setInterval(syncLiveStatuses, 5000);
+      if (!instanceTimer) instanceTimer = window.setInterval(syncInstances, 15000);
+    }
+    return loadData(true);
+  }
+  function checkSession() {
+    return api('GET', '/api/whatspro/session').then(function (session) {
+      return startApp(session.username);
+    }).catch(function (error) {
+      if (error.status !== 401) setLoginError(error.message);
+      showLogin();
     });
   }
   function toast(title, message, bad) {
@@ -212,6 +286,26 @@
       escapeHtml(title) + '</strong><span>' + escapeHtml(message || '') + '</span></div>';
     $('#toast-region').appendChild(node);
     window.setTimeout(function () { node.remove(); }, bad ? 5200 : 3000);
+  }
+  function copyText(value) {
+    var text = String(value || '');
+    var write = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(text)
+      : new Promise(function (resolve, reject) {
+        var input = document.createElement('textarea');
+        input.value = text;
+        input.setAttribute('readonly', '');
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        try {
+          if (!document.execCommand('copy')) throw new Error('COPY_FAILED');
+          resolve();
+        } catch (error) { reject(error); }
+        finally { input.remove(); }
+      });
+    return write.then(function () { toast(t('copyDone'), text); });
   }
 
   function applyTheme() {
@@ -237,15 +331,24 @@
     $('#last-sync').textContent = formatSync();
     searchEl.placeholder = t('searchPlaceholder');
     $('#locale-button').setAttribute('aria-label', t('changeLanguage'));
+    $('#locale-button').title = t('changeLanguage');
     $('#locale-button span').textContent = locale === 'ru' ? 'РУС' : 'ҚАЗ';
-    $$('#locale-menu [data-locale]').forEach(function (button) { button.classList.toggle('active', button.dataset.locale === locale); });
-    $('#profile-name').textContent = t('admin');
+    $('#profile-name').textContent = authUsername || t('admin');
     $('#profile-role').textContent = t('owner');
     $('#profile-workspace').textContent = t('adminPanel');
     $('#profile-session').textContent = t('secureSession');
     $('#profile-refresh').textContent = t('refreshData');
     $('#profile-logout').textContent = t('logout');
     $('#refresh-button').setAttribute('aria-label', t('refresh'));
+    $('#login-platform-label').textContent = t('platform');
+    $('#login-eyebrow').textContent = t('loginEyebrow');
+    $('#login-title').textContent = t('loginTitle');
+    $('#login-description').textContent = t('loginDescription');
+    $('#login-username-label').textContent = t('login');
+    $('#login-password-label').textContent = t('password');
+    $('#login-remember-label').textContent = t('rememberLogin');
+    $('#login-submit-label').textContent = t('signIn');
+    $('#login-foot-label').textContent = t('protectedWorkspace');
     applyTheme();
   }
 
@@ -325,7 +428,8 @@
   }
   function actionButtons(tenant, sheet) {
     var html = '<button type="button" data-action="details" data-instance="' + attr(tenant.instanceId) + '">' + icon('eye') + '<span>' + t('viewDetails') + '</span></button>';
-    if (!tenant.virtual) html += '<button type="button" data-action="edit" data-instance="' + attr(tenant.instanceId) + '">' + icon('edit') + '<span>' + t('edit') + '</span></button>';
+    if (!tenant.virtual) html += '<button type="button" data-action="edit" data-instance="' + attr(tenant.instanceId) + '">' + icon('edit') + '<span>' + t('edit') + '</span></button>' +
+      '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>';
     html += (sheet ? '<div class="menu-rule"></div>' : '') +
       '<button type="button" data-action="restart" data-instance="' + attr(tenant.instanceId) + '">' + icon('restart') + '<span>' + t('restart') + '</span></button>' +
       '<button type="button" data-action="reconnect" data-instance="' + attr(tenant.instanceId) + '">' + icon('link') + '<span>' + t('reconnect') + '</span></button>' +
@@ -510,21 +614,31 @@
     return '<div class="modal-head"><div><h2>' + escapeHtml(title) + '</h2><p>' + escapeHtml(copy || '') +
       '</p></div><button class="icon-button modal-close" type="button" data-modal-close aria-label="' + attr(t('close')) + '">' + icon('close') + '</button></div>';
   }
-  function openModal(content, wide) {
-    previousFocus = document.activeElement;
-    modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal' + (wide ? ' wide' : '') +
-      '" role="dialog" aria-modal="true">' + content + '</section></div>';
-    var dialog = $('.modal', modalRoot);
+  function labelDialog(dialog) {
     var dialogTitle = $('.modal-head h2, .action-sheet-head strong', dialog);
     if (dialogTitle) {
       dialogTitle.id = 'active-modal-title';
       dialog.setAttribute('aria-labelledby', dialogTitle.id);
     }
+  }
+  function openModal(content, wide) {
+    previousFocus = document.activeElement;
+    modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal' + (wide ? ' wide' : '') +
+      '" role="dialog" aria-modal="true">' + content + '</section></div>';
+    var dialog = $('.modal', modalRoot);
+    labelDialog(dialog);
     document.body.style.overflow = 'hidden';
     window.setTimeout(function () {
       var target = $('[autofocus]', modalRoot) || $('button, input, textarea', modalRoot);
       if (target) target.focus();
     }, 20);
+  }
+  function replaceModal(content, wide) {
+    var dialog = $('.modal', modalRoot);
+    if (!dialog) return openModal(content, wide);
+    dialog.classList.toggle('wide', Boolean(wide));
+    dialog.innerHTML = content;
+    labelDialog(dialog);
   }
   function closeModal() {
     window.clearInterval(qrTimer);
@@ -597,40 +711,41 @@
       startNow: form.startNow !== false
     };
   }
-  function openWizard(existing) {
+  function openWizard(existing, options) {
     var step = 0;
+    var cloneSourceId = String((options && options.cloneSourceId) || '');
     var data = existing ? {
       brand: existing.brand || '', address: existing.address || '', whatsappPhone: existing.whatsappPhone || '',
       workHours: existing.workHours || defaults.workHours, domain: existing.domain || '',
       systemPrompt: existing.systemPrompt || '', startNow: existing.startNow !== false
     } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '', startNow: true };
-    var editingId = existing && existing.instanceId;
+    var editingId = !cloneSourceId && existing && existing.instanceId;
     function draw() {
       var body = '';
-      if (step === 0) body = '<div class="form-grid"><div class="field full"><label>' + t('restaurantName') +
-        '</label><input name="brand" aria-label="' + attr(t('restaurantName')) + '" value="' + attr(data.brand) + '" autofocus autocomplete="organization"><small>' + t('nameHint') +
-        '</small></div><div class="field full"><label>' + t('address') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><input name="address" aria-label="' + attr(t('address')) + '" value="' + attr(data.address) + '" autocomplete="street-address"></div></div>';
-      if (step === 1) body = '<div class="form-grid"><div class="field full"><label>' + t('phone') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><input name="whatsappPhone" aria-label="' + attr(t('phone')) + '" value="' + attr(data.whatsappPhone) + '" inputmode="tel" placeholder="+7 700 000 00 00"><small>' + t('phoneHint') +
-        '</small></div><div class="field"><label>' + t('hours') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><input name="workHours" aria-label="' + attr(t('hours')) + '" value="' + attr(data.workHours) + '" placeholder="09:00 - 23:00"><small>' + t('hoursHint') +
-        '</small></div><div class="field"><label>' + t('domain') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><input name="domain" aria-label="' + attr(t('domain')) + '" value="' + attr(data.domain) + '" placeholder="' + attr((slugify(data.brand) || 'restaurant') + (defaults.domainSuffix ? '.' + defaults.domainSuffix : '.kz')) +
+      if (step === 0) body = '<div class="form-grid"><div class="field full"><label for="wizard-brand">' + t('restaurantName') +
+        '</label><input id="wizard-brand" name="brand" value="' + attr(data.brand) + '" autofocus autocomplete="organization"><small>' + t('nameHint') +
+        '</small></div><div class="field full"><label for="wizard-address">' + t('address') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><input id="wizard-address" name="address" value="' + attr(data.address) + '" autocomplete="street-address"></div></div>';
+      if (step === 1) body = '<div class="form-grid"><div class="field full"><label for="wizard-phone">' + t('phone') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><input id="wizard-phone" name="whatsappPhone" value="' + attr(data.whatsappPhone) + '" inputmode="tel" placeholder="+7 700 000 00 00"><small>' + t('phoneHint') +
+        '</small></div><div class="field"><label for="wizard-hours">' + t('hours') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><input id="wizard-hours" name="workHours" value="' + attr(data.workHours) + '" placeholder="09:00 - 23:00"><small>' + t('hoursHint') +
+        '</small></div><div class="field"><label for="wizard-domain">' + t('domain') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><input id="wizard-domain" name="domain" value="' + attr(data.domain) + '" placeholder="' + attr((slugify(data.brand) || 'restaurant') + (defaults.domainSuffix ? '.' + defaults.domainSuffix : '.kz')) +
         '"><small>' + t('domainHint') + '</small></div></div>';
-      if (step === 2) body = '<div class="field"><label>' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><textarea name="systemPrompt" aria-label="' + attr(t('systemPrompt')) + '" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
+      if (step === 2) body = '<div class="field"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
         '</textarea><small>' + t('promptHint') + '</small></div>';
       if (step === 3) body = '<div class="review-grid">' +
         [['restaurantName', data.brand], ['instance', editingId || slugify(data.brand)], ['phone', data.whatsappPhone || '—'],
           ['hours', data.workHours || '—'], ['domain', data.domain || '—'], ['address', data.address || '—'], ['prompt', data.systemPrompt || t('sharedPrompt')]]
           .map(function (row) { return '<div class="review-row"><span>' + t(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>'; }).join('') +
-        '</div><label class="checkbox"><input type="checkbox" name="startNow" ' + (data.startNow ? 'checked' : '') + '><span>' + t('startImmediately') + '</span></label>';
+        '</div><label class="checkbox" for="wizard-start"><input id="wizard-start" type="checkbox" name="startNow" ' + (data.startNow ? 'checked' : '') + '><span>' + t('startImmediately') + '</span></label>';
       var footer = '<div class="modal-footer"><button class="button ghost" type="button" ' +
         (step ? 'data-wizard-back' : 'data-modal-close') + '>' + (step ? t('back') : t('cancel')) +
         '</button><span class="spacer"></span><button class="button primary" type="button" data-wizard-next>' +
-        (step === 3 ? (editingId ? t('save') : t('createRestaurant')) : t('continue')) + '</button></div>';
-      openModal(modalHeader(editingId ? t('editRestaurant') : t('newRestaurant'), t('fourSteps')) + wizardSteps(step) +
+          (step === 3 ? (editingId ? t('save') : (cloneSourceId ? t('duplicate') : t('createRestaurant'))) : t('continue')) + '</button></div>';
+      replaceModal(modalHeader(editingId ? t('editRestaurant') : (cloneSourceId ? t('duplicateRestaurant') : t('newRestaurant')), t('fourSteps')) + wizardSteps(step) +
         '<div class="modal-body" data-wizard-body>' + body + '</div>' + footer);
     }
     function capture() {
@@ -656,7 +771,7 @@
       if (step < 3) { step += 1; draw(); return; }
       next.disabled = true;
       if (editingId) saveRestaurant(editingId, data);
-      else createRestaurant(data);
+      else createRestaurant(data, cloneSourceId);
     };
     draw();
   }
@@ -666,12 +781,12 @@
       return found ? { success: true } : api('POST', '/api/wa/instances', { instanceId: instanceId, label: label });
     });
   }
-  function createRestaurant(data) {
+  function createRestaurant(data, cloneSourceId) {
     var generatedId = slugify(data.brand);
     var progress = 0;
     function drawProgress(error, done) {
       var steps = [t('savingRecord'), t('syncingInstance'), t('startingWhatsapp')];
-      openModal(modalHeader(t('creating') + ' ' + data.brand, t('creatingCopy')) +
+      replaceModal(modalHeader(t('creating') + ' ' + data.brand, t('creatingCopy')) +
         '<div class="modal-body"><div class="progress-head"><strong>' + escapeHtml(done ? t('ready') : steps[Math.min(progress, 2)]) +
         '</strong><span>' + (done ? '100%' : Math.round((progress / 3) * 100) + '%') + '</span></div><div class="progress-track"><i style="width:' +
         (done ? 100 : Math.round((progress / 3) * 100)) + '%"></i></div><div class="provision-list">' +
@@ -690,7 +805,10 @@
       systemPrompt: data.systemPrompt || '', active: true
     };
     drawProgress();
-    api('POST', '/api/wa/tenants', payload).then(function (result) {
+    var createPath = cloneSourceId
+      ? '/api/wa/tenants/' + encodeURIComponent(cloneSourceId) + '/clone'
+      : '/api/wa/tenants';
+    api('POST', createPath, payload).then(function (result) {
       generatedId = result.instanceId || generatedId;
       progress = 1; drawProgress();
       return ensureInstance(generatedId, data.brand);
@@ -721,12 +839,28 @@
     var detail = settings.get(instanceId) || {};
     openWizard(Object.assign({}, detail, { instanceId: instanceId, brand: tenant.brand, startNow: true }));
   }
+  function openDuplicate(instanceId) {
+    var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
+    if (!tenant || tenant.virtual) return;
+    var detail = settings.get(instanceId) || {};
+    openWizard({
+      brand: (tenant.brand || instanceId) + ' — ' + t('duplicateSuffix'),
+      address: detail.address || '',
+      whatsappPhone: '',
+      workHours: detail.workHours || defaults.workHours,
+      domain: '',
+      systemPrompt: detail.systemPrompt || '',
+      startNow: true
+    }, { cloneSourceId: instanceId });
+  }
   function openDelete(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
     if (!tenant || tenant.virtual) return;
     openModal(modalHeader(t('deleteTitle'), t('deleteCopy')) +
-      '<div class="modal-body"><p class="confirm-copy">' + t('typeInstance') + ' <strong>' + escapeHtml(instanceId) +
-      '</strong></p><div class="field"><input name="confirm" aria-label="' + attr(t('instance')) + '" autocomplete="off" placeholder="' + attr(instanceId) +
+      '<div class="modal-body"><p class="confirm-copy">' + t('typeInstance') + '<span class="confirm-token"><strong>' + escapeHtml(instanceId) +
+      '</strong><button class="copy-inline" type="button" data-copy-value="' + attr(instanceId) + '" aria-label="' + attr(t('copyInstance')) +
+      '" title="' + attr(t('copyInstance')) + '">' + icon('copy') + '</button></span></p><div class="field"><label class="sr-only" for="delete-confirm-input">' +
+      escapeHtml(t('instance')) + '</label><input id="delete-confirm-input" name="confirm" autocomplete="off" placeholder="' + attr(instanceId) +
       '" autofocus></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
       '</button><span class="spacer"></span><button class="button danger" data-delete-confirm data-instance="' + attr(instanceId) +
       '" disabled>' + icon('trash') + t('deleteForever') + '</button></div>');
@@ -770,6 +904,11 @@
   }
 
   document.addEventListener('click', function (event) {
+    var copy = event.target.closest('[data-copy-value]');
+    if (copy) {
+      copyText(copy.dataset.copyValue).catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      return;
+    }
     var nav = event.target.closest('[data-view]');
     if (nav) { changeView(nav.dataset.view); return; }
     var link = event.target.closest('[data-view-link]');
@@ -787,6 +926,7 @@
       } else if (name === 'details') openDetails(instanceId);
       else if (name === 'qr') { closeModal(); window.setTimeout(function () { openQrModal(instanceId); }, 0); }
       else if (name === 'edit') { closeModal(); window.setTimeout(function () { openEdit(instanceId); }, 0); }
+      else if (name === 'duplicate') { closeModal(); window.setTimeout(function () { openDuplicate(instanceId); }, 0); }
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
       else if (name === 'delete') { closeModal(); window.setTimeout(function () { openDelete(instanceId); }, 0); }
       else if (name === 'qr-refresh') {
@@ -832,7 +972,7 @@
     }
     if (event.key === 'Escape') {
       if (modalRoot.innerHTML) closeModal();
-      else { openMenuId = ''; $('#locale-menu').hidden = true; $('#profile-menu').hidden = true; closeMobileNav(); render(); }
+      else { openMenuId = ''; $('#profile-menu').hidden = true; closeMobileNav(); render(); }
       return;
     }
     if (event.key === 'Tab' && modalRoot.innerHTML) {
@@ -850,18 +990,10 @@
   });
   $('#locale-button').addEventListener('click', function (event) {
     event.stopPropagation();
-    var menu = $('#locale-menu');
-    menu.hidden = !menu.hidden;
-    $('#locale-button').setAttribute('aria-expanded', String(!menu.hidden));
-    $('#profile-menu').hidden = true;
-  });
-  $('#locale-menu').addEventListener('click', function (event) {
-    var button = event.target.closest('[data-locale]');
-    if (!button) return;
-    locale = button.dataset.locale === 'ru' ? 'ru' : 'kk';
+    locale = locale === 'kk' ? 'ru' : 'kk';
     localStorage.setItem('whatspro_locale', locale);
-    $('#locale-menu').hidden = true;
     $('#locale-button').setAttribute('aria-expanded', 'false');
+    $('#profile-menu').hidden = true;
     applyStaticTranslations();
     render();
   });
@@ -870,18 +1002,16 @@
     var menu = $('#profile-menu');
     menu.hidden = !menu.hidden;
     $('#profile-button').setAttribute('aria-expanded', String(!menu.hidden));
-    $('#locale-menu').hidden = true;
   });
   document.addEventListener('click', function (event) {
     if (!event.target.closest('.profile-wrap')) { $('#profile-menu').hidden = true; $('#profile-button').setAttribute('aria-expanded', 'false'); }
-    if (!event.target.closest('.locale-wrap')) { $('#locale-menu').hidden = true; $('#locale-button').setAttribute('aria-expanded', 'false'); }
   });
   $('#profile-menu').addEventListener('click', function (event) {
     var action = event.target.closest('[data-profile-action]');
     if (!action) return;
     if (action.dataset.profileAction === 'refresh') loadData();
     if (action.dataset.profileAction === 'logout') {
-      api('POST', '/api/whatspro/logout', {}).then(function () { window.location.href = '/'; })
+      api('POST', '/api/whatspro/logout', {}).then(function () { authUsername = ''; showLogin(); })
         .catch(function (error) { toast(t('signOutFailed'), error.message, true); });
     }
   });
@@ -894,9 +1024,45 @@
   $('#mobile-scrim').addEventListener('click', closeMobileNav);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) syncLiveStatuses(); });
 
+  loginForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var username = $('#login-username').value.trim();
+    var password = $('#login-password').value;
+    var remember = $('#login-remember').checked;
+    if (!username || !password) {
+      setLoginError(t('loginRequired'));
+      (!username ? $('#login-username') : $('#login-password')).focus();
+      return;
+    }
+    setLoginError('');
+    var submit = $('#login-submit');
+    submit.disabled = true;
+    $('#login-submit-label').textContent = t('signingIn');
+    api('POST', '/api/whatspro/login', { username: username, password: password, remember: remember })
+      .then(function (result) {
+        if (remember) {
+          localStorage.setItem('whatspro_remember_login', '1');
+          localStorage.setItem('whatspro_login_username', username);
+        } else {
+          localStorage.removeItem('whatspro_remember_login');
+          localStorage.removeItem('whatspro_login_username');
+        }
+        $('#login-password').value = '';
+        return startApp(result.username || username);
+      })
+      .catch(function (error) {
+        var message = error.code === 'LOGIN_NOT_CONFIGURED' ? t('loginNotConfigured')
+          : (error.code === 'INVALID_CREDENTIALS' ? t('invalidCredentials') : error.message);
+        setLoginError(message);
+        $('#login-password').select();
+      })
+      .finally(function () {
+        submit.disabled = false;
+        $('#login-submit-label').textContent = t('signIn');
+      });
+  });
+
   applyStaticTranslations();
-  loadData(true);
-  statusTimer = window.setInterval(syncLiveStatuses, 5000);
-  instanceTimer = window.setInterval(syncInstances, 15000);
+  checkSession();
   window.setInterval(updateChrome, 10000);
 }());

@@ -8,7 +8,53 @@
   <link rel="stylesheet" href="/tenants.css">
 </head>
 <body>
-  <div class="app-shell" id="app-shell">
+  <main class="login-shell" id="login-shell" hidden>
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="login-brand">
+        <span class="login-brand-mark"><svg aria-hidden="true"><use href="#i-store"></use></svg></span>
+        <div>
+          <strong>WhatsPro</strong>
+          <span id="login-platform-label">Ресторан платформасы</span>
+        </div>
+      </div>
+      <div class="login-copy">
+        <span class="login-eyebrow" id="login-eyebrow">ҚАУІПСІЗ КІРУ</span>
+        <h1 id="login-title">Әкімші панеліне кіру</h1>
+        <p id="login-description">Ресторандар мен WhatsApp сессияларын басқару үшін Environment ішінде сақталған деректермен кіріңіз.</p>
+      </div>
+      <form class="login-form" id="login-form" novalidate>
+        <div class="field">
+          <label for="login-username" id="login-username-label">Логин</label>
+          <div class="input-with-icon">
+            <svg aria-hidden="true"><use href="#i-user"></use></svg>
+            <input id="login-username" name="username" type="text" autocomplete="username" required aria-required="true">
+          </div>
+        </div>
+        <div class="field">
+          <label for="login-password" id="login-password-label">Құпиясөз</label>
+          <div class="input-with-icon">
+            <svg aria-hidden="true"><use href="#i-lock"></use></svg>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" required aria-required="true">
+          </div>
+        </div>
+        <label class="checkbox login-remember" for="login-remember">
+          <input id="login-remember" name="remember" type="checkbox">
+          <span id="login-remember-label">Логин мен сессияны сақтау</span>
+        </label>
+        <p class="login-error" id="login-error" role="alert" aria-live="assertive" hidden></p>
+        <button class="button primary login-submit" id="login-submit" type="submit">
+          <span id="login-submit-label">Кіру</span>
+          <svg aria-hidden="true"><use href="#i-arrow"></use></svg>
+        </button>
+      </form>
+      <div class="login-foot">
+        <span class="health-mark"><i></i></span>
+        <span id="login-foot-label">Қорғалған әкімші кеңістігі</span>
+      </div>
+    </section>
+  </main>
+
+  <div class="app-shell" id="app-shell" hidden>
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
         <button class="icon-button menu-toggle" id="sidebar-toggle" type="button" aria-label="Бүйірлік панельді жинау">
@@ -59,12 +105,8 @@
         <div class="topbar-actions">
           <div class="locale-wrap">
           <button class="text-button locale-button" id="locale-button" type="button" aria-label="Тілді ауыстыру" aria-expanded="false">
-            <span>ҚАЗ</span><svg aria-hidden="true"><use href="#i-chevron"></use></svg>
+            <span>ҚАЗ</span>
           </button>
-          <div class="locale-menu popover" id="locale-menu" hidden>
-            <button type="button" data-locale="kk"><strong>ҚАЗ</strong><span>Қазақша</span></button>
-            <button type="button" data-locale="ru"><strong>РУС</strong><span>Русский</span></button>
-          </div>
           </div>
           <button class="icon-button" id="refresh-button" type="button" aria-label="Деректерді жаңарту">
             <svg aria-hidden="true"><use href="#i-refresh"></use></svg>
@@ -127,6 +169,8 @@
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5H5v11h3"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3ZM19 16l.6 2.4L22 19l-2.4.6L19 22l-.6-2.4L16 19l2.4-.6L19 16Z"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
   </svg>
   <script src="/tenants.js"></script>
 </body>

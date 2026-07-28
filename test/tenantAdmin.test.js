@@ -75,10 +75,13 @@ test('with no domain suffix configured the domain is left for a person to fill',
 test('required fields are named back so the form can highlight them', () => {
   const fields = admin.operatorFields({ brand: '', whatsappPhone: '123' });
   const errors = admin.validationErrors(fields);
-  assert.deepEqual(errors.sort(), ['brand', 'domain', 'instanceId', 'whatsappPhone']);
+  assert.deepEqual(errors.sort(), ['brand', 'instanceId', 'whatsappPhone']);
   assert.deepEqual(admin.validationErrors(admin.operatorFields({
     brand: 'Prestige', whatsappPhone: '77015550101', instanceId: 'prestige', domain: 'prestige.kz'
   })), []);
+  assert.deepEqual(admin.validationErrors(admin.operatorFields({
+    brand: 'QR арқылы қосылатын ресторан', whatsappPhone: '', instanceId: 'qr-restaurant', domain: ''
+  })), [], 'phone and domain are optional because WhatsApp is attached by QR and a custom host is not required');
 });
 
 test('every generated secret is unique and long enough to be one', () => {
@@ -99,6 +102,51 @@ test('a restaurant gets its own set of secrets, never a copy of anyone else\'s',
   }
   assert.equal(first.whatspro_send_url, 'https://whatspro.bekaba.com/api/send');
   assert.equal(first.whatspro_presence_url, 'https://whatspro.bekaba.com/api/presence');
+});
+
+test('cloning copies business settings but derives an isolated host, session and secrets', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  const originalCreate = tenantStore.createRow;
+  const previousSuffix = process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX;
+  let stored;
+  tenantStore.findRow = async instanceId => instanceId === 'source'
+    ? {
+        instance_id: 'source',
+        brand: 'Source',
+        whatsapp_phone: '+77015550101',
+        domain: 'https://source.bekaba.com',
+        address: 'Abay 1',
+        work_hours: '09:00 - 23:00',
+        prompt_mode: 'custom',
+        system_prompt: 'SOURCE PROMPT',
+        whatspro_api_token: 'source-api-secret',
+        webhook_secret: 'source-webhook-secret'
+      }
+    : null;
+  tenantStore.createRow = async row => { stored = row; return row; };
+  process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX = 'bekaba.com';
+  t.after(() => {
+    tenantStore.findRow = originalFind;
+    tenantStore.createRow = originalCreate;
+    if (previousSuffix === undefined) delete process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX;
+    else process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX = previousSuffix;
+  });
+
+  await tenantAdmin.cloneTenant('source', {
+    instanceId: 'source-copy',
+    brand: 'Source copy',
+    whatsappPhone: '',
+    domain: '',
+    systemPrompt: 'SOURCE PROMPT'
+  }, { publicBase: 'https://whatspro.bekaba.com', sharedPrompt: 'SHARED' });
+
+  assert.equal(stored.instance_id, 'source-copy');
+  assert.equal(stored.whatsapp_phone, '', 'a WhatsApp number/session is never shared by a clone');
+  assert.equal(stored.domain, 'https://source-copy.bekaba.com');
+  assert.equal(stored.address, 'Abay 1');
+  assert.notEqual(stored.whatspro_api_token, 'source-api-secret');
+  assert.notEqual(stored.webhook_secret, 'source-webhook-secret');
 });
 
 test('shared mode takes the shared text and custom mode keeps its own', () => {

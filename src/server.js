@@ -39,6 +39,7 @@ const CHAT_HTML_PATH = path.join(PUBLIC_DIR, 'chat.html');
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
 const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSPRO_API_TOKEN || crypto.randomBytes(32).toString('hex');
+const MIN_ADMIN_PASSWORD_LENGTH = 10;
 const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
 const CHAT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const loginAttempts = new Map();
@@ -786,7 +787,7 @@ app.get('/api/whatspro/session', async (req, res) => {
 app.post('/api/whatspro/login', (req, res) => {
   const configuredUser = String(process.env.WHATSPRO_USER || 'admin');
   const configuredPassword = String(process.env.WHATSPRO_PASSWORD || '');
-  if (configuredPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(configuredPassword.toLowerCase())) {
+  if (configuredPassword.length < MIN_ADMIN_PASSWORD_LENGTH || ['change-me', 'password', 'admin123'].includes(configuredPassword.toLowerCase())) {
     return res.status(503).json({ error: 'LOGIN_NOT_CONFIGURED' });
   }
   const username = String(req.body?.username || '');
@@ -812,7 +813,10 @@ app.post('/api/whatspro/login', (req, res) => {
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
   }
   loginAttempts.delete(attemptKey);
-  res.cookie('whatspro_session', signSession(username), { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 30 * 86400 * 1000 });
+  const remember = req.body?.remember === true;
+  const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' };
+  if (remember) cookieOptions.maxAge = 30 * 86400 * 1000;
+  res.cookie('whatspro_session', signSession(username), cookieOptions);
   res.json({ success: true, username });
 });
 
@@ -1591,8 +1595,8 @@ async function boot() {
     ].filter(Boolean);
     if (missing.length) console.warn(`[SECURITY] Missing recommended production settings: ${missing.join(', ')}`);
     const weakPassword = String(process.env.WHATSPRO_PASSWORD || '');
-    if (weakPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(weakPassword.toLowerCase())) {
-      console.warn('[SECURITY] WHATSPRO_PASSWORD should be at least 12 characters and not a known default');
+    if (weakPassword.length < MIN_ADMIN_PASSWORD_LENGTH || ['change-me', 'password', 'admin123'].includes(weakPassword.toLowerCase())) {
+      console.warn(`[SECURITY] WHATSPRO_PASSWORD should be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters and not a known default`);
     }
     if (SESSION_SECRET.length < 32 || String(process.env.WHATSPRO_API_TOKEN || '').length < 32) {
       console.warn('[SECURITY] Production session and API secrets should be at least 32 characters');

@@ -125,8 +125,7 @@ function validationErrors(fields) {
   if (!isValidInstanceId(fields.instance_id)) errors.push('instanceId');
   if (!fields.brand) errors.push('brand');
   const digits = fields.whatsapp_phone.replace(/\D/g, '');
-  if (digits.length < 10 || digits.length > 15) errors.push('whatsappPhone');
-  if (!fields.domain) errors.push('domain');
+  if (digits && (digits.length < 10 || digits.length > 15)) errors.push('whatsappPhone');
   return errors;
 }
 
@@ -233,7 +232,9 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
     brand: input.brand || `${source.brand} (көшірме)`,
     whatsappPhone: input.whatsappPhone,
     adminPhone: input.adminPhone || source.admin_phone,
-    domain: input.domain || source.domain,
+    // A clone must never inherit the source host. Leaving it blank lets the
+    // normal tenant defaults derive a fresh domain from the new instance id.
+    domain: input.domain,
     address: input.address || source.address,
     workHours: input.workHours || source.work_hours,
     promptMode: input.promptMode || source.prompt_mode,

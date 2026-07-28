@@ -43,6 +43,7 @@ test('chat routes and static assets serve the new operator UI', async t => {
   const invalidTenant = await fetch(base + '/chat.html?instance=%28bad%2Ceq%2Cfilter%29');
   assert.equal(invalidTenant.status, 400);
 
+  const previousUser = process.env.WHATSPRO_USER;
   const previousPassword = process.env.WHATSPRO_PASSWORD;
   delete process.env.WHATSPRO_PASSWORD;
   const defaultLogin = await fetch(base + '/api/whatspro/login', {
@@ -50,6 +51,25 @@ test('chat routes and static assets serve the new operator UI', async t => {
     body: JSON.stringify({ username: 'admin', password: 'change-me' })
   });
   assert.equal(defaultLogin.status, 503);
+
+  process.env.WHATSPRO_USER = 'qa-admin';
+  process.env.WHATSPRO_PASSWORD = 'SafePass10';
+  const sessionLogin = await fetch(base + '/api/whatspro/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'qa-admin', password: 'SafePass10', remember: false })
+  });
+  assert.equal(sessionLogin.status, 200);
+  assert.doesNotMatch(sessionLogin.headers.get('set-cookie') || '', /Max-Age=/i, 'unchecked remember uses a browser-session cookie');
+
+  const rememberedLogin = await fetch(base + '/api/whatspro/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'qa-admin', password: 'SafePass10', remember: true })
+  });
+  assert.equal(rememberedLogin.status, 200);
+  assert.match(rememberedLogin.headers.get('set-cookie') || '', /Max-Age=2592000/i, 'checked remember keeps the admin session for 30 days');
+
+  if (previousUser == null) delete process.env.WHATSPRO_USER;
+  else process.env.WHATSPRO_USER = previousUser;
   if (previousPassword == null) delete process.env.WHATSPRO_PASSWORD;
   else process.env.WHATSPRO_PASSWORD = previousPassword;
 
@@ -70,6 +90,19 @@ test('chat routes and static assets serve the new operator UI', async t => {
     body: JSON.stringify({ instanceId: 'prestige', phone: '77001234567', media: { base64: 'not base64!' } })
   });
   assert.equal(badMedia.status, 400);
+});
+
+test('tenant shell contains an accessible responsive login gate', async () => {
+  const markup = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'tenants.html'), 'utf8');
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'tenants.js'), 'utf8');
+  assert.match(markup, /<form class="login-form" id="login-form" novalidate>/);
+  assert.match(markup, /label for="login-username"/);
+  assert.match(markup, /label for="login-password"/);
+  assert.match(markup, /autocomplete="username"/);
+  assert.match(markup, /autocomplete="current-password"/);
+  assert.match(markup, /id="login-error" role="alert" aria-live="assertive"/);
+  assert.match(source, /remember: remember/);
+  assert.doesNotMatch(source, /localStorage\.setItem\([^,]*password/i, 'the remember option must never persist a plaintext password');
 });
 
 test('chat audio hydration delegates playback and ranges to the native media URL', async () => {
@@ -105,6 +138,22 @@ test('chat media route delegates to the compliant file handler', async () => {
   const route = source.slice(source.indexOf("app.get('/api/chat/media/:instanceId/:messageId'"), source.indexOf("app.post('/api/chat/send/:instanceId/:phone'"));
   assert.match(route, /requireChatMediaAuth/);
   assert.match(route, /serveChatMedia\(req, res\)/);
+});
+
+test('tenant QR and automatic reconnect use the same WhatsPro instance manager', async () => {
+  const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const startRoute = source.slice(source.indexOf("app.post('/api/wa/start'"), source.indexOf("app.get('/api/wa/status/:instanceId'"));
+  assert.match(startRoute, /await saveInstance\(instanceId, label\)/, 'QR starts from the persisted shared instance');
+  assert.match(startRoute, /await startWhatsAppInstance\(instanceId\)/);
+  assert.match(startRoute, /await getInstanceStatus\(instanceId\)/, 'the QR returned to the tenant panel is the manager QR');
+
+  const statusRoute = source.slice(source.indexOf("app.get('/api/wa/status/:instanceId'"), source.indexOf("app.post('/api/wa/instances'"));
+  assert.match(statusRoute, /status\?\.hasStoredSession/);
+  assert.match(statusRoute, /await startWhatsAppInstance\(instanceId\)/, 'a stored session automatically reconnects when status is read');
+
+  const boot = source.slice(source.indexOf('async function boot()'), source.indexOf('if (require.main === module)'));
+  assert.match(boot, /const instances = await listInstances\(\)/);
+  assert.match(boot, /await startWhatsAppInstance\(inst\.instanceId\)/, 'all persisted instances restore after a deployment');
 });
 
 test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings', async () => {

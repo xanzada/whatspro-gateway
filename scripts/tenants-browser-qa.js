@@ -47,6 +47,7 @@ const server = http.createServer((request, response) => {
     let tenantCreateCalls = 0;
     let instanceCreateCalls = 0;
     let lastStartInstance = '';
+    let authenticated = false;
     const extraInstances = [];
 
     page.on('console', message => {
@@ -58,6 +59,19 @@ const server = http.createServer((request, response) => {
       const url = new URL(request.url());
       if (!url.pathname.startsWith('/api/')) return request.continue();
       const json = body => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname === '/api/whatspro/session') {
+        return authenticated
+          ? json({ authenticated: true, username: 'qa-admin' })
+          : request.respond({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'AUTH_REQUIRED' }) });
+      }
+      if (url.pathname === '/api/whatspro/login') {
+        const body = JSON.parse(request.postData() || '{}');
+        if (body.username !== 'qa-admin' || body.password !== 'qa-password') {
+          return request.respond({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'INVALID_CREDENTIALS' }) });
+        }
+        authenticated = true;
+        return json({ success: true, username: body.username });
+      }
       if (url.pathname === '/api/wa/tenants' && request.method() === 'POST') {
         tenantCreateCalls += 1;
         return request.respond({ status: 201, contentType: 'application/json', body: JSON.stringify({ success: true, instanceId: 'qa-cafe' }) });
@@ -108,11 +122,17 @@ const server = http.createServer((request, response) => {
 
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
     await page.goto(`${baseUrl}/tenants.html`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('#login-shell:not([hidden])');
+    await page.screenshot({ path: path.join(outputDir, 'tenants-login-desktop.png'), fullPage: true });
+    await page.type('#login-username', 'qa-admin');
+    await page.type('#login-password', 'qa-password');
+    await page.click('#login-remember');
+    await page.click('#login-submit');
     await page.waitForSelector('tbody tr');
 
     const initial = await page.evaluate(() => ({
       lang: document.documentElement.lang,
-      title: document.querySelector('h1')?.textContent,
+      title: document.querySelector('#view h1')?.textContent,
       connected: document.querySelector('#stat-connected')?.textContent,
       nav: Array.from(document.querySelectorAll('.main-nav button')).map(node => node.textContent.trim()),
       statuses: Array.from(document.querySelectorAll('[data-live-status]')).map(node => node.textContent.trim())
@@ -128,17 +148,25 @@ const server = http.createServer((request, response) => {
     await page.click('[data-wizard-next]');
     await page.click('[data-wizard-next]');
     await page.click('[data-wizard-next]');
+    await page.evaluate(() => { window.__creationModal = document.querySelector('.modal'); });
     await page.click('[data-wizard-next]');
     await page.waitForFunction(() => document.querySelector('.success-panel'));
+    const stableCreationModal = await page.evaluate(() => window.__creationModal === document.querySelector('.modal'));
+    if (!stableCreationModal) throw new Error('CREATE_MODAL_WAS_REMOUNTED');
     if (tenantCreateCalls !== 1 || instanceCreateCalls !== 1 || lastStartInstance !== 'qa-cafe') {
       throw new Error(`CREATE_SYNC:${JSON.stringify({ tenantCreateCalls, instanceCreateCalls, lastStartInstance })}`);
     }
     await page.click('[data-modal-close]');
 
     await page.click('#locale-button');
-    await page.click('[data-locale="ru"]');
-    const russianTitle = await page.$eval('h1', node => node.textContent);
+    const russianTitle = await page.$eval('#view h1', node => node.textContent);
     if (russianTitle !== 'Панель управления') throw new Error(`RUSSIAN_SWITCH:${russianTitle}`);
+
+    await page.click('tbody tr:first-child [data-action="menu"]');
+    await page.waitForSelector('.action-menu [data-action="duplicate"]');
+    await page.click('.action-menu [data-action="duplicate"]');
+    await page.waitForFunction(() => document.querySelector('.modal-head h2')?.textContent.includes('Дублировать'));
+    await page.click('[data-modal-close]');
 
     await page.click('#focus-mode');
     const lightTheme = await page.$eval('html', node => node.dataset.theme);
@@ -169,8 +197,29 @@ const server = http.createServer((request, response) => {
     if (!startCalls) throw new Error('QR_DID_NOT_START_SHARED_INSTANCE');
     await page.screenshot({ path: path.join(outputDir, 'tenants-mobile-qr.png'), fullPage: true });
 
-    if (consoleErrors.length || pageErrors.length) throw new Error(`BROWSER_ERRORS:${JSON.stringify({ consoleErrors, pageErrors })}`);
-    console.log(JSON.stringify({ ok: true, outputDir, initial, mobile, startCalls, tenantCreateCalls, instanceCreateCalls }, null, 2));
+    authenticated = false;
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.waitForSelector('#login-shell:not([hidden])');
+    const mobileLogin = await page.evaluate(() => {
+      const card = document.querySelector('.login-card').getBoundingClientRect();
+      return {
+        visible: !document.querySelector('#login-shell').hidden,
+        cardLeft: Math.round(card.left),
+        cardRight: Math.round(card.right),
+        viewport: window.innerWidth,
+        overflow: document.documentElement.scrollWidth - window.innerWidth
+      };
+    });
+    if (!mobileLogin.visible || mobileLogin.cardLeft < 0 || mobileLogin.cardRight > mobileLogin.viewport || mobileLogin.overflow > 0) {
+      throw new Error(`MOBILE_LOGIN:${JSON.stringify(mobileLogin)}`);
+    }
+    await page.screenshot({ path: path.join(outputDir, 'tenants-login-mobile.png'), fullPage: true });
+
+    const unexpectedConsoleErrors = consoleErrors.filter(message => !/401\s*\(Unauthorized\)/i.test(message));
+    if (unexpectedConsoleErrors.length || pageErrors.length) {
+      throw new Error(`BROWSER_ERRORS:${JSON.stringify({ consoleErrors: unexpectedConsoleErrors, pageErrors })}`);
+    }
+    console.log(JSON.stringify({ ok: true, outputDir, initial, mobile, mobileLogin, stableCreationModal, startCalls, tenantCreateCalls, instanceCreateCalls }, null, 2));
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));
