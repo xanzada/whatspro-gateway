@@ -3,8 +3,8 @@
 > **Stack:** express | none | unknown | javascript
 
 > 44 routes (44 inferred) | 0 models | 0 components | 0 lib files | 46 env vars | 1 middleware
-> **Token savings:** this file is ~0 tokens. Without it, AI exploration would cost ~0 tokens. **Saves ~0 tokens per conversation.**
-> **Last scanned:** 2026-07-28 18:28 — re-run after significant changes
+> **Token savings:** this file is ~2 500 tokens. Without it, AI exploration would cost ~35 700 tokens. **Saves ~33 200 tokens per conversation.**
+> **Last scanned:** 2026-07-28 20:19 — re-run after significant changes
 
 ---
 
