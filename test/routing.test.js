@@ -14,6 +14,8 @@ test('chat routes and static assets serve the new operator UI', async t => {
 
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
+  const favicon = await fetch(base + '/favicon.ico');
+  assert.equal(favicon.status, 204);
 
   for (const route of ['/chat.html?instance=prestige', '/chat?instance=prestige']) {
     const response = await fetch(base + route, { redirect: 'manual' });

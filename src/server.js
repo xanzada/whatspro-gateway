@@ -747,6 +747,7 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
 }
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 // The operator shell is public so the canonical URL and its static assets can
 // always render. Data and mutation endpoints remain protected by
