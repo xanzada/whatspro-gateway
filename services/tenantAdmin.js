@@ -1,8 +1,7 @@
 'use strict';
 
-const axios = require('axios');
 const crypto = require('crypto');
-const { invalidateTenant } = require('./nocodbConfig');
+const tenantStore = require('./tenantStore');
 
 // Sixteen columns exist on the restaurants table and only eight of them are a
 // decision anybody makes. The rest are URLs that are the same for every tenant
@@ -35,46 +34,12 @@ function generateSecret(prefix) {
   return `${prefix}_${crypto.randomBytes(24).toString('hex')}`;
 }
 
-function baseUrl() {
-  return String(process.env.NOCODB_URL || '').replace(/\/+$/, '');
-}
-
-function tableId() {
-  return clean(process.env.NOCODB_RESTAURANTS_TABLE_ID || process.env.NOCODB_TABLE_ID, 64);
-}
-
-function recordsUrl() {
-  const base = baseUrl();
-  const table = tableId();
-  if (!base || !table || !process.env.NOCODB_TOKEN) {
-    const error = new Error('NOCODB_NOT_CONFIGURED');
-    error.statusCode = 503;
-    throw error;
-  }
-  return `${base}/api/v2/tables/${table}/records`;
-}
-
-function headers() {
-  return { 'xc-token': process.env.NOCODB_TOKEN || '' };
-}
-
-function timeout() {
-  return Number(process.env.NOCODB_TIMEOUT_MS || 8000);
-}
-
 async function findRow(instanceId) {
-  const response = await axios.get(recordsUrl(), {
-    headers: headers(),
-    params: { where: `(instance_id,eq,${instanceId})`, limit: 1 },
-    timeout: timeout()
-  });
-  const list = Array.isArray(response.data?.list) ? response.data.list : [];
-  return list[0] || null;
+  return tenantStore.findRow(instanceId);
 }
 
 async function listRows() {
-  const response = await axios.get(recordsUrl(), { headers: headers(), params: { limit: 1000 }, timeout: timeout() });
-  return Array.isArray(response.data?.list) ? response.data.list : [];
+  return tenantStore.listTenantRecords();
 }
 
 // The panel never sends a secret and never sees one it did not just create, so
@@ -200,8 +165,7 @@ async function createTenant(input, options = {}) {
     ...platformFields(options.publicBase),
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt)
   };
-  await axios.post(recordsUrl(), payload, { headers: headers(), timeout: timeout() });
-  invalidateTenant(fields.instance_id);
+  await tenantStore.createRow(payload);
   return { instanceId: fields.instance_id, created: true };
 }
 
@@ -217,7 +181,6 @@ async function updateTenant(instanceId, input, options = {}) {
   if (errors.length) throw badRequest(errors);
 
   const payload = {
-    Id: existing.Id,
     ...fields,
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt, existing)
   };
@@ -229,8 +192,7 @@ async function updateTenant(instanceId, input, options = {}) {
     if (!String(existing[key] ?? '').trim() && platform[key]) payload[key] = platform[key];
   }
 
-  await axios.patch(recordsUrl(), [payload], { headers: headers(), timeout: timeout() });
-  invalidateTenant(instanceId);
+  await tenantStore.updateRow(instanceId, payload);
   return { instanceId, updated: true };
 }
 
@@ -241,8 +203,7 @@ async function setActive(instanceId, active) {
     error.statusCode = 404;
     throw error;
   }
-  await axios.patch(recordsUrl(), [{ Id: existing.Id, active: Boolean(active) }], { headers: headers(), timeout: timeout() });
-  invalidateTenant(instanceId);
+  await tenantStore.updateRow(instanceId, { active: Boolean(active) });
   return { instanceId, active: Boolean(active) };
 }
 
@@ -253,8 +214,7 @@ async function deleteTenant(instanceId) {
     error.statusCode = 404;
     throw error;
   }
-  await axios.delete(recordsUrl(), { headers: headers(), data: [{ Id: existing.Id }], timeout: timeout() });
-  invalidateTenant(instanceId);
+  await tenantStore.deleteRow(instanceId);
   return { instanceId, deleted: true };
 }
 
@@ -294,8 +254,7 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
       ? cleanMultiline(input.systemPrompt || source.system_prompt)
       : cleanMultiline(options.sharedPrompt || source.system_prompt)
   };
-  await axios.post(recordsUrl(), payload, { headers: headers(), timeout: timeout() });
-  invalidateTenant(fields.instance_id);
+  await tenantStore.createRow(payload);
   return { instanceId: fields.instance_id, clonedFrom: sourceInstanceId, created: true };
 }
 
@@ -307,14 +266,12 @@ async function rotateSecrets(instanceId, options = {}) {
     throw error;
   }
   const platform = platformFields(options.publicBase);
-  await axios.patch(recordsUrl(), [{
-    Id: existing.Id,
+  await tenantStore.updateRow(instanceId, {
     whatspro_api_token: platform.whatspro_api_token,
     webhook_secret: platform.webhook_secret,
     kanban_secret: platform.kanban_secret,
     crm_secret_token: platform.crm_secret_token
-  }], { headers: headers(), timeout: timeout() });
-  invalidateTenant(instanceId);
+  });
   return { instanceId, rotated: true };
 }
 
@@ -330,8 +287,7 @@ async function applySharedPrompt(sharedPrompt) {
   });
   if (!targets.length) return { applied: 0, instances: [] };
 
-  await axios.patch(recordsUrl(), targets.map(row => ({ Id: row.Id, system_prompt: text })), { headers: headers(), timeout: timeout() });
-  for (const row of targets) invalidateTenant(row.instance_id);
+  await Promise.all(targets.map(row => tenantStore.updateRow(row.instance_id, { system_prompt: text })));
   return { applied: targets.length, instances: targets.map(row => clean(row.instance_id, 64)) };
 }
 
@@ -349,6 +305,8 @@ function presentableTenant(row) {
     promptMode: clean(row.prompt_mode, 16).toLowerCase() === 'custom' ? 'custom' : 'shared',
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
+    createdAt: clean(row.created_at || row.CreatedAt, 64),
+    updatedAt: clean(row.updated_at || row.UpdatedAt, 64),
     secrets: {
       apiToken: Boolean(String(row.whatspro_api_token || '').trim()),
       webhookSecret: Boolean(String(row.webhook_secret || '').trim()),

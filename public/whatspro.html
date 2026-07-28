@@ -643,7 +643,7 @@
         <section class="panel admin-only">
             <form class="control-panel" id="instance-form">
                 <div class="field">
-                    <label for="instance">NocoDB instance_id</label>
+              <label for="instance">WhatsPro instance ID</label>
                     <input id="instance" autocomplete="off" placeholder="prestige" required pattern="[A-Za-z0-9_-]{2,64}">
                 </div>
                 <div class="field">
@@ -1371,8 +1371,8 @@
                 showToast('Instance қосылды');
                 await loadInstances(true);
             } catch (error) {
-                if (error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
-                    showToast('NocoDB ішінде бұл instance табылмады');
+          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND' || error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+            showToast('WhatsPro платформасында бұл instance табылмады');
                 } else {
                     showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN' ? 'Логин немесе пароль қате' : 'Instance қосылмады');
                 }
@@ -1590,8 +1590,8 @@
                     await copyText(scannerUrl(instanceId));
                 }
             } catch (error) {
-                if (error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
-                    showToast('NocoDB ішінде бұл instance табылмады');
+          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND' || error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+            showToast('WhatsPro платформасында бұл instance табылмады');
                 } else {
                     showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN'
                         ? 'Логин немесе пароль қате'

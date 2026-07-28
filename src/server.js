@@ -23,10 +23,10 @@ const { sosStore } = require('../services/sosStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { parseScoredMembers, scanKeys } = require('../services/redisReply');
-const { getTenantChatConfig } = require('../services/nocodbConfig');
 // Called through the module object rather than destructured so the tenant-token
 // lookup stays a seam the isolation tests can stand in for.
-const nocodbConfig = require('../services/nocodbConfig');
+const tenantStore = require('../services/tenantStore');
+const { migrateNocoDbTenantsOnce } = require('../services/nocodbMigration');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
 
@@ -268,7 +268,7 @@ async function hasApiToken(req) {
   // instance stays an owner-only action.
   const instanceId = requestedInstanceId(req);
   if (!instanceId) return false;
-  const tenantToken = await nocodbConfig.getTenantApiToken(instanceId).catch(() => '');
+  const tenantToken = await tenantStore.getTenantApiToken(instanceId).catch(() => '');
   if (!tenantToken || !safeEqual(incoming, tenantToken)) return false;
   req.apiAuth = { scope: 'tenant', instanceId };
   return true;
@@ -358,7 +358,7 @@ function publicApiBase(req) {
 async function renderChatHtml(req, res) {
   const instance = String(req.query.instance || '').trim();
   if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  const tenant = instance ? await getTenantChatConfig(instance) : null;
+  const tenant = instance ? await tenantStore.getTenantChatConfig(instance) : null;
   const config = {
     instance,
     branding: tenant?.branding || { name: instance || 'WhatsPro' },
@@ -819,18 +819,16 @@ app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
   res.json({ success: true, instances: await listInstances() });
 });
 
-// Onboarding a restaurant is one NocoDB row, and until now nothing told you
-// whether that row was complete. These two routes read the table and answer it,
+  // Onboarding a restaurant is one platform-owned record. These two routes read
+  // Redis and answer whether each record is operationally complete,
 // including the collisions that only exist between rows. They return pass/fail
 // codes and never a field's value, so the token stays where it lives.
 app.get('/api/wa/tenants', requireUiOrApi, async (req, res) => {
   let records;
   try {
-    records = await nocodbConfig.listTenantRecords();
+    records = await tenantStore.listTenantRecords();
   } catch (error) {
-    // A NocoDB outage is not a broken gateway, and saying so saves the reader
-    // from hunting a bug in the checklist itself.
-    return res.status(503).json({ error: 'NOCODB_UNREACHABLE', message: error?.message || String(error) });
+    return res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
   }
   const sessions = await listInstances().catch(() => []);
   res.json({ success: true, ...evaluateAll(records, { sessions }) });
@@ -841,9 +839,9 @@ app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   let records;
   try {
-    records = await nocodbConfig.listTenantRecords();
+    records = await tenantStore.listTenantRecords();
   } catch (error) {
-    return res.status(503).json({ error: 'NOCODB_UNREACHABLE', message: error?.message || String(error) });
+    return res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
   }
   const sessions = await listInstances().catch(() => []);
   const report = evaluateAll(records, { sessions });
@@ -884,6 +882,14 @@ app.get('/api/wa/tenant-defaults', requireUiOrApi, (req, res) => {
     domainSuffix: String(process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX || '').replace(/^\.+/, ''),
     workHours: String(process.env.WHATSPRO_DEFAULT_WORK_HOURS || '09:00 - 03:00')
   });
+});
+
+app.get('/api/wa/platform-storage', requireUiOrApi, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await tenantStore.getStorageSummary()) });
+  } catch (error) {
+    res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
+  }
 });
 
 app.get('/api/wa/shared-prompt', requireUiOrApi, async (req, res) => {
@@ -1565,6 +1571,9 @@ async function boot() {
   });
 
   await connectRedis();
+  await migrateNocoDbTenantsOnce().catch(error => {
+    console.error('[TENANT MIGRATION] failed:', error?.message || error);
+  });
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
   try {
     await recoverSendWal();

@@ -400,7 +400,7 @@
       '<section class="detail-section" id="section-general"><div class="detail-section-head"><strong>' + t('general') +
       '</strong></div><div class="detail-body"><div class="info-grid">' + infoItem(t('restaurantName'), tenant.brand) +
       infoItem(t('instance'), tenant.instanceId) + infoItem(t('domain'), detail.domain) + infoItem(t('address'), detail.address) +
-      infoItem(t('hours'), detail.workHours) + infoItem(t('source'), tenant.virtual ? 'WhatsPro' : 'NocoDB + WhatsPro') +
+      infoItem(t('hours'), detail.workHours) + infoItem(t('source'), 'WhatsPro Platform') +
       '</div></div></section>' +
       '<section class="detail-section" id="section-whatsapp"><div class="detail-section-head"><strong>WhatsApp</strong><span>' + t('realTime') +
       '</span></div><div class="detail-body"><div class="info-grid">' + infoItem(t('phone'), detail.whatsappPhone || t('noPhone')) +

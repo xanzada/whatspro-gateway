@@ -6,7 +6,7 @@ const express = require('express');
 
 const { evaluateTenant, evaluateAll, collisionsAcross } = require('../services/tenantReadiness');
 const { __test: serverTest } = require('../src/server');
-const nocodb = require('../services/nocodbConfig');
+const tenantStore = require('../services/tenantStore');
 
 function completeRow(overrides = {}) {
   return {
@@ -151,9 +151,9 @@ test('a perfect row with no WhatsApp session is still not ready', () => {
 });
 
 test('the readiness route is owner-only and never returns a secret', async t => {
-  const originalList = nocodb.listTenantRecords;
-  nocodb.listTenantRecords = async () => [completeRow()];
-  t.after(() => { nocodb.listTenantRecords = originalList; });
+  const originalList = tenantStore.listTenantRecords;
+  tenantStore.listTenantRecords = async () => [completeRow()];
+  t.after(() => { tenantStore.listTenantRecords = originalList; });
 
   const previousMaster = process.env.WHATSPRO_API_TOKEN;
   process.env.WHATSPRO_API_TOKEN = 'platform-master-token';
@@ -164,7 +164,7 @@ test('the readiness route is owner-only and never returns a secret', async t => 
 
   const app = express();
   app.get('/api/wa/tenants', serverTest.requireUiOrApi, async (_req, res) => {
-    const records = await nocodb.listTenantRecords();
+    const records = await tenantStore.listTenantRecords();
     res.json({ success: true, ...evaluateAll(records, { sessions: [] }) });
   });
   const server = app.listen(0, '127.0.0.1');

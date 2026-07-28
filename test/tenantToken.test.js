@@ -5,15 +5,15 @@ const assert = require('node:assert/strict');
 const express = require('express');
 
 const { __test: serverTest } = require('../src/server');
-const nocodb = require('../services/nocodbConfig');
+const tenantStore = require('../services/tenantStore');
 
 // A restaurant may hold its own key. It must open that restaurant and nothing
 // else, or handing 50 tenants their keys hands each of them all the others.
 test('a tenant key opens its own instance and no other', async t => {
-  const original = nocodb.getTenantApiToken;
+  const original = tenantStore.getTenantApiToken;
   const tokens = { alpha: 'alpha-secret-token', beta: 'beta-secret-token' };
-  nocodb.getTenantApiToken = async instanceId => tokens[instanceId] || '';
-  t.after(() => { nocodb.getTenantApiToken = original; });
+  tenantStore.getTenantApiToken = async instanceId => tokens[instanceId] || '';
+  t.after(() => { tenantStore.getTenantApiToken = original; });
 
   const previousMaster = process.env.WHATSPRO_API_TOKEN;
   process.env.WHATSPRO_API_TOKEN = 'platform-master-token';
@@ -45,10 +45,10 @@ test('a tenant key opens its own instance and no other', async t => {
 // its own: what stops a request authenticating as beta and then asking the parsed
 // body to send as alpha.
 test('a tenant key authenticates a send by header and cannot then send as another instance', async t => {
-  const original = nocodb.getTenantApiToken;
+  const original = tenantStore.getTenantApiToken;
   const tokens = { alpha: 'alpha-secret-token', beta: 'beta-secret-token' };
-  nocodb.getTenantApiToken = async instanceId => tokens[instanceId] || '';
-  t.after(() => { nocodb.getTenantApiToken = original; });
+  tenantStore.getTenantApiToken = async instanceId => tokens[instanceId] || '';
+  t.after(() => { tenantStore.getTenantApiToken = original; });
 
   const previousMaster = process.env.WHATSPRO_API_TOKEN;
   process.env.WHATSPRO_API_TOKEN = 'platform-master-token';
@@ -88,9 +88,9 @@ test('a tenant key authenticates a send by header and cannot then send as anothe
 });
 
 test('an owner-only route rejects a tenant key because it names no instance', async t => {
-  const original = nocodb.getTenantApiToken;
-  nocodb.getTenantApiToken = async () => 'alpha-secret-token';
-  t.after(() => { nocodb.getTenantApiToken = original; });
+  const original = tenantStore.getTenantApiToken;
+  tenantStore.getTenantApiToken = async () => 'alpha-secret-token';
+  t.after(() => { tenantStore.getTenantApiToken = original; });
 
   const previousMaster = process.env.WHATSPRO_API_TOKEN;
   process.env.WHATSPRO_API_TOKEN = 'platform-master-token';
