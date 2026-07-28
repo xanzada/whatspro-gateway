@@ -53,18 +53,6 @@ test('platform tenant storage keeps tenant secrets isolated through updates', as
   assert.equal((await tenantStore.listTenantRecords()).length, 2);
 });
 
-test('legacy rows import once and preserve generated SaaS keys', async t => {
-  installMemoryRedis(t);
-  const rows = [
-    { instance_id: 'alpha', brand: 'Alpha', whatspro_api_token: 'alpha-token', webhook_secret: 'hook-alpha' },
-    { instance_id: 'beta', brand: 'Beta', whatspro_api_token: 'beta-token', webhook_secret: 'hook-beta' }
-  ];
-  assert.deepEqual(await tenantStore.importRowsIfEmpty(rows), { imported: 2, skipped: false, existing: 0 });
-  assert.deepEqual(await tenantStore.importRowsIfEmpty([{ instance_id: 'gamma' }]), { imported: 0, skipped: true, existing: 2 });
-  assert.equal((await tenantStore.findRow('alpha')).webhook_secret, 'hook-alpha');
-  assert.equal((await tenantStore.getStorageSummary()).migratedFromNocoDb, true);
-});
-
 test('chat branding exposes no tenant secret', () => {
   const config = tenantStore.sanitizeTenantConfig({
     instance_id: 'alpha',

@@ -1,6 +1,6 @@
 'use strict';
 
-// Adding a restaurant means filling one NocoDB row. Nothing validates that row
+// Adding a restaurant means creating one platform tenant record. Validate it
 // today, so a missed column shows up later as a bot that greets but cannot take
 // an order, or — worse, at fifty tenants — as one restaurant's inbound messages
 // landing in another's chat. This turns the row into a checklist that can be
@@ -216,7 +216,7 @@ function summarize(checks, extras = []) {
 }
 
 // A row can be perfect and the restaurant still dead, because the WhatsApp
-// session lives in the gateway rather than in NocoDB. Fold that in as a check of
+// session lives in the WhatsPro runtime rather than in tenant metadata. Fold that in as a check of
 // the same shape so one list answers "can this restaurant take an order".
 function sessionCheck(instanceId, sessions = []) {
   const known = sessions.find(entry => String(entry?.instanceId || entry?.id || entry) === instanceId);

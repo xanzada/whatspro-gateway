@@ -26,7 +26,6 @@ const { parseScoredMembers, scanKeys } = require('../services/redisReply');
 // Called through the module object rather than destructured so the tenant-token
 // lookup stays a seam the isolation tests can stand in for.
 const tenantStore = require('../services/tenantStore');
-const { migrateNocoDbTenantsOnce } = require('../services/nocodbMigration');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
 
@@ -243,7 +242,7 @@ function incomingApiToken(req) {
 
 // The gateway-wide token belongs to the operator of the platform: it is what
 // Openbot carries and it reaches every instance. A restaurant's own token comes
-// from its NocoDB row and unlocks that instance only, so handing a tenant their
+// from its platform tenant record and unlocks that instance only, so handing a tenant their
 // key can never expose the other tenants' chats.
 function hasMasterApiToken(req) {
   const expected = process.env.WHATSPRO_API_TOKEN || '';
@@ -1571,9 +1570,6 @@ async function boot() {
   });
 
   await connectRedis();
-  await migrateNocoDbTenantsOnce().catch(error => {
-    console.error('[TENANT MIGRATION] failed:', error?.message || error);
-  });
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
   try {
     await recoverSendWal();

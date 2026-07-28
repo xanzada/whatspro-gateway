@@ -3,7 +3,6 @@
 const { redisClient } = require('../config/redis');
 
 const TENANT_STORE_KEY = 'whatspro:tenants:v1';
-const MIGRATION_MARKER_KEY = 'whatspro:migrations:nocodb-tenants:v1';
 
 function cleanString(value, fallback = '') {
   const text = String(value ?? fallback ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -147,47 +146,25 @@ async function getTenantApiToken(instanceValue) {
   return cleanString(pickFirst(row, ['whatspro_api_token', 'api_token'], ''));
 }
 
-async function importRowsIfEmpty(rows) {
-  requireRedis();
-  const current = await redisClient.hLen(TENANT_STORE_KEY);
-  if (current > 0) return { imported: 0, skipped: true, existing: current };
-  const valid = (Array.isArray(rows) ? rows : []).filter(row => normalizeInstance(row?.instance_id));
-  if (!valid.length) return { imported: 0, skipped: true, existing: 0 };
-  const values = {};
-  for (const row of valid) {
-    const instance = normalizeInstance(row.instance_id);
-    values[instance] = JSON.stringify({
-      ...row,
-      instance_id: instance,
-      created_at: row.created_at || row.CreatedAt || new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    });
-  }
-  await redisClient.hSet(TENANT_STORE_KEY, values);
-  await redisClient.set(MIGRATION_MARKER_KEY, JSON.stringify({ imported: valid.length, at: new Date().toISOString() }));
-  return { imported: valid.length, skipped: false, existing: 0 };
-}
-
 async function getStorageSummary() {
   requireRedis();
+  const tenants = await redisClient.hLen(TENANT_STORE_KEY);
   return {
     backend: 'redis',
     keyVersion: 1,
-    tenants: await redisClient.hLen(TENANT_STORE_KEY),
-    migratedFromNocoDb: Boolean(await redisClient.exists(MIGRATION_MARKER_KEY))
+    tenants,
+    initialized: tenants > 0
   };
 }
 
 module.exports = {
   TENANT_STORE_KEY,
-  MIGRATION_MARKER_KEY,
   createRow,
   deleteRow,
   findRow,
   getStorageSummary,
   getTenantApiToken,
   getTenantChatConfig,
-  importRowsIfEmpty,
   listTenantRecords,
   normalizeInstance,
   sanitizeTenantConfig,

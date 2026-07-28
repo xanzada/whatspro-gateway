@@ -1371,7 +1371,7 @@
                 showToast('Instance қосылды');
                 await loadInstances(true);
             } catch (error) {
-          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND' || error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND') {
             showToast('WhatsPro платформасында бұл instance табылмады');
                 } else {
                     showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN' ? 'Логин немесе пароль қате' : 'Instance қосылмады');
@@ -1590,7 +1590,7 @@
                     await copyText(scannerUrl(instanceId));
                 }
             } catch (error) {
-          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND' || error.message === 'NOCODB_INSTANCE_NOT_FOUND') {
+          if (error.message === 'PLATFORM_INSTANCE_NOT_FOUND') {
             showToast('WhatsPro платформасында бұл instance табылмады');
                 } else {
                     showToast(error.message === 'HTTP_401' || error.message === 'FORBIDDEN'
