@@ -26,6 +26,7 @@ const { parseScoredMembers, scanKeys } = require('../services/redisReply');
 // Called through the module object rather than destructured so the tenant-token
 // lookup stays a seam the isolation tests can stand in for.
 const tenantStore = require('../services/tenantStore');
+const tenantMemoryStore = require('../services/tenantMemoryStore');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
 
@@ -247,6 +248,12 @@ function incomingApiToken(req) {
 function hasMasterApiToken(req) {
   const expected = process.env.WHATSPRO_API_TOKEN || '';
   return Boolean(expected) && safeEqual(incomingApiToken(req), expected);
+}
+
+function requireMasterApi(req, res, next) {
+  if (!hasMasterApiToken(req)) return res.status(401).json({ error: 'AUTH_REQUIRED' });
+  req.apiAuth = { scope: 'master' };
+  return next();
 }
 
 function requestedInstanceId(req) {
@@ -888,6 +895,40 @@ app.get('/api/wa/platform-storage', requireUiOrApi, async (req, res) => {
     res.json({ success: true, ...(await tenantStore.getStorageSummary()) });
   } catch (error) {
     res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
+  }
+});
+
+app.get('/api/wa/runtime-configs', requireMasterApi, async (_req, res) => {
+  try {
+    res.json({ success: true, configs: await tenantStore.listTenantRecords() });
+  } catch (error) {
+    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+  }
+});
+
+app.get('/api/wa/runtime-configs/:instanceId', requireMasterApi, async (req, res) => {
+  try {
+    const config = await tenantStore.findRow(req.params.instanceId);
+    if (!config) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    res.json({ success: true, config });
+  } catch (error) {
+    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+  }
+});
+
+app.get('/api/wa/runtime-configs/:instanceId/memories', requireMasterApi, async (req, res) => {
+  try {
+    res.json({ success: true, memories: await tenantMemoryStore.listMemories(req.params.instanceId) });
+  } catch (error) {
+    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+  }
+});
+
+app.post('/api/wa/runtime-configs/:instanceId/memories', requireMasterApi, async (req, res) => {
+  try {
+    res.status(201).json({ success: true, memory: await tenantMemoryStore.addMemory(req.params.instanceId, req.body || {}) });
+  } catch (error) {
+    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
   }
 });
 
@@ -1657,6 +1698,6 @@ module.exports = {
   renderChatHtml,
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
-    hasApiToken, requireApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope
+    hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope
   }
 };

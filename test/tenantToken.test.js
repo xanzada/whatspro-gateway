@@ -111,3 +111,23 @@ test('an owner-only route rejects a tenant key because it names no instance', as
   const master = await fetch(url, { headers: { 'x-api-key': 'platform-master-token' } });
   assert.equal(master.status, 200, 'the platform key still lists them');
 });
+
+test('runtime configuration routes accept only the platform master key', async t => {
+  const previousMaster = process.env.WHATSPRO_API_TOKEN;
+  process.env.WHATSPRO_API_TOKEN = 'platform-master-token';
+  t.after(() => {
+    if (previousMaster === undefined) delete process.env.WHATSPRO_API_TOKEN;
+    else process.env.WHATSPRO_API_TOKEN = previousMaster;
+  });
+
+  const app = express();
+  app.get('/api/wa/runtime-configs', serverTest.requireMasterApi, (_req, res) => res.json({ ok: true }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/api/wa/runtime-configs`;
+
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url, { headers: { 'x-api-key': 'tenant-secret-token' } })).status, 401);
+  assert.equal((await fetch(url, { headers: { authorization: 'Bearer platform-master-token' } })).status, 200);
+});

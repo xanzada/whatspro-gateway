@@ -3,13 +3,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { redisClient } = require('../config/redis');
+const tenantMemoryStore = require('../services/tenantMemoryStore');
 const tenantStore = require('../services/tenantStore');
 
 function installMemoryRedis(t) {
   const hashes = new Map();
+  const lists = new Map();
   const strings = new Map();
   const originals = {};
-  for (const name of ['hGet', 'hGetAll', 'hSet', 'hLen', 'hDel', 'sendCommand', 'set', 'exists']) originals[name] = redisClient[name];
+  for (const name of ['hGet', 'hGetAll', 'hSet', 'hLen', 'hDel', 'sendCommand', 'set', 'exists', 'lRange', 'lPush', 'lTrim']) originals[name] = redisClient[name];
   Object.defineProperty(redisClient, 'isOpen', { configurable: true, value: true });
   const hash = key => {
     if (!hashes.has(key)) hashes.set(key, new Map());
@@ -35,6 +37,17 @@ function installMemoryRedis(t) {
   };
   redisClient.set = async (key, value) => { strings.set(key, value); return 'OK'; };
   redisClient.exists = async key => strings.has(key) ? 1 : 0;
+  redisClient.lRange = async (key, start, stop) => (lists.get(key) || []).slice(start, stop + 1);
+  redisClient.lPush = async (key, value) => {
+    const list = lists.get(key) || [];
+    list.unshift(value);
+    lists.set(key, list);
+    return list.length;
+  };
+  redisClient.lTrim = async (key, start, stop) => {
+    lists.set(key, (lists.get(key) || []).slice(start, stop + 1));
+    return 'OK';
+  };
   t.after(() => {
     for (const [name, fn] of Object.entries(originals)) redisClient[name] = fn;
     delete redisClient.isOpen;
@@ -62,4 +75,32 @@ test('chat branding exposes no tenant secret', () => {
   }, 'alpha');
   assert.equal(config.branding.name, 'Alpha');
   assert.equal(JSON.stringify(config).includes('must-not-leak'), false);
+});
+
+test('tenant memories stay isolated and reject unknown tenant ids', async t => {
+  installMemoryRedis(t);
+  await tenantStore.createRow({ instance_id: 'alpha', brand: 'Alpha' });
+  await tenantStore.createRow({ instance_id: 'beta', brand: 'Beta' });
+
+  await tenantMemoryStore.addMemory('alpha', {
+    question: 'Alpha question',
+    ideal_answer: 'Alpha answer',
+    category: 'menu'
+  });
+  await tenantMemoryStore.addMemory('beta', {
+    question: 'Beta question',
+    ideal_answer: 'Beta answer',
+    category: 'delivery'
+  });
+
+  const alpha = await tenantMemoryStore.listMemories('alpha');
+  const beta = await tenantMemoryStore.listMemories('beta');
+  assert.deepEqual(alpha.map(item => item.question), ['Alpha question']);
+  assert.deepEqual(beta.map(item => item.question), ['Beta question']);
+  assert.equal(alpha[0].instance_id, 'alpha');
+  assert.equal(beta[0].instance_id, 'beta');
+  await assert.rejects(
+    tenantMemoryStore.addMemory('missing', { question: 'Q', ideal_answer: 'A' }),
+    error => error.message === 'TENANT_NOT_FOUND' && error.statusCode === 404
+  );
 });
