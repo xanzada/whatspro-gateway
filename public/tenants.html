@@ -1,602 +1,135 @@
 <!doctype html>
-<html lang="kk">
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>Ресторандар</title>
-    <style>
-        :root {
-            color-scheme: dark;
-            --bg: #0a0f1a;
-            --panel: #111827;
-            --panel-2: #172235;
-            --panel-3: #203047;
-            --line: #28384f;
-            --text: #f6f8fc;
-            --soft: #c9d5e4;
-            --muted: #879bb4;
-            --green: #10b981;
-            --blue: #3b82f6;
-            --orange: #f59e0b;
-            --red: #ef4444;
-            --radius: 10px;
-        }
-
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        html { -webkit-text-size-adjust: 100%; }
-        body {
-            margin: 0;
-            min-height: 100vh;
-            background: radial-gradient(circle at 16% 0%, rgba(16, 185, 129, .12), transparent 22rem), var(--bg);
-            color: var(--text);
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-            font-size: 15px;
-            padding-bottom: env(safe-area-inset-bottom);
-        }
-
-        .page { width: min(940px, calc(100% - 24px)); margin: 0 auto; padding: 18px 0 96px; }
-        h1 { font-size: 19px; margin: 0 0 4px; }
-        .lede { color: var(--muted); font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
-
-        button, input, select, textarea { font: inherit; color: inherit; }
-        button { border: 0; cursor: pointer; border-radius: var(--radius); }
-        /* 44px is the smallest target that is reliably tappable with a thumb. */
-        .btn {
-            min-height: 44px; padding: 0 16px;
-            background: var(--panel-3); border: 1px solid var(--line);
-            display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-        }
-        .btn:active { transform: scale(.98); }
-        .btn.primary { background: var(--green); border-color: var(--green); color: #06251c; font-weight: 600; }
-        .btn.ghost { background: transparent; }
-        .btn.danger { border-color: rgba(239, 68, 68, .5); color: #fca5a5; background: transparent; }
-        .btn.small { min-height: 38px; padding: 0 12px; font-size: 13px; }
-        .btn[disabled] { opacity: .5; pointer-events: none; }
-
-        .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-        .counts { color: var(--muted); font-size: 13px; }
-        .counts strong { color: var(--text); }
-        .spacer { flex: 1 1 auto; }
-
-        .alert {
-            border: 1px solid rgba(239, 68, 68, .45); background: rgba(239, 68, 68, .08);
-            border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px;
-            font-size: 13px; line-height: 1.55;
-        }
-        .alert h2 { font-size: 14px; margin: 0 0 6px; color: var(--red); }
-        .alert p { margin: 0 0 4px; color: var(--soft); }
-        .toast {
-            position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
-            background: var(--panel-3); border: 1px solid var(--line); color: var(--text);
-            padding: 11px 18px; border-radius: 999px; font-size: 13px; z-index: 60;
-            max-width: calc(100% - 32px); text-align: center;
-        }
-        .toast.bad { border-color: rgba(239, 68, 68, .6); color: #fca5a5; }
-
-        .tenant { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
-        .tenant-head { display: flex; align-items: center; gap: 11px; padding: 13px 14px; background: var(--panel-2); cursor: pointer; transition: background .18s ease; }
-        .tenant-head:active { background: var(--panel-3); }
-        .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
-        .dot.ok { background: var(--green); }
-        .dot.warn { background: var(--orange); }
-        .dot.bad { background: var(--red); }
-        .dot.off { background: var(--muted); }
-        .tenant-title { min-width: 0; flex: 1 1 auto; }
-        .tenant-name { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .tenant-sub { color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
-        .chev { color: var(--muted); flex: 0 0 auto; transition: transform .26s ease; }
-        .tenant.open .chev { transform: rotate(180deg); }
-
-        /* 0fr → 1fr animates a height nobody has measured, so the card opens
-           smoothly whatever is inside it. */
-        .tenant-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s cubic-bezier(.4, 0, .2, 1); }
-        .tenant.open .tenant-body { grid-template-rows: 1fr; }
-        .tenant-body > .inner { overflow: hidden; padding: 0 14px; }
-        .tenant.open .tenant-body > .inner { padding-bottom: 14px; }
-
-        .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 4px; border-top: 1px solid var(--line); margin-top: 8px; }
-        .actions .btn { flex: 1 1 auto; min-width: 108px; }
-
-        .check { display: grid; grid-template-columns: 16px 1fr; gap: 9px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
-        .check .mark.ok { color: var(--green); }
-        .check .mark.warn { color: var(--orange); }
-        .check .mark.bad { color: var(--red); }
-        .check code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--soft); font-size: 12px; }
-        .check .why { color: var(--muted); line-height: 1.5; margin-top: 2px; }
-
-        .sheet-backdrop {
-            position: fixed; inset: 0; background: rgba(4, 8, 15, .72);
-            z-index: 50; overflow-y: auto; padding: 0;
-            opacity: 0; visibility: hidden;
-            transition: opacity .22s ease, visibility .22s ease;
-        }
-        .sheet-backdrop.open { opacity: 1; visibility: visible; }
-        .sheet {
-            background: var(--panel); border-top: 1px solid var(--line);
-            border-radius: 16px 16px 0 0; margin-top: 34px; min-height: calc(100vh - 34px);
-            padding: 8px 16px calc(28px + env(safe-area-inset-bottom));
-            transform: translateY(22px);
-            transition: transform .26s cubic-bezier(.4, 0, .2, 1);
-        }
-        .sheet-backdrop.open .sheet { transform: translateY(0); }
-        @media (prefers-reduced-motion: reduce) {
-            .sheet, .sheet-backdrop, .tenant-body, .chev { transition: none; }
-        }
-        @media (min-width: 720px) {
-            .sheet { max-width: 620px; margin: 42px auto; min-height: 0; border-radius: 16px; border: 1px solid var(--line); }
-        }
-        .grabber { width: 42px; height: 4px; border-radius: 999px; background: var(--line); margin: 8px auto 14px; }
-        .sheet h2 { font-size: 17px; margin: 0 0 14px; }
-
-        .field { margin-bottom: 14px; }
-        .field label { display: block; font-size: 13px; color: var(--soft); margin-bottom: 6px; }
-        .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
-        /* 16px keeps iOS Safari from zooming the whole page on focus. */
-        .field input, .field select, .field textarea {
-            width: 100%; font-size: 16px; padding: 12px 13px;
-            background: var(--panel-2); border: 1px solid var(--line);
-            border-radius: var(--radius); outline: none;
-        }
-        .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--green); }
-        .field textarea { min-height: 190px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-        .field.invalid input, .field.invalid select { border-color: var(--red); }
-
-        .segmented { display: flex; gap: 6px; }
-        .segmented button {
-            flex: 1 1 0; min-height: 44px; background: var(--panel-2);
-            border: 1px solid var(--line); color: var(--soft); font-size: 14px;
-        }
-        .segmented button.on { background: var(--panel-3); border-color: var(--green); color: var(--text); }
-
-        .sheet-actions { display: flex; gap: 10px; padding-top: 6px; }
-        .sheet-actions .btn { flex: 1 1 0; }
-
-        .empty, .error { color: var(--muted); font-size: 13px; padding: 20px 0; line-height: 1.6; }
-        .error { color: #fca5a5; }
-        .fab {
-            position: fixed; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom));
-            min-height: 52px; padding: 0 20px; font-weight: 600; z-index: 40;
-            background: var(--green); color: #06251c; box-shadow: 0 12px 32px rgba(0,0,0,.4);
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090c0f">
+  <title>WhatsPro — Restaurant operations</title>
+  <link rel="stylesheet" href="/tenants.css">
 </head>
 <body>
-<div class="page">
-    <h1>Ресторандар</h1>
-    <p class="lede">
-        Жаңа желіні осы жерден қосасыз. Тек өз шешіміңіз болатын өрістерді толтырасыз —
-        токендер мен қызметтік мекенжайларды платформа өзі жасайды.
-    </p>
+  <div class="app-shell" id="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-row">
+        <button class="icon-button menu-toggle" id="sidebar-toggle" type="button" aria-label="Collapse sidebar">
+          <svg aria-hidden="true"><use href="#i-menu"></use></svg>
+        </button>
+        <div class="brand-copy">
+          <strong>WhatsPro</strong>
+          <span>Restaurant platform</span>
+        </div>
+      </div>
 
-    <div class="bar">
-        <span class="counts" id="counts"></span>
-        <span class="spacer"></span>
-        <button class="btn small ghost" id="shared-btn" type="button">Ортақ промпт</button>
-        <button class="btn small ghost" id="refresh" type="button">Жаңарту</button>
+      <div class="nav-label">Workspace</div>
+      <nav class="main-nav" aria-label="Primary navigation">
+        <button class="nav-item active" type="button" data-view="dashboard">
+          <svg aria-hidden="true"><use href="#i-grid"></use></svg>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" type="button" data-view="restaurants">
+          <svg aria-hidden="true"><use href="#i-store"></use></svg>
+          <span>Restaurants</span>
+          <b class="nav-count" id="restaurant-count">—</b>
+        </button>
+        <button class="nav-item" type="button" data-view="jobs">
+          <svg aria-hidden="true"><use href="#i-clock"></use></svg>
+          <span>Provisioning jobs</span>
+          <b class="nav-count accent" id="job-count" hidden>0</b>
+        </button>
+        <button class="nav-item" type="button" data-view="activity">
+          <svg aria-hidden="true"><use href="#i-activity"></use></svg>
+          <span>Activity</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button class="nav-item" id="focus-mode" type="button">
+          <svg aria-hidden="true"><use href="#i-moon"></use></svg>
+          <span>Dark workspace</span>
+          <i class="status-dot"></i>
+        </button>
+        <div class="workspace-health">
+          <span class="health-mark"><i></i></span>
+          <span><strong>Gateway online</strong><small id="last-sync">Checking…</small></span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobile-menu" type="button" aria-label="Open navigation">
+          <svg aria-hidden="true"><use href="#i-menu"></use></svg>
+        </button>
+        <label class="global-search">
+          <svg aria-hidden="true"><use href="#i-search"></use></svg>
+          <input id="global-search" type="search" autocomplete="off" placeholder="Search restaurants, instance, phone…">
+          <kbd>⌘ K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <button class="text-button locale-button" id="locale-button" type="button" aria-label="Change language">
+            <span>EN</span><svg aria-hidden="true"><use href="#i-chevron"></use></svg>
+          </button>
+          <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh data">
+            <svg aria-hidden="true"><use href="#i-refresh"></use></svg>
+          </button>
+          <div class="profile-wrap">
+            <button class="profile-button" id="profile-button" type="button" aria-expanded="false">
+              <span class="avatar">AD</span>
+              <span class="profile-copy"><strong>Admin</strong><small>Owner</small></span>
+              <svg aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <div class="profile-menu popover" id="profile-menu" hidden>
+              <div class="profile-menu-head"><strong>Admin workspace</strong><span>Secure session</span></div>
+              <button type="button" data-profile-action="refresh"><svg><use href="#i-refresh"></use></svg>Refresh workspace</button>
+              <button type="button" data-profile-action="logout"><svg><use href="#i-logout"></use></svg>Sign out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main id="view" tabindex="-1">
+        <div class="page-loading" aria-live="polite">
+          <span class="skeleton w-40"></span>
+          <span class="skeleton w-64"></span>
+          <div class="loading-grid"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
+        </div>
+      </main>
     </div>
+  </div>
 
-    <div id="collisions"></div>
-    <div id="list"></div>
-</div>
+  <div class="mobile-scrim" id="mobile-scrim" hidden></div>
+  <div id="modal-root"></div>
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-<button class="btn fab" id="add" type="button">+ Жаңа ресторан</button>
-
-<div class="sheet-backdrop" id="backdrop">
-    <div class="sheet" id="sheet"></div>
-</div>
-
-<script>
-(function () {
-    'use strict';
-
-    var listEl = document.getElementById('list');
-    var collisionsEl = document.getElementById('collisions');
-    var countsEl = document.getElementById('counts');
-    var backdrop = document.getElementById('backdrop');
-    var sheet = document.getElementById('sheet');
-    var report = { tenants: [], collisions: [], total: 0, ready: 0 };
-    var defaults = { domainSuffix: '', workHours: '09:00 - 03:00' };
-
-    // Kept identical to the server's table on purpose: the form should show the
-    // same id the server would have derived, not a second opinion about it.
-    var TRANSLITERATION = {
-        'а': 'a', 'ә': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'ғ': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
-        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'i', 'к': 'k', 'қ': 'q', 'л': 'l', 'м': 'm', 'н': 'n',
-        'ң': 'n', 'о': 'o', 'ө': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ұ': 'u',
-        'ү': 'u', 'ф': 'f', 'х': 'h', 'һ': 'h', 'ц': 'c', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-        'ъ': '', 'ы': 'y', 'і': 'i', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
-    };
-
-    function slugify(value) {
-        return String(value || '')
-            .toLowerCase()
-            .split('')
-            .map(function (character) {
-                return Object.prototype.hasOwnProperty.call(TRANSLITERATION, character) ? TRANSLITERATION[character] : character;
-            })
-            .join('')
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 64)
-            .replace(/-+$/, '');
-    }
-
-    function el(tag, className, text) {
-        var node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = String(text);
-        return node;
-    }
-
-    function toast(message, bad) {
-        var existing = document.querySelector('.toast');
-        if (existing) existing.remove();
-        var node = el('div', 'toast' + (bad ? ' bad' : ''), message);
-        document.body.appendChild(node);
-        setTimeout(function () { node.remove(); }, bad ? 5200 : 2600);
-    }
-
-    function api(method, path, body) {
-        return fetch(path, {
-            method: method,
-            credentials: 'same-origin',
-            headers: body ? { 'Content-Type': 'application/json' } : undefined,
-            body: body ? JSON.stringify(body) : undefined
-        }).then(function (response) {
-            return response.text().then(function (raw) {
-                var data = {};
-                try { data = raw ? JSON.parse(raw) : {}; } catch (error) { data = { error: raw.slice(0, 200) }; }
-                if (!response.ok) {
-                    var message = data.error || ('HTTP ' + response.status);
-                    if (response.status === 401) message = 'Кіру қажет. WhatsPro панеліне кіріңіз.';
-                    if (data.fields) message += ' — тексеріңіз: ' + data.fields.join(', ');
-                    var error = new Error(message);
-                    error.fields = data.fields || [];
-                    throw error;
-                }
-                return data;
-            });
-        });
-    }
-
-    function closeSheet() {
-        backdrop.classList.remove('open');
-        sheet.textContent = '';
-        document.body.style.overflow = '';
-    }
-
-    function openSheet(title, build) {
-        sheet.textContent = '';
-        sheet.appendChild(el('div', 'grabber'));
-        sheet.appendChild(el('h2', null, title));
-        build(sheet);
-        backdrop.classList.add('open');
-        backdrop.scrollTop = 0;
-        document.body.style.overflow = 'hidden';
-    }
-
-    backdrop.addEventListener('click', function (event) { if (event.target === backdrop) closeSheet(); });
-
-    function field(parent, name, label, value, hint, type) {
-        var wrap = el('div', 'field');
-        wrap.dataset.field = name;
-        wrap.appendChild(el('label', null, label));
-        var input = document.createElement(type === 'textarea' ? 'textarea' : 'input');
-        if (type && type !== 'textarea') input.type = type;
-        input.value = value === undefined || value === null ? '' : String(value);
-        input.name = name;
-        wrap.appendChild(input);
-        if (hint) wrap.appendChild(el('div', 'hint', hint));
-        parent.appendChild(wrap);
-        return input;
-    }
-
-    function segmented(parent, label, options, value, onChange) {
-        var wrap = el('div', 'field');
-        wrap.appendChild(el('label', null, label));
-        var row = el('div', 'segmented');
-        var current = value;
-        options.forEach(function (option) {
-            var button = el('button', current === option.value ? 'on' : '', option.label);
-            button.type = 'button';
-            button.addEventListener('click', function () {
-                current = option.value;
-                Array.prototype.forEach.call(row.children, function (child) { child.className = ''; });
-                button.className = 'on';
-                onChange(current);
-            });
-            row.appendChild(button);
-        });
-        wrap.appendChild(row);
-        parent.appendChild(wrap);
-        return function () { return current; };
-    }
-
-    function markInvalid(fields) {
-        Array.prototype.forEach.call(sheet.querySelectorAll('.field'), function (node) { node.classList.remove('invalid'); });
-        (fields || []).forEach(function (name) {
-            var node = sheet.querySelector('.field[data-field="' + name + '"]');
-            if (node) node.classList.add('invalid');
-        });
-    }
-
-    // One form serves create, edit and clone: the same eight decisions, only the
-    // verb and the endpoint differ.
-    function tenantForm(mode, tenant, sourceInstanceId) {
-        var titles = { create: 'Жаңа ресторан', edit: 'Өңдеу', clone: 'Клон жасау' };
-        openSheet(titles[mode], function (parent) {
-            var data = tenant || {};
-            var brandInput = field(parent, 'brand', 'Атауы', data.brand, 'Клиент көретін және чат тақырыбында тұратын атау', 'text');
-            var instanceInput = field(parent, 'instanceId', 'Instance ID', mode === 'edit' ? data.instanceId : '',
-                'Атауынан өзі жасалады. Керек болса қолмен түзетуге болады. Кейін өзгермейді.', 'text');
-            if (mode === 'edit') instanceInput.disabled = true;
-
-            var phoneInput = field(parent, 'whatsappPhone', 'WhatsApp нөмірі', mode === 'clone' ? '' : data.whatsappPhone,
-                'Ботқа тиесілі нөмір. Әр ресторанда бөлек болуы міндетті.', 'tel');
-            var domainInput = field(parent, 'domain', 'Сайт домені', data.domain, 'Instance ID-ден өзі жасалады', 'text');
-            field(parent, 'address', 'Мекенжайы', data.address, '', 'text');
-            field(parent, 'workHours', 'Жұмыс уақыты', data.workHours || (mode === 'create' ? defaults.workHours : ''), 'Мысалы: 09:00 - 03:00', 'text');
-            var adminInput = field(parent, 'adminPhone', 'Әкімші нөмірі', data.adminPhone, 'Бос қалса WhatsApp нөмірі қойылады', 'tel');
-
-            // Auto-derivation stops the moment somebody types in the field
-            // themselves — filling a box in behind the operator's back is worse
-            // than making them fill it.
-            var instanceTouched = mode === 'edit';
-            var domainTouched = Boolean(data.domain);
-            instanceInput.addEventListener('input', function () { instanceTouched = true; });
-            domainInput.addEventListener('input', function () { domainTouched = true; });
-
-            function syncDomain() {
-                if (domainTouched || !defaults.domainSuffix) return;
-                var instance = instanceInput.value.trim();
-                domainInput.value = instance ? 'https://' + instance + '.' + defaults.domainSuffix : '';
-            }
-            brandInput.addEventListener('input', function () {
-                if (instanceTouched) return syncDomain();
-                instanceInput.value = slugify(brandInput.value);
-                syncDomain();
-            });
-            instanceInput.addEventListener('input', syncDomain);
-            adminInput.addEventListener('focus', function () {
-                if (!adminInput.value.trim()) adminInput.value = phoneInput.value.trim();
-            });
-
-            var promptWrap = el('div');
-            var promptInput = null;
-            var getMode = segmented(parent, 'Промпт', [
-                { value: 'shared', label: 'Ортақ' },
-                { value: 'custom', label: 'Жеке' }
-            ], data.promptMode === 'custom' ? 'custom' : 'shared', function (value) { renderPrompt(value); });
-            parent.appendChild(promptWrap);
-
-            function renderPrompt(value) {
-                promptWrap.textContent = '';
-                if (value === 'custom') {
-                    promptInput = field(promptWrap, 'systemPrompt', 'Осы ресторанның промпты', data.systemPrompt || '',
-                        'Тек осы ресторанға жазылады. Ортақ промпт өзгергенде бұған тимейді.', 'textarea');
-                } else {
-                    promptInput = null;
-                    promptWrap.appendChild(el('div', 'hint', 'Ортақ промпт қолданылады. Оны жоғарыдағы «Ортақ промпт» батырмасынан өзгертесіз — сонда ортақ режимдегі барлық ресторанға тарайды.'));
-                }
-            }
-            renderPrompt(data.promptMode === 'custom' ? 'custom' : 'shared');
-
-            var actions = el('div', 'sheet-actions');
-            var cancel = el('button', 'btn ghost', 'Болдырмау');
-            cancel.type = 'button';
-            cancel.addEventListener('click', closeSheet);
-            var submit = el('button', 'btn primary', mode === 'edit' ? 'Сақтау' : 'Қосу');
-            submit.type = 'button';
-            actions.appendChild(cancel);
-            actions.appendChild(submit);
-            parent.appendChild(actions);
-
-            submit.addEventListener('click', function () {
-                var payload = {
-                    instanceId: sheet.querySelector('[name="instanceId"]').value.trim(),
-                    brand: sheet.querySelector('[name="brand"]').value.trim(),
-                    whatsappPhone: sheet.querySelector('[name="whatsappPhone"]').value.trim(),
-                    domain: sheet.querySelector('[name="domain"]').value.trim(),
-                    address: sheet.querySelector('[name="address"]').value.trim(),
-                    workHours: sheet.querySelector('[name="workHours"]').value.trim(),
-                    adminPhone: sheet.querySelector('[name="adminPhone"]').value.trim(),
-                    promptMode: getMode(),
-                    systemPrompt: promptInput ? promptInput.value : '',
-                    active: mode === 'edit' ? data.active : true
-                };
-                submit.disabled = true;
-                var request = mode === 'edit'
-                    ? api('PATCH', '/api/wa/tenants/' + encodeURIComponent(data.instanceId), payload)
-                    : mode === 'clone'
-                        ? api('POST', '/api/wa/tenants/' + encodeURIComponent(sourceInstanceId) + '/clone', payload)
-                        : api('POST', '/api/wa/tenants', payload);
-                request.then(function () {
-                    closeSheet();
-                    toast(mode === 'edit' ? 'Сақталды' : 'Қосылды. Енді QR-кодты сканерлеңіз.');
-                    load();
-                }).catch(function (error) {
-                    submit.disabled = false;
-                    markInvalid(error.fields);
-                    toast(error.message, true);
-                });
-            });
-        });
-    }
-
-    function sharedPromptForm() {
-        api('GET', '/api/wa/shared-prompt').then(function (data) {
-            openSheet('Ортақ промпт', function (parent) {
-                parent.appendChild(el('div', 'hint', 'Бұл мәтін «Ортақ» режимдегі барлық ресторанға жазылады. «Жеке» режимдегілерге тимейді.'));
-                var input = field(parent, 'prompt', '', data.prompt || '', '', 'textarea');
-                input.style.minHeight = '300px';
-                var actions = el('div', 'sheet-actions');
-                var cancel = el('button', 'btn ghost', 'Болдырмау');
-                cancel.type = 'button';
-                cancel.addEventListener('click', closeSheet);
-                var save = el('button', 'btn primary', 'Сақтап тарату');
-                save.type = 'button';
-                save.addEventListener('click', function () {
-                    save.disabled = true;
-                    api('PUT', '/api/wa/shared-prompt', { prompt: input.value }).then(function (result) {
-                        closeSheet();
-                        toast(result.applied + " ресторанға таратылды");
-                        load();
-                    }).catch(function (error) { save.disabled = false; toast(error.message, true); });
-                });
-                actions.appendChild(cancel);
-                actions.appendChild(save);
-                parent.appendChild(actions);
-            });
-        }).catch(function (error) { toast(error.message, true); });
-    }
-
-    function deleteForm(tenant) {
-        openSheet('Толық өшіру', function (parent) {
-            parent.appendChild(el('div', 'hint', '«' + tenant.brand + '» кестеден де, WhatsApp сессиясынан да жойылады. Қайтару мүмкін емес. Растау үшін instance ID-ін жазыңыз.'));
-            var input = field(parent, 'confirm', 'Instance ID', '', '', 'text');
-            var actions = el('div', 'sheet-actions');
-            var cancel = el('button', 'btn ghost', 'Болдырмау');
-            cancel.type = 'button';
-            cancel.addEventListener('click', closeSheet);
-            var remove = el('button', 'btn danger', 'Өшіру');
-            remove.type = 'button';
-            remove.addEventListener('click', function () {
-                remove.disabled = true;
-                api('DELETE', '/api/wa/tenants/' + encodeURIComponent(tenant.instanceId), { confirm: input.value.trim() })
-                    .then(function () { closeSheet(); toast('Өшірілді'); load(); })
-                    .catch(function (error) { remove.disabled = false; toast(error.message, true); });
-            });
-            actions.appendChild(cancel);
-            actions.appendChild(remove);
-            parent.appendChild(actions);
-        });
-    }
-
-    function markClass(check) {
-        if (check.ok) return 'ok';
-        return check.level === 'required' ? 'bad' : 'warn';
-    }
-
-    function renderCheck(check) {
-        var row = el('div', 'check');
-        row.appendChild(el('span', 'mark ' + markClass(check), check.ok ? '✓' : (check.level === 'required' ? '✕' : '!')));
-        var body = el('div');
-        body.appendChild(el('code', null, check.column === '-' ? check.id : check.column));
-        if (!check.ok) body.appendChild(el('div', 'why', check.why));
-        row.appendChild(body);
-        return row;
-    }
-
-    function stateOf(tenant) {
-        if (!tenant.active) return 'off';
-        if (!tenant.summary.ready) return 'bad';
-        return tenant.summary.warnings.length ? 'warn' : 'ok';
-    }
-
-    function subtitleOf(tenant, state) {
-        if (state === 'off') return tenant.instanceId + ' · тоқтатылған';
-        if (state === 'bad') return tenant.instanceId + ' · дайын емес: ' + tenant.summary.blocking.join(', ');
-        if (state === 'warn') return tenant.instanceId + ' · жұмыста, толықтыру бар';
-        return tenant.instanceId + ' · жұмыста';
-    }
-
-    function actionButton(label, className, handler) {
-        var button = el('button', 'btn small ' + className, label);
-        button.type = 'button';
-        button.addEventListener('click', handler);
-        return button;
-    }
-
-    function renderTenant(tenant) {
-        var card = el('div', 'tenant');
-        var state = stateOf(tenant);
-
-        var head = el('div', 'tenant-head');
-        head.appendChild(el('span', 'dot ' + state));
-        var title = el('div', 'tenant-title');
-        title.appendChild(el('span', 'tenant-name', tenant.brand));
-        title.appendChild(el('span', 'tenant-sub', subtitleOf(tenant, state)));
-        head.appendChild(title);
-        head.appendChild(el('span', 'chev', '▾'));
-        head.addEventListener('click', function () { card.classList.toggle('open'); });
-
-        var body = el('div', 'tenant-body');
-        var inner = el('div', 'inner');
-        body.appendChild(inner);
-        tenant.checks.forEach(function (check) { inner.appendChild(renderCheck(check)); });
-
-        var actions = el('div', 'actions');
-        actions.appendChild(actionButton('Өңдеу', 'ghost', function () {
-            api('GET', '/api/wa/tenants/' + encodeURIComponent(tenant.instanceId) + '/settings')
-                .then(function (data) { tenantForm('edit', data.tenant); })
-                .catch(function (error) { toast(error.message, true); });
-        }));
-        actions.appendChild(actionButton(tenant.active ? 'Тоқтату' : 'Іске қосу', 'ghost', function () {
-            api('POST', '/api/wa/tenants/' + encodeURIComponent(tenant.instanceId) + '/active', { active: !tenant.active })
-                .then(function () { toast(tenant.active ? 'Тоқтатылды' : 'Іске қосылды'); load(); })
-                .catch(function (error) { toast(error.message, true); });
-        }));
-        actions.appendChild(actionButton('Клон', 'ghost', function () {
-            api('GET', '/api/wa/tenants/' + encodeURIComponent(tenant.instanceId) + '/settings')
-                .then(function (data) { tenantForm('clone', data.tenant, tenant.instanceId); })
-                .catch(function (error) { toast(error.message, true); });
-        }));
-        actions.appendChild(actionButton('Кілт жаңарту', 'ghost', function () {
-            api('POST', '/api/wa/tenants/' + encodeURIComponent(tenant.instanceId) + '/rotate')
-                .then(function () { toast('Жаңа кілттер жасалды'); load(); })
-                .catch(function (error) { toast(error.message, true); });
-        }));
-        actions.appendChild(actionButton('Өшіру', 'danger', function () { deleteForm(tenant); }));
-        inner.appendChild(actions);
-
-        card.appendChild(head);
-        card.appendChild(body);
-        if (state === 'bad') card.classList.add('open');
-        return card;
-    }
-
-    function renderCollisions(collisions) {
-        collisionsEl.textContent = '';
-        if (!collisions || !collisions.length) return;
-        var box = el('div', 'alert');
-        box.appendChild(el('h2', null, 'Ресторандар арасындағы қақтығыс'));
-        collisions.forEach(function (entry) { box.appendChild(el('p', null, entry.detail)); });
-        collisionsEl.appendChild(box);
-    }
-
-    function load() {
-        countsEl.textContent = 'тексерілуде…';
-        api('GET', '/api/wa/tenants').then(function (data) {
-            report = data;
-            listEl.textContent = '';
-            countsEl.textContent = '';
-            countsEl.appendChild(el('strong', null, data.ready + '/' + data.total));
-            countsEl.appendChild(document.createTextNode(' дайын'));
-            renderCollisions(data.collisions);
-            if (!data.tenants.length) {
-                listEl.appendChild(el('div', 'empty', 'Әзірге ресторан жоқ. Төмендегі «+ Жаңа ресторан» батырмасынан бастаңыз.'));
-                return;
-            }
-            data.tenants
-                .slice()
-                .sort(function (a, b) { return Number(a.summary.ready) - Number(b.summary.ready); })
-                .forEach(function (tenant) { listEl.appendChild(renderTenant(tenant)); });
-        }).catch(function (error) {
-            listEl.textContent = '';
-            countsEl.textContent = '';
-            listEl.appendChild(el('div', 'error', error.message));
-        });
-    }
-
-    document.getElementById('refresh').addEventListener('click', load);
-    document.getElementById('shared-btn').addEventListener('click', sharedPromptForm);
-    document.getElementById('add').addEventListener('click', function () { tenantForm('create', null); });
-
-    api('GET', '/api/wa/tenant-defaults')
-        .then(function (data) { defaults = { domainSuffix: data.domainSuffix || '', workHours: data.workHours || defaults.workHours }; })
-        .catch(function () { /* the form still works, it just fills in less */ });
-    load();
-})();
-</script>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h11M4 17h16"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M4 10v10h16V10M3 10l2-6h14l2 6"/><path d="M3 10c0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0M9 20v-5h6v5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19 15.5A8 8 0 0 1 8.5 5 8 8 0 1 0 19 15.5Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18 10a7 7 0 0 0-12-3L4 9m2 5a7 7 0 0 0 12 3l2-2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M7 6.5a8 8 0 1 0 10 0"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M8 3v5M16 3v5M6 8h12v2a6 6 0 0 1-6 6v5M9 21h6"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l3.5-1 11-11a2 2 0 0 0-3-3l-11 11L4 20Z"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M5 8V4m0 0h4M5 4l3 3a7 7 0 1 1-1.5 8"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m9 15 6-6M8 12H6a4 4 0 0 1 0-8h4a4 4 0 0 1 3.5 2M16 12h2a4 4 0 0 1 0 8h-4a4 4 0 0 1-3.5-2"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM15 14h2v2h-2zM19 14h1v3h-3v3h-3v-2M19 19h1v1h-1z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5H5v11h3"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3ZM19 16l.6 2.4L22 19l-2.4.6L19 22l-.6-2.4L16 19l2.4-.6L19 16Z"/></symbol>
+  </svg>
+  <script src="/tenants.js"></script>
 </body>
 </html>
