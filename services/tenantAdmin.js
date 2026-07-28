@@ -155,12 +155,20 @@ function operatorFields(rawInput = {}) {
   };
 }
 
-function validationErrors(fields) {
+// A restaurant is now created before anybody has scanned a QR code, so the
+// WhatsApp number is not always known at that moment. A caller can opt into a
+// missing phone; a phone that is present is validated exactly as before, and
+// every other rule is untouched.
+function validationErrors(fields, options = {}) {
   const errors = [];
   if (!isValidInstanceId(fields.instance_id)) errors.push('instanceId');
   if (!fields.brand) errors.push('brand');
   const digits = fields.whatsapp_phone.replace(/\D/g, '');
-  if (digits.length < 10 || digits.length > 15) errors.push('whatsappPhone');
+  if (digits.length) {
+    if (digits.length < 10 || digits.length > 15) errors.push('whatsappPhone');
+  } else if (!options.allowMissingPhone) {
+    errors.push('whatsappPhone');
+  }
   if (!fields.domain) errors.push('domain');
   return errors;
 }
@@ -182,12 +190,16 @@ function resolvePrompt(fields, input, sharedPrompt, existing = null) {
     if (custom) return custom;
     return cleanMultiline(existing?.system_prompt || '');
   }
-  return cleanMultiline(sharedPrompt || existing?.system_prompt || '');
+  // The new dashboard has one prompt box and no mode selector, so a prompt the
+  // operator actually typed is honoured when no shared text was supplied rather
+  // than being dropped on the floor. Shared text still wins when it exists, so
+  // applySharedPrompt keeps behaving exactly as it did.
+  return cleanMultiline(sharedPrompt || input?.systemPrompt || existing?.system_prompt || '');
 }
 
 async function createTenant(input, options = {}) {
   const fields = operatorFields(input);
-  const errors = validationErrors(fields);
+  const errors = validationErrors(fields, { allowMissingPhone: options.allowMissingPhone === true });
   if (errors.length) throw badRequest(errors);
   if (await findRow(fields.instance_id)) {
     const error = new Error('TENANT_ALREADY_EXISTS');
@@ -197,7 +209,10 @@ async function createTenant(input, options = {}) {
 
   const payload = {
     ...fields,
-    ...platformFields(options.publicBase),
+    // A caller that has to be able to undo a half-finished create needs to know
+    // the secrets before the row is written, so it may pass them in. Nothing
+    // else does, and those callers get freshly generated ones as before.
+    ...(options.platform || platformFields(options.publicBase)),
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt)
   };
   await axios.post(recordsUrl(), payload, { headers: headers(), timeout: timeout() });
@@ -338,6 +353,7 @@ async function applySharedPrompt(sharedPrompt) {
 // The panel needs to show a restaurant's own settings without ever handing back a
 // secret. Everything generated is reported as present/absent only.
 function presentableTenant(row) {
+  if (!row) return null;
   return {
     instanceId: clean(row.instance_id, 64),
     brand: clean(row.brand, 120),
@@ -365,6 +381,7 @@ module.exports = {
   deleteTenant,
   findRow,
   listRows,
+  platformFields,
   presentableTenant,
   rotateSecrets,
   setActive,

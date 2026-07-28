@@ -29,6 +29,8 @@ const { getTenantChatConfig } = require('../services/nocodbConfig');
 const nocodbConfig = require('../services/nocodbConfig');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
+const adminAuth = require('../services/adminAuth');
+const { createRestaurantService } = require('../services/restaurantService');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -50,6 +52,92 @@ const SEND_LEASE_TTL_SECONDS = 24 * 60 * 60;
 const SEND_RESULT_TTL_SECONDS = 24 * 60 * 60;
 const OPERATOR_EFFECT_OUTBOX_KEY = 'chatwoot:operator-effects-outbox';
 const SEND_WAL_DIR = path.resolve(process.env.WHATSPRO_SEND_WAL_DIR || path.join(process.cwd(), '.whatspro-send-wal'));
+
+// The restaurant dashboard drives one service instead of a dozen endpoints each
+// doing half the job. The service owns no I/O of its own, so everything it needs
+// is handed to it here, and this block is the only place that knows how those
+// pieces are actually stored.
+//
+// whatspro:instances is a hash of instanceId -> JSON, not a set. The service
+// speaks in set operations, so they are translated here rather than changing the
+// storage format that /api/wa/instances and the WhatsApp manager already read.
+const restaurantRedis = {
+  async set(key, value, options) {
+    if (!redisClient.isOpen) return null;
+    return redisClient.set(key, value, options);
+  },
+  async del(keys) {
+    if (!redisClient.isOpen) return 0;
+    return redisClient.del(keys);
+  },
+  async scan(cursor, options) {
+    if (!redisClient.isOpen) return { cursor: 0, keys: [] };
+    return redisClient.scan(cursor, options);
+  },
+  async sAdd(key, member) {
+    if (!redisClient.isOpen) return 0;
+    if (key !== INSTANCE_STORE_KEY) return redisClient.sAdd(key, member);
+    await saveInstance(member);
+    return 1;
+  },
+  async sRem(key, member) {
+    if (!redisClient.isOpen) return 0;
+    if (key !== INSTANCE_STORE_KEY) return redisClient.sRem(key, member);
+    return redisClient.hDel(key, member);
+  },
+  async hDel(key, field) {
+    if (!redisClient.isOpen) return 0;
+    return redisClient.hDel(key, field);
+  }
+};
+
+// A restaurant is created before anybody has scanned a QR code, so its WhatsApp
+// number is not known yet. Every other caller of createTenant still requires one.
+const restaurantTenantAdmin = {
+  ...tenantAdmin,
+  createTenant: (input, options = {}) => tenantAdmin.createTenant(input, { ...options, allowMissingPhone: true })
+};
+
+const restaurantService = createRestaurantService({
+  tenantAdmin: restaurantTenantAdmin,
+  redis: () => (redisClient.isOpen ? restaurantRedis : null),
+  whatsapp: {
+    start: startWhatsAppInstance,
+    stop: stopWhatsAppInstance,
+    status: getInstanceStatus
+  },
+  invalidateTenant: instanceId => nocodbConfig.invalidateTenant(instanceId),
+  publicBase: () => String(process.env.CHAT_PUBLIC_API_BASE || process.env.WHATSPRO_PUBLIC_URL || '').trim().replace(/\/+$/, ''),
+  logger: console
+});
+
+// Provisioning talks to NocoDB, Redis and Chromium, which is far longer than a
+// request should be held open. The POST returns a job id and the browser watches
+// the steps arrive on an event stream.
+const provisioningJobs = new Map();
+const PROVISION_JOB_TTL_MS = 10 * 60 * 1000;
+
+function createProvisioningJob() {
+  const jobId = 'job_' + Date.now() + '_' + crypto.randomBytes(6).toString('hex');
+  const job = { id: jobId, events: [], listeners: new Set(), done: false };
+  const expiry = setTimeout(() => provisioningJobs.delete(jobId), PROVISION_JOB_TTL_MS);
+  expiry.unref?.();
+  provisioningJobs.set(jobId, job);
+  return job;
+}
+
+function emitJobEvent(job, event) {
+  job.events.push(event);
+  for (const listener of job.listeners) {
+    // A browser that closed its tab must not be able to abort a provision.
+    try { listener(event); } catch (error) { /* ignored on purpose */ }
+  }
+}
+
+function finishJob(job, event) {
+  job.done = true;
+  emitJobEvent(job, event);
+}
 
 function isValidSendRequestId(value) {
   return /^[A-Za-z0-9_-]{8,128}$/.test(String(value || ''));
@@ -753,6 +841,9 @@ app.get('/whatspro', (req, res) => {
 });
 
 app.get('/tenants', (req, res) => {
+  // The shell is replaced wholesale between deploys, and a stale copy cached on
+  // a phone is indistinguishable from a broken page.
+  res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
   res.sendFile(path.join(PUBLIC_DIR, 'tenants.html'));
 });
 
@@ -774,13 +865,16 @@ app.use(express.static(PUBLIC_DIR, { index: false }));
 app.get('/api/whatspro/session', async (req, res) => {
   const session = readSession(req);
   if (!session && !await hasApiToken(req)) return res.status(401).json({ error: 'AUTH_REQUIRED' });
-  res.json({ authenticated: true, username: session?.username || process.env.WHATSPRO_USER || 'admin' });
+  res.json({ authenticated: true, username: session?.username || adminAuth.adminUsername() || 'admin' });
 });
 
 app.post('/api/whatspro/login', (req, res) => {
-  const configuredUser = String(process.env.WHATSPRO_USER || 'admin');
-  const configuredPassword = String(process.env.WHATSPRO_PASSWORD || '');
-  if (configuredPassword.length < 12 || ['change-me', 'password', 'admin123'].includes(configuredPassword.toLowerCase())) {
+  // Credential checking moved into adminAuth so the password can be a scrypt
+  // hash rather than plaintext in the environment. The legacy WHATSPRO_USER and
+  // WHATSPRO_PASSWORD pair still works exactly as before.
+  const authState = adminAuth.authConfig();
+  if (!authState.configured) {
+    console.warn('[AUTH] login is not configured: ' + authState.reason);
     return res.status(503).json({ error: 'LOGIN_NOT_CONFIGURED' });
   }
   const username = String(req.body?.username || '');
@@ -800,7 +894,7 @@ app.post('/api/whatspro/login', (req, res) => {
     res.set('Retry-After', String(Math.max(1, Math.ceil((attempt.resetAt - Date.now()) / 1000))));
     return res.status(429).json({ error: 'TOO_MANY_LOGIN_ATTEMPTS' });
   }
-  if (!safeEqual(username, configuredUser) || !safeEqual(password, configuredPassword)) {
+  if (!adminAuth.verifyCredentials(username, password, { logger: console })) {
     attempt.count += 1;
     loginAttempts.set(attemptKey, attempt);
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
@@ -977,9 +1071,9 @@ app.post('/api/wa/tenants/:instanceId/active', requireUiOrApi, async (req, res) 
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   const active = Boolean(req.body?.active);
   try {
-    const result = await tenantAdmin.setActive(instanceId, active);
-    if (active) await startWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] start failed', instanceId, error?.message || error));
-    else await stopWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] stop failed', instanceId, error?.message || error));
+    // One place decides what enabling means, so the stored flag and the running
+    // session cannot drift apart.
+    const result = await restaurantService.setActive(instanceId, active);
     res.json({ success: true, ...result });
   } catch (error) {
     return adminError(res, error);
@@ -991,14 +1085,148 @@ app.delete('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   // Deleting a restaurant removes its row and its session. Typing the name is
   // what separates that from a mis-tap on a phone.
-  if (String(req.body?.confirm || '') !== instanceId) return res.status(400).json({ error: 'CONFIRM_INSTANCE_ID_REQUIRED' });
+  const confirm = String(req.body?.confirm || '');
+  if (confirm !== instanceId && confirm !== 'DELETE') return res.status(400).json({ error: 'CONFIRM_INSTANCE_ID_REQUIRED' });
   try {
-    const result = await tenantAdmin.deleteTenant(instanceId);
-    await stopWhatsAppInstance(instanceId).catch(() => undefined);
-    if (redisClient.isOpen) await redisClient.hDel(INSTANCE_STORE_KEY, instanceId).catch(() => undefined);
-    res.json({ success: true, ...result });
+    // Deleting a row used to leave the tenant's chat history, media, receipts and
+    // locks behind in Redis forever. The service stops the session, clears those
+    // keys and removes the row last, so a failure part way through leaves the
+    // restaurant visible and the delete retryable.
+    const report = await restaurantService.destroy(instanceId);
+    res.json({ success: true, ...report, deleted: report.recordDeleted });
   } catch (error) {
     return adminError(res, error);
+  }
+});
+
+// The provisioning service reports failures with a numeric status on the error
+// itself. Existing routes keep using adminError untouched.
+function restaurantError(res, error) {
+  const status = Number(error?.status || 0);
+  if (status >= 400 && status < 600) {
+    return res.status(status).json({
+      error: error.code || error.message,
+      message: error.message,
+      fields: error.fields || undefined,
+      step: error.step || undefined
+    });
+  }
+  return adminError(res, error);
+}
+
+app.get('/api/wa/restaurants', requireUiOrApi, async (req, res) => {
+  try {
+    const rows = await tenantAdmin.listRows();
+    const restaurants = [];
+    for (const row of rows) {
+      const tenant = tenantAdmin.presentableTenant(row);
+      // Blank rows exist in the table from before the panel did. They are not
+      // restaurants and must not be shown as broken ones.
+      if (!tenant || !tenant.instanceId) continue;
+      const state = await getInstanceStatus(tenant.instanceId).catch(() => null);
+      restaurants.push({ ...tenant, status: state?.status || 'not_running' });
+    }
+    res.json({
+      success: true,
+      restaurants,
+      stats: {
+        total: restaurants.length,
+        active: restaurants.filter(item => item.active).length,
+        connected: restaurants.filter(item => item.status === 'connected').length
+      }
+    });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/restaurants', requireUiOrApi, async (req, res) => {
+  const input = req.body || {};
+  // Bad input is answered immediately rather than through the stream, so the
+  // form can highlight the fields without opening a connection first.
+  try {
+    restaurantService.validateInput(input);
+  } catch (error) {
+    return restaurantError(res, error);
+  }
+
+  const sharedPrompt = await readSharedPrompt();
+  const job = createProvisioningJob();
+  res.status(202).json({ success: true, jobId: job.id, steps: restaurantService.STEP_NAMES });
+
+  restaurantService
+    .provision(input, { sharedPrompt, onStep: event => emitJobEvent(job, { type: 'step', ...event }) })
+    .then(async result => {
+      // Keep the name the operator typed as the label instead of the derived id.
+      await saveInstance(result.instanceId, String(input.brand || result.instanceId)).catch(() => undefined);
+      finishJob(job, { type: 'done', instanceId: result.instanceId, tenant: result.tenant });
+    })
+    .catch(error => {
+      finishJob(job, {
+        type: 'error',
+        step: error.step || 'validate',
+        error: error.code || 'PROVISION_FAILED',
+        message: error.message,
+        fields: error.fields || undefined,
+        rollback: error.rollback || undefined
+      });
+    });
+});
+
+app.get('/api/wa/restaurants/jobs/:jobId', requireUiOrApi, (req, res) => {
+  const job = provisioningJobs.get(String(req.params.jobId || ''));
+  if (!job) return res.status(404).json({ error: 'JOB_NOT_FOUND' });
+
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  res.flush?.();
+
+  const send = event => {
+    if (res.writableEnded) return;
+    res.write('data: ' + JSON.stringify(event) + '\n\n');
+    res.flush?.();
+    if (event.type === 'done' || event.type === 'error') res.end();
+  };
+
+  // Replay what already happened, so a browser that connects a moment late still
+  // sees every step rather than joining half way through.
+  for (const event of job.events) send(event);
+  if (job.done) return;
+
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) return;
+    res.write(': heartbeat\n\n');
+    res.flush?.();
+  }, 20000);
+  const maxLifetime = setTimeout(() => res.end(), SSE_MAX_LIFETIME_MS);
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    clearInterval(heartbeat);
+    clearTimeout(maxLifetime);
+    job.listeners.delete(send);
+  };
+  job.listeners.add(send);
+  req.once('close', cleanup);
+  res.once('close', cleanup);
+});
+
+app.post('/api/wa/tenants/:instanceId/duplicate', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const result = await restaurantService.duplicate(instanceId, req.body || {}, { sharedPrompt: await readSharedPrompt() });
+    await saveInstance(result.instanceId, String(req.body?.brand || result.instanceId));
+    res.status(201).json({ success: true, instanceId: result.instanceId, tenant: result.tenant, steps: result.steps });
+  } catch (error) {
+    return restaurantError(res, error);
   }
 });
 
