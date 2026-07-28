@@ -1,87 +1,84 @@
 <!doctype html>
-<html lang="en">
+<html lang="kk">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#090c0f">
-  <title>WhatsPro — Restaurant operations</title>
+  <title>WhatsPro — Ресторандарды басқару</title>
   <link rel="stylesheet" href="/tenants.css">
 </head>
 <body>
   <div class="app-shell" id="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
-        <button class="icon-button menu-toggle" id="sidebar-toggle" type="button" aria-label="Collapse sidebar">
+        <button class="icon-button menu-toggle" id="sidebar-toggle" type="button" aria-label="Бүйірлік панельді жинау">
           <svg aria-hidden="true"><use href="#i-menu"></use></svg>
         </button>
         <div class="brand-copy">
           <strong>WhatsPro</strong>
-          <span>Restaurant platform</span>
+          <span id="brand-subtitle">Ресторан платформасы</span>
         </div>
       </div>
 
-      <div class="nav-label">Workspace</div>
-      <nav class="main-nav" aria-label="Primary navigation">
+      <div class="nav-label">Жұмыс кеңістігі</div>
+      <nav class="main-nav" aria-label="Негізгі навигация">
         <button class="nav-item active" type="button" data-view="dashboard">
           <svg aria-hidden="true"><use href="#i-grid"></use></svg>
-          <span>Dashboard</span>
+          <span id="nav-dashboard">Басқару панелі</span>
         </button>
         <button class="nav-item" type="button" data-view="restaurants">
           <svg aria-hidden="true"><use href="#i-store"></use></svg>
-          <span>Restaurants</span>
+          <span id="nav-restaurants">Ресторандар</span>
           <b class="nav-count" id="restaurant-count">—</b>
-        </button>
-        <button class="nav-item" type="button" data-view="jobs">
-          <svg aria-hidden="true"><use href="#i-clock"></use></svg>
-          <span>Provisioning jobs</span>
-          <b class="nav-count accent" id="job-count" hidden>0</b>
-        </button>
-        <button class="nav-item" type="button" data-view="activity">
-          <svg aria-hidden="true"><use href="#i-activity"></use></svg>
-          <span>Activity</span>
         </button>
       </nav>
 
       <div class="sidebar-footer">
         <button class="nav-item" id="focus-mode" type="button">
           <svg aria-hidden="true"><use href="#i-moon"></use></svg>
-          <span>Dark workspace</span>
+          <span id="theme-label">Жарық режим</span>
           <i class="status-dot"></i>
         </button>
         <div class="workspace-health">
           <span class="health-mark"><i></i></span>
-          <span><strong>Gateway online</strong><small id="last-sync">Checking…</small></span>
+          <span><strong id="gateway-label">Gateway қолжетімді</strong><small id="last-sync">Тексерілуде…</small></span>
         </div>
       </div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
-        <button class="icon-button mobile-menu" id="mobile-menu" type="button" aria-label="Open navigation">
+        <button class="icon-button mobile-menu" id="mobile-menu" type="button" aria-label="Навигацияны ашу">
           <svg aria-hidden="true"><use href="#i-menu"></use></svg>
         </button>
         <label class="global-search">
           <svg aria-hidden="true"><use href="#i-search"></use></svg>
-          <input id="global-search" type="search" autocomplete="off" placeholder="Search restaurants, instance, phone…">
+          <input id="global-search" type="search" autocomplete="off" placeholder="Ресторан, instance немесе телефон іздеу…">
           <kbd>⌘ K</kbd>
         </label>
         <div class="topbar-actions">
-          <button class="text-button locale-button" id="locale-button" type="button" aria-label="Change language">
-            <span>EN</span><svg aria-hidden="true"><use href="#i-chevron"></use></svg>
+          <div class="locale-wrap">
+          <button class="text-button locale-button" id="locale-button" type="button" aria-label="Тілді ауыстыру" aria-expanded="false">
+            <span>ҚАЗ</span><svg aria-hidden="true"><use href="#i-chevron"></use></svg>
           </button>
-          <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh data">
+          <div class="locale-menu popover" id="locale-menu" hidden>
+            <button type="button" data-locale="kk"><strong>ҚАЗ</strong><span>Қазақша</span></button>
+            <button type="button" data-locale="ru"><strong>РУС</strong><span>Русский</span></button>
+          </div>
+          </div>
+          <button class="icon-button" id="refresh-button" type="button" aria-label="Деректерді жаңарту">
             <svg aria-hidden="true"><use href="#i-refresh"></use></svg>
           </button>
           <div class="profile-wrap">
             <button class="profile-button" id="profile-button" type="button" aria-expanded="false">
               <span class="avatar">AD</span>
-              <span class="profile-copy"><strong>Admin</strong><small>Owner</small></span>
+              <span class="profile-copy"><strong id="profile-name">Әкімші</strong><small id="profile-role">Иесі</small></span>
               <svg aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <div class="profile-menu popover" id="profile-menu" hidden>
-              <div class="profile-menu-head"><strong>Admin workspace</strong><span>Secure session</span></div>
-              <button type="button" data-profile-action="refresh"><svg><use href="#i-refresh"></use></svg>Refresh workspace</button>
-              <button type="button" data-profile-action="logout"><svg><use href="#i-logout"></use></svg>Sign out</button>
+              <div class="profile-menu-head"><strong id="profile-workspace">Әкімші панелі</strong><span id="profile-session">Қауіпсіз сессия</span></div>
+              <button type="button" data-profile-action="refresh"><svg><use href="#i-refresh"></use></svg><span id="profile-refresh">Деректерді жаңарту</span></button>
+              <button type="button" data-profile-action="logout"><svg><use href="#i-logout"></use></svg><span id="profile-logout">Шығу</span></button>
             </div>
           </div>
         </div>
@@ -108,6 +105,7 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></symbol>
     <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19 15.5A8 8 0 0 1 8.5 5 8 8 0 1 0 19 15.5Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18 10a7 7 0 0 0-12-3L4 9m2 5a7 7 0 0 0 12 3l2-2"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
