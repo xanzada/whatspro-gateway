@@ -222,6 +222,25 @@ test('incoming, viewed, operator and archive are exclusive states', async () => 
   assert.equal(await store.getState('acme', '77001234567'), 'all');
 });
 
+test('chat data is isolated by tenant instance while sharing one Redis store', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1000 });
+  const phone = '77001234567';
+
+  await store.appendMessageOnce('tenant-a', phone, {
+    id: 'a-1', text: 'tenant A message', direction: 'incoming', createdAt: 1000
+  }, { state: 'new' });
+  await store.appendMessageOnce('tenant-b', phone, {
+    id: 'b-1', text: 'tenant B message', direction: 'incoming', createdAt: 1001
+  }, { state: 'new' });
+
+  assert.notEqual(store.keys.history('tenant-a', phone), store.keys.history('tenant-b', phone));
+  assert.deepEqual((await store.getHistory('tenant-a', phone)).map(row => row.id), ['a-1']);
+  assert.deepEqual((await store.getHistory('tenant-b', phone)).map(row => row.id), ['b-1']);
+  assert.deepEqual((await store.readInbox('tenant-a', 10)).map(row => row.phone), [phone]);
+  assert.deepEqual((await store.readInbox('tenant-b', 10)).map(row => row.phone), [phone]);
+});
+
 test('operator reply is stored while preserving archive state and its 72 hour TTL', async () => {
   const redis = new FakeRedis();
   const store = createChatStore(redis, { now: () => 5000 });
