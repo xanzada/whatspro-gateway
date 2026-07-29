@@ -162,9 +162,12 @@ test('tenant QR and automatic reconnect use the same WhatsPro instance manager',
   assert.match(startRoute, /await startWhatsAppInstance\(instanceId\)/);
   assert.match(startRoute, /await getInstanceStatus\(instanceId\)/, 'the QR returned to the tenant panel is the manager QR');
 
-  const statusRoute = source.slice(source.indexOf("app.get('/api/wa/status/:instanceId'"), source.indexOf("app.post('/api/wa/instances'"));
-  assert.match(statusRoute, /status\?\.hasStoredSession/);
-  assert.match(statusRoute, /await startWhatsAppInstance\(instanceId\)/, 'a stored session automatically reconnects when status is read');
+  const liveStatusHelper = source.slice(source.indexOf('async function readLiveStatus'), source.indexOf("app.post('/api/wa/statuses'"));
+  assert.match(liveStatusHelper, /status\?\.hasStoredSession/);
+  assert.match(liveStatusHelper, /await startWhatsAppInstance\(instanceId\)/, 'a stored session automatically reconnects when status is read');
+  const bulkStatusRoute = source.slice(source.indexOf("app.post('/api/wa/statuses'"), source.indexOf("app.get('/api/wa/status/:instanceId'"));
+  assert.match(bulkStatusRoute, /Promise\.all/);
+  assert.match(bulkStatusRoute, /readLiveStatus\(instanceId\)/, 'the dashboard batches status reads without changing reconnect behavior');
 
   const boot = source.slice(source.indexOf('async function boot()'), source.indexOf('if (require.main === module)'));
   assert.match(boot, /const instances = await listInstances\(\)/);

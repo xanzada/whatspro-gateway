@@ -931,7 +931,15 @@ app.post(
     try {
       if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'BACKUP_FILE_REQUIRED' });
       const parsed = await tenantWorkbook.importWorkbook(req.body);
-      const result = await tenantStore.restoreRows(parsed.rows);
+      const result = await tenantAdmin.importTenants(parsed.rows, {
+        publicBase: publicApiBase(req),
+        sharedPrompt: await readSharedPrompt()
+      });
+      const rowsByInstance = new Map(parsed.rows.map(row => [row.instance_id, row]));
+      await Promise.all(result.createdInstances.map(instanceId => {
+        const row = rowsByInstance.get(instanceId);
+        return saveInstance(instanceId, String(row?.brand || instanceId));
+      }));
       const activeRows = parsed.rows.filter(row => row.active !== false);
       await Promise.all(activeRows.map(row => startWhatsAppInstance(row.instance_id)
         .catch(error => console.warn('[TENANT:IMPORT] start failed', row.instance_id, error?.message || error))));
@@ -1605,14 +1613,38 @@ app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
   res.json({ success: true, ...result, ...(await getInstanceStatus(instanceId)) });
 });
 
-app.get('/api/wa/status/:instanceId', requireUiOrApi, async (req, res) => {
-  const instanceId = String(req.params.instanceId || '').trim();
-  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+async function readLiveStatus(instanceId) {
   let status = await getInstanceStatus(instanceId);
   if (status?.hasStoredSession && ['not_running', 'stopped', 'disconnected'].includes(String(status.status || ''))) {
     await startWhatsAppInstance(instanceId);
     status = await getInstanceStatus(instanceId);
   }
+  return status;
+}
+
+app.post('/api/wa/statuses', requireUiOrApi, async (req, res) => {
+  const instanceIds = Array.from(new Set(
+    (Array.isArray(req.body?.instanceIds) ? req.body.instanceIds : [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+  ));
+  if (!instanceIds.length || instanceIds.length > 500 || instanceIds.some(instanceId => !isValidInstanceId(instanceId))) {
+    return res.status(400).json({ error: 'BAD_INSTANCE_IDS' });
+  }
+  const entries = await Promise.all(instanceIds.map(async instanceId => {
+    try {
+      return [instanceId, await readLiveStatus(instanceId)];
+    } catch (error) {
+      return [instanceId, { status: 'unavailable', __error: true }];
+    }
+  }));
+  return res.json({ success: true, statuses: Object.fromEntries(entries) });
+});
+
+app.get('/api/wa/status/:instanceId', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const status = await readLiveStatus(instanceId);
   res.json(status);
 });
 

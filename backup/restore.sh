@@ -18,17 +18,27 @@ umask 077
 git clone --quiet --depth 1 --branch "${branch}" "${repo_url}" "${work_dir}/vault"
 (
   cd "${work_dir}/vault"
-  sha256sum -c encrypted-parts.sha256
+  # Early snapshots recorded the temporary absolute build path. Normalizing to
+  # basenames keeps those snapshots restorable while new ones are already
+  # written with portable relative paths.
+  awk '{ file=$2; sub(/^.*\//, "", file); print $1 "  " file }' encrypted-parts.sha256 \
+    | sha256sum -c -
   cat snapshot.tar.zst.age.part-* \
     | age -d -i "${identity_file}" \
     | zstd -d --quiet \
     | tar -xf - -C "${work_dir}"
 )
 
-redis_hash="$(sha256sum "${work_dir}/redis.rdb" | cut -d' ' -f1)"
-grep -Fq "\"redisSha256\":\"${redis_hash}\"" "${work_dir}/manifest.json"
+redis_hash="$(sha256sum "${work_dir}/redis.rdb")"
+redis_hash="${redis_hash%% *}"
+if grep -Fq '"redisSha256":""' "${work_dir}/manifest.json"; then
+  echo "Warning: legacy snapshot has no Redis manifest hash; age authentication and encrypted-part hashes were verified." >&2
+else
+  grep -Fq "\"redisSha256\":\"${redis_hash}\"" "${work_dir}/manifest.json"
+fi
 if [[ -f "${work_dir}/whatsapp_auth.tar" ]]; then
-  auth_hash="$(sha256sum "${work_dir}/whatsapp_auth.tar" | cut -d' ' -f1)"
+  auth_hash="$(sha256sum "${work_dir}/whatsapp_auth.tar")"
+  auth_hash="${auth_hash%% *}"
   grep -Fq "\"whatsappAuthSha256\":\"${auth_hash}\"" "${work_dir}/manifest.json"
 fi
 

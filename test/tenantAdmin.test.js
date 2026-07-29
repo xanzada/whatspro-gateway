@@ -195,3 +195,63 @@ test('bot pause is stored independently from WhatsApp active state', () => {
   assert.equal(view.active, true);
   assert.equal(view.botEnabled, false);
 });
+
+test('Excel import preserves existing keys and generates isolated keys for new tenants', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  const originalCreate = tenantStore.createRow;
+  const originalUpdate = tenantStore.updateRow;
+  const records = new Map([
+    ['existing', {
+      instance_id: 'existing',
+      brand: 'Old name',
+      whatspro_api_token: 'wp_keep_me',
+      webhook_secret: 'hook_keep_me',
+      kanban_secret: 'kanban_keep_me',
+      crm_secret_token: 'crm_keep_me'
+    }]
+  ]);
+  tenantStore.findRow = async instanceId => records.get(instanceId) || null;
+  tenantStore.createRow = async row => {
+    records.set(row.instance_id, { ...row });
+    return row;
+  };
+  tenantStore.updateRow = async (instanceId, patch) => {
+    const stored = { ...records.get(instanceId), ...patch };
+    records.set(instanceId, stored);
+    return stored;
+  };
+  t.after(() => {
+    tenantStore.findRow = originalFind;
+    tenantStore.createRow = originalCreate;
+    tenantStore.updateRow = originalUpdate;
+  });
+
+  const result = await tenantAdmin.importTenants([
+    {
+      instance_id: 'existing',
+      brand: 'Updated name',
+      whatsapp_phone: '+77010000001',
+      active: true,
+      bot_enabled: false
+    },
+    {
+      instance_id: 'new-point',
+      brand: 'New point',
+      whatsapp_phone: '+77010000002',
+      active: true,
+      bot_enabled: true
+    }
+  ], { publicBase: 'https://whatspro.bekaba.com', sharedPrompt: 'Shared prompt' });
+
+  assert.deepEqual(
+    { imported: result.imported, created: result.created, updated: result.updated },
+    { imported: 2, created: 1, updated: 1 }
+  );
+  assert.equal(records.get('existing').brand, 'Updated name');
+  assert.equal(records.get('existing').whatspro_api_token, 'wp_keep_me');
+  assert.equal(records.get('existing').webhook_secret, 'hook_keep_me');
+  assert.match(records.get('new-point').whatspro_api_token, /^wp_[0-9a-f]{48}$/);
+  assert.match(records.get('new-point').webhook_secret, /^hook_[0-9a-f]{48}$/);
+  assert.notEqual(records.get('new-point').whatspro_api_token, records.get('existing').whatspro_api_token);
+});

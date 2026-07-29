@@ -32,3 +32,7 @@ To decrypt a snapshot, install `age`, `git`, and `zstd`, then run:
 The restore tool verifies both encrypted chunks and the decrypted Redis/auth
 checksums. It only extracts files; replacing live volumes remains an explicit
 operator action.
+
+The WhatsApp archive excludes Chromium caches that are recreated automatically.
+Credentials, cookies, local/session storage and the Redis tenant database remain
+inside the encrypted snapshot.

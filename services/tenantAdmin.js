@@ -201,6 +201,69 @@ async function updateTenant(instanceId, input, options = {}) {
   return { instanceId, updated: true };
 }
 
+function workbookInput(row = {}) {
+  return {
+    instanceId: row.instance_id,
+    brand: row.brand,
+    whatsappPhone: row.whatsapp_phone,
+    adminPhone: row.admin_phone,
+    domain: row.domain,
+    address: row.address,
+    workHours: row.work_hours,
+    promptMode: row.prompt_mode,
+    systemPrompt: row.system_prompt,
+    active: row.active,
+    botEnabled: row.bot_enabled
+  };
+}
+
+// Excel is intentionally a business-data interchange format, not a secret
+// backup. New rows pass through createTenant so every platform key is generated
+// independently; existing rows pass through updateTenant so their keys remain
+// untouched. Validate the complete file before the first write.
+async function importTenants(rows, options = {}) {
+  if (!Array.isArray(rows) || !rows.length) {
+    const error = new Error('EMPTY_BACKUP');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const prepared = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const input = workbookInput(row);
+    const fields = operatorFields(input);
+    const errors = validationErrors(fields);
+    if (errors.length) throw badRequest(errors);
+    if (seen.has(fields.instance_id)) {
+      const error = new Error(`DUPLICATE_INSTANCE_ID:${fields.instance_id}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    seen.add(fields.instance_id);
+    prepared.push({ input, fields, existing: await findRow(fields.instance_id) });
+  }
+
+  const createdInstances = [];
+  const updatedInstances = [];
+  for (const item of prepared) {
+    if (item.existing) {
+      await updateTenant(item.fields.instance_id, item.input, options);
+      updatedInstances.push(item.fields.instance_id);
+    } else {
+      await createTenant(item.input, options);
+      createdInstances.push(item.fields.instance_id);
+    }
+  }
+  return {
+    imported: prepared.length,
+    created: createdInstances.length,
+    updated: updatedInstances.length,
+    createdInstances,
+    updatedInstances
+  };
+}
+
 async function setActive(instanceId, active) {
   const existing = await findRow(instanceId);
   if (!existing) {
@@ -341,6 +404,7 @@ module.exports = {
   createTenant,
   deleteTenant,
   findRow,
+  importTenants,
   listRows,
   presentableTenant,
   rotateSecrets,
@@ -348,5 +412,5 @@ module.exports = {
   setBotEnabled,
   updateTenant,
   slugify,
-  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults }
+  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput }
 };

@@ -19,6 +19,7 @@
   var activeFilter = 'all';
   var openMenuId = '';
   var loading = false;
+  var statusSyncing = false;
   var lastSync = null;
   var lastInstanceSignature = '';
   var statusTimer = 0;
@@ -229,7 +230,7 @@
     importDone: 'Резерв қалпына келтірілді',
     importSummary: 'Импортталды: {imported}, жаңа: {created}, жаңартылды: {updated}',
     invalidExcel: 'WhatsPro жасаған .xlsx резервтік файлын таңдаңыз.',
-    sensitiveBackup: 'Файлда tenant кілттері бар. Қауіпсіз жерде сақтаңыз.'
+    sensitiveBackup: 'Кілттер экспортталмайды. Жаңа нысандардың кілттері импорт кезінде автоматты жасалады.'
   });
   Object.assign(I18N.ru, {
     documentTitle: 'WhatsPro — Управление точками',
@@ -282,7 +283,7 @@
     importDone: 'Резервная копия восстановлена',
     importSummary: 'Импортировано: {imported}, новых: {created}, обновлено: {updated}',
     invalidExcel: 'Выберите резервный .xlsx-файл, созданный WhatsPro.',
-    sensitiveBackup: 'Файл содержит tenant-ключи. Храните его в безопасном месте.'
+    sensitiveBackup: 'Ключи не экспортируются. Для новых точек они создаются автоматически при импорте.'
   });
 
   function t(key) { return (I18N[locale] && I18N[locale][key]) || key; }
@@ -676,11 +677,18 @@
     return { tenants: tenantItems, total: tenantItems.length };
   }
   function fetchStatuses(items) {
-    return Promise.all(items.map(function (tenant) {
-      return api('GET', '/api/wa/status/' + encodeURIComponent(tenant.instanceId))
-        .then(function (live) { statuses.set(tenant.instanceId, live || {}); })
-        .catch(function () { statuses.set(tenant.instanceId, { __error: true, status: 'unavailable' }); });
-    }));
+    var instanceIds = items.map(function (tenant) { return tenant.instanceId; });
+    if (!instanceIds.length) return Promise.resolve();
+    return api('POST', '/api/wa/statuses', { instanceIds: instanceIds }).then(function (data) {
+      var liveStatuses = data.statuses || {};
+      instanceIds.forEach(function (instanceId) {
+        statuses.set(instanceId, liveStatuses[instanceId] || { __error: true, status: 'unavailable' });
+      });
+    }).catch(function () {
+      instanceIds.forEach(function (instanceId) {
+        statuses.set(instanceId, { __error: true, status: 'unavailable' });
+      });
+    });
   }
   function loadData(silent) {
     if (loading) return Promise.resolve();
@@ -721,11 +729,12 @@
     });
   }
   function syncLiveStatuses() {
-    if (document.hidden && !qrInstanceId) return Promise.resolve();
+    if ((document.hidden && !qrInstanceId) || loading || statusSyncing) return Promise.resolve();
+    statusSyncing = true;
     return fetchStatuses(report.tenants).then(function () {
       lastSync = new Date();
       patchLiveDom();
-    });
+    }).finally(function () { statusSyncing = false; });
   }
   function syncInstances() {
     if (document.hidden || loading) return;
@@ -1218,7 +1227,12 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
   });
-  searchEl.addEventListener('input', function (event) { searchQuery = event.target.value; render(); });
+  var searchRenderFrame = 0;
+  searchEl.addEventListener('input', function (event) {
+    searchQuery = event.target.value;
+    window.cancelAnimationFrame(searchRenderFrame);
+    searchRenderFrame = window.requestAnimationFrame(render);
+  });
   $('#focus-mode').addEventListener('click', function () {
     theme = theme === 'dark' ? 'light' : 'dark';
     applyTheme();

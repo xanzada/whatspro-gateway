@@ -19,11 +19,13 @@ test('offsite snapshots are encrypted, split and alternated', () => {
   assert.match(backup, /split -b 90m/);
   assert.match(backup, /BACKUP_GIT_BRANCH_PREFIX.*slot/);
   assert.match(backup, /StrictHostKeyChecking=yes/);
+  assert.match(backup, /cd "\$\{stage\}"[\s\S]+sha256sum snapshot\.tar\.zst\.age\.part-\*/);
+  assert.match(backup, /--exclude='\*\/Cache\/\*'/);
   assert.doesNotMatch(backup, /BEGIN OPENSSH PRIVATE KEY/);
 });
 
 test('restore verifies encrypted parts and decrypted payload hashes', () => {
-  assert.match(restore, /sha256sum -c encrypted-parts\.sha256/);
+  assert.match(restore, /encrypted-parts\.sha256[\s\S]+sha256sum -c -/);
   assert.match(restore, /age -d -i/);
   assert.match(restore, /redisSha256/);
   assert.match(restore, /whatsappAuthSha256/);

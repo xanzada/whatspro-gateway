@@ -31,16 +31,22 @@ function tenant(overrides = {}) {
   };
 }
 
-test('tenant workbook round-trips secrets, booleans and future fields', async () => {
+test('tenant workbook round-trips business data without platform secrets', async () => {
   const file = await tenantWorkbook.exportWorkbook([tenant()], 'all');
   assert.ok(file.length > 1000);
+  const generated = new ExcelJS.Workbook();
+  await generated.xlsx.load(file);
+  const visibleValues = JSON.stringify(generated.getWorksheet('Entities').getSheetValues());
+  assert.doesNotMatch(visibleValues, /wp_secret|hook_secret|kanban_secret|crm_secret|record_json/);
   const restored = await tenantWorkbook.importWorkbook(file);
   assert.equal(restored.scope, 'all');
   assert.equal(restored.rows.length, 1);
   assert.equal(restored.rows[0].instance_id, 'demo-point');
   assert.equal(restored.rows[0].bot_enabled, false);
-  assert.equal(restored.rows[0].whatspro_api_token, 'wp_secret');
-  assert.equal(restored.rows[0].future_field, 'preserved');
+  assert.equal(restored.rows[0].brand, 'Demo Point');
+  assert.equal(restored.rows[0].system_prompt, 'Helpful assistant');
+  assert.equal(restored.rows[0].whatspro_api_token, undefined);
+  assert.equal(restored.rows[0].future_field, undefined);
 });
 
 test('tenant workbook rejects duplicate instance ids', async () => {
@@ -67,5 +73,8 @@ test('generated workbook has readable sheets and keeps metadata hidden', async (
   assert.equal(workbook.getWorksheet('README').views[0].showGridLines, false);
   assert.equal(workbook.getWorksheet('Entities').views[0].state, 'frozen');
   assert.equal(workbook.getWorksheet('_BackupMeta').state, 'veryHidden');
-  assert.equal(workbook.getWorksheet('Entities').getColumn(tenantWorkbook.COLUMNS.length).hidden, true);
+  const headers = workbook.getWorksheet('Entities').getRow(5).values.slice(1);
+  assert.deepEqual(headers, tenantWorkbook.COLUMNS.map(([key]) => key));
+  assert.ok(!headers.includes('whatspro_api_token'));
+  assert.ok(!headers.includes('record_json'));
 });

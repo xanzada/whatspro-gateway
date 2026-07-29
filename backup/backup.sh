@@ -58,11 +58,13 @@ write_manifest() {
   local stage="$1"
   local created="$2"
   local redis_hash auth_hash auth_present
-  redis_hash="$(sha256sum "${stage}/redis.rdb" | cut -d' ' -f1)"
+  redis_hash="$(sha256sum "${stage}/redis.rdb")"
+  redis_hash="${redis_hash%% *}"
   auth_hash=''
   auth_present='false'
   if [[ -f "${stage}/whatsapp_auth.tar" ]]; then
-    auth_hash="$(sha256sum "${stage}/whatsapp_auth.tar" | cut -d' ' -f1)"
+    auth_hash="$(sha256sum "${stage}/whatsapp_auth.tar")"
+    auth_hash="${auth_hash%% *}"
     auth_present='true'
   fi
   printf '{"format":1,"source":"%s","createdAt":"%s","redisSha256":"%s","whatsappAuthIncluded":%s,"whatsappAuthSha256":"%s"}\n' \
@@ -77,7 +79,28 @@ make_snapshot() {
 
   redis-cli -u "${REDIS_URL}" --rdb "${stage}/redis.rdb" >/dev/null
   if [[ -d /source/whatsapp_auth ]]; then
-    tar -C /source --numeric-owner -cf "${stage}/whatsapp_auth.tar" whatsapp_auth
+    # Chromium can recreate these caches. Excluding them keeps the offsite
+    # snapshot focused on WhatsApp credentials, cookies and durable browser
+    # storage instead of repeatedly pushing hundreds of megabytes of cache.
+    tar -C /source --numeric-owner \
+      --exclude='*/Cache/*' \
+      --exclude='*/Code Cache/*' \
+      --exclude='*/GPUCache/*' \
+      --exclude='*/GrShaderCache/*' \
+      --exclude='*/ShaderCache/*' \
+      --exclude='*/DawnCache/*' \
+      --exclude='*/GraphiteDawnCache/*' \
+      --exclude='*/Media Cache/*' \
+      --exclude='*/Service Worker/CacheStorage/*' \
+      --exclude='*/Service Worker/ScriptCache/*' \
+      --exclude='*/Crashpad/*' \
+      --exclude='*/blob_storage/*' \
+      --exclude='*/BrowserMetrics-*' \
+      --exclude='*/DevToolsActivePort' \
+      --exclude='*/SingletonCookie' \
+      --exclude='*/SingletonLock' \
+      --exclude='*/SingletonSocket' \
+      -cf "${stage}/whatsapp_auth.tar" whatsapp_auth
     payload+=('whatsapp_auth.tar')
   fi
   write_manifest "${stage}" "${created}"
@@ -87,7 +110,10 @@ make_snapshot() {
     | age -r "${recipient}" \
     | split -b 90m -d -a 3 - "${stage}/snapshot.tar.zst.age.part-"
 
-  sha256sum "${stage}"/snapshot.tar.zst.age.part-* > "${stage}/encrypted-parts.sha256"
+  (
+    cd "${stage}"
+    sha256sum snapshot.tar.zst.age.part-* > encrypted-parts.sha256
+  )
 }
 
 publish_snapshot() {

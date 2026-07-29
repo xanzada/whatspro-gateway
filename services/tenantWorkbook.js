@@ -3,7 +3,7 @@
 const ExcelJS = require('exceljs');
 
 const FORMAT_NAME = 'WhatsProTenantBackup';
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 const MAX_ROWS = 5000;
 const MAX_CELL_CHARS = 50000;
 
@@ -18,22 +18,11 @@ const COLUMNS = [
   ['prompt_mode', 'Prompt режимі', 16],
   ['system_prompt', 'AI prompt', 48],
   ['active', 'Белсенді', 12],
-  ['bot_enabled', 'Бот қосулы', 12],
-  ['whatspro_api_token', 'WhatsPro API token', 34],
-  ['webhook_secret', 'Webhook secret', 34],
-  ['kanban_secret', 'Kanban secret', 34],
-  ['crm_secret_token', 'CRM secret', 34],
-  ['whatspro_base_url', 'WhatsPro base URL', 34],
-  ['whatspro_send_url', 'WhatsPro send URL', 34],
-  ['whatspro_presence_url', 'WhatsPro presence URL', 34],
-  ['dev_phone', 'Developer phone', 20],
-  ['created_at', 'Құрылған уақыты', 24],
-  ['updated_at', 'Жаңартылған уақыты', 24],
-  ['record_json', 'Толық техникалық жазба', 18]
+  ['bot_enabled', 'Бот қосулы', 12]
 ];
 
 const BOOLEAN_FIELDS = new Set(['active', 'bot_enabled']);
-const REQUIRED_FIELDS = ['instance_id', 'brand', 'whatspro_api_token', 'webhook_secret'];
+const REQUIRED_FIELDS = ['instance_id', 'brand'];
 
 function safeFilename(value) {
   return String(value || 'all')
@@ -89,10 +78,10 @@ function styleWorkbook(workbook, rows, scope) {
   readme.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
   readme.getCell('A1').alignment = { vertical: 'middle' };
   readme.getRow(1).height = 34;
-  readme.getCell('A3').value = 'МАҢЫЗДЫ / ВАЖНО';
-  readme.getCell('A3').font = { bold: true, color: { argb: 'FFB45309' } };
+  readme.getCell('A3').value = 'ҚАУІПСІЗ ҚАЛПЫНА КЕЛТІРУ / БЕЗОПАСНОЕ ВОССТАНОВЛЕНИЕ';
+  readme.getCell('A3').font = { bold: true, color: { argb: 'FF0F766E' } };
   readme.mergeCells('A4:F6');
-  readme.getCell('A4').value = 'Бұл файл tenant кілттері мен webhook құпияларын қамтиды. Оны ашық чатқа немесе public репозиторийге жібермеңіз.\nФайл содержит tenant-ключи и webhook-секреты. Не отправляйте его в открытый чат или публичный репозиторий.';
+  readme.getCell('A4').value = 'Файлда тек нысандардың жұмыс ақпараты бар. API-токендер мен ішкі кілттер экспортталмайды. Импорт кезінде жаңа нысандардың кілттері автоматты жасалады, ал бар нысандардың кілттері өзгермейді.\nФайл содержит только рабочие данные точек. API-токены и внутренние ключи не экспортируются. При импорте ключи новых точек создаются автоматически, а ключи существующих точек сохраняются.';
   readme.getCell('A4').alignment = { wrapText: true, vertical: 'top' };
   readme.getCell('A8').value = 'Экспорт көлемі / Объём';
   readme.getCell('B8').value = scope === 'all' ? 'Барлығы / Все' : 'Жеке / Одна точка';
@@ -139,9 +128,7 @@ function styleWorkbook(workbook, rows, scope) {
   rows.forEach(record => {
     const row = {};
     for (const [key] of COLUMNS) {
-      if (key === 'record_json') row[key] = JSON.stringify(record);
-      else if (BOOLEAN_FIELDS.has(key)) row[key] = record[key] !== false;
-      else if (key.endsWith('_at') && record[key]) row[key] = new Date(record[key]);
+      if (BOOLEAN_FIELDS.has(key)) row[key] = record[key] !== false;
       else row[key] = record[key] ?? '';
     }
     const excelRow = sheet.addRow(row);
@@ -149,18 +136,10 @@ function styleWorkbook(workbook, rows, scope) {
     excelRow.alignment = { vertical: 'middle', wrapText: false };
     excelRow.getCell('address').alignment = { vertical: 'middle', wrapText: true };
     excelRow.getCell('system_prompt').alignment = { vertical: 'middle', wrapText: true };
-    excelRow.getCell('record_json').alignment = { wrapText: false };
   });
-  if (rows.length) {
-    sheet.getColumn('created_at').numFmt = 'yyyy-mm-dd hh:mm:ss';
-    sheet.getColumn('updated_at').numFmt = 'yyyy-mm-dd hh:mm:ss';
+  for (const key of ['instance_id', 'whatsapp_phone', 'admin_phone', 'domain', 'work_hours']) {
+    sheet.getColumn(key).numFmt = '@';
   }
-  for (const key of ['whatspro_api_token', 'webhook_secret', 'kanban_secret', 'crm_secret_token']) {
-    sheet.getColumn(key).eachCell({ includeEmpty: false }, (cell, rowNumber) => {
-      if (rowNumber > 5) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7ED' } };
-    });
-  }
-  sheet.getColumn('record_json').hidden = true;
 
   const meta = workbook.addWorksheet('_BackupMeta', { state: 'veryHidden' });
   meta.addRows([
@@ -211,18 +190,8 @@ async function importWorkbook(buffer) {
     if (ids.has(instanceRaw)) throw workbookError(`DUPLICATE_INSTANCE_ID:${instanceRaw}`);
     ids.add(instanceRaw);
 
-    let record = {};
-    const rawJson = scalar(source.getCell(headers.get('record_json')).value, 'record_json').trim();
-    if (rawJson) {
-      try {
-        const parsed = JSON.parse(rawJson);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) record = parsed;
-      } catch {
-        throw workbookError(`INVALID_RECORD_JSON:${rowNumber}`);
-      }
-    }
+    const record = {};
     for (const [key] of COLUMNS) {
-      if (key === 'record_json') continue;
       const value = source.getCell(headers.get(key)).value;
       record[key] = BOOLEAN_FIELDS.has(key) ? parseBoolean(value, key) : scalar(value, key).trim();
     }
