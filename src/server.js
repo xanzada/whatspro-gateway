@@ -1876,6 +1876,9 @@ async function boot() {
   });
 
   await connectRedis();
+  await tenantStore.listTenantRecords().catch(error => {
+    console.warn('[TENANT SNAPSHOT] startup warm-up failed:', error.message);
+  });
   startIncomingWalWorker();
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
   try {
