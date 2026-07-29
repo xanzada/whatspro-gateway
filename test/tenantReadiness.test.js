@@ -39,6 +39,13 @@ test('a fully filled row reports ready with nothing outstanding', () => {
   assert.deepEqual(report.summary.warnings, []);
 });
 
+test('tenant list exposes bot control without changing WhatsApp active state', () => {
+  const paused = evaluateTenant(completeRow({ active: true, bot_enabled: false }));
+  assert.equal(paused.active, true);
+  assert.equal(paused.botEnabled, false);
+  assert.equal(evaluateTenant(completeRow()).botEnabled, true, 'legacy rows remain enabled by default');
+});
+
 test('every column the bot cannot run without blocks readiness on its own', () => {
   for (const column of ['whatsapp_phone', 'domain', 'whatspro_base_url', 'whatspro_api_token', 'system_prompt', 'webhook_secret']) {
     const report = evaluateTenant(completeRow({ [column]: '' }));
