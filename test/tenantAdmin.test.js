@@ -74,6 +74,7 @@ test('with no domain suffix configured the domain is left for a person to fill',
 
 test('required fields are named back so the form can highlight them', () => {
   const fields = admin.operatorFields({ brand: '', whatsappPhone: '123' });
+  assert.equal(fields.bot_enabled, true, 'new tenants answer through the bot by default');
   const errors = admin.validationErrors(fields);
   assert.deepEqual(errors.sort(), ['brand', 'instanceId', 'whatsappPhone']);
   assert.deepEqual(admin.validationErrors(admin.operatorFields({
@@ -177,5 +178,20 @@ test('a presentable tenant carries no secret, only whether one exists', () => {
   assert.equal(serialized.includes('hook_supersecret'), false);
   assert.deepEqual(view.secrets, { apiToken: true, webhookSecret: true, kanbanSecret: false });
   assert.equal(view.active, true, 'a row from before the column existed is not silently paused');
+  assert.equal(view.botEnabled, true, 'a row from before bot control existed remains enabled');
   assert.equal(view.promptMode, 'custom');
+});
+
+test('bot pause is stored independently from WhatsApp active state', () => {
+  const fields = admin.operatorFields({
+    instanceId: 'prestige',
+    brand: 'Prestige',
+    active: true,
+    botEnabled: false
+  });
+  assert.equal(fields.active, true);
+  assert.equal(fields.bot_enabled, false);
+  const view = tenantAdmin.presentableTenant({ ...fields, instance_id: 'prestige' });
+  assert.equal(view.active, true);
+  assert.equal(view.botEnabled, false);
 });

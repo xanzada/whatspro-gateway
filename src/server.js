@@ -42,6 +42,9 @@ const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSP
 const MIN_ADMIN_PASSWORD_LENGTH = 10;
 const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
 const CHAT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const CONNECT_TOKEN_TTL_MS = 72 * 60 * 60 * 1000;
+const CONNECT_RATE_WINDOW_SECONDS = 10 * 60;
+const CONNECT_RATE_LIMIT = 480;
 const loginAttempts = new Map();
 const operatorEffectJobs = new Map();
 const sendCompletionJobs = new Map();
@@ -317,6 +320,45 @@ function hasScopedChatToken(req, tokenOverride = '') {
   }
 }
 
+function issueConnectToken(instanceId, expiresAt = Date.now() + CONNECT_TOKEN_TTL_MS) {
+  const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    scope: 'wa-connect',
+    instanceId,
+    expiresAt,
+    nonce: crypto.randomBytes(12).toString('hex')
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function readConnectToken(token) {
+  try {
+    const [payload, signature, extra] = String(token || '').split('.');
+    if (!payload || !signature || extra) return null;
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+    if (!safeEqual(signature, expected)) return null;
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (parsed?.v !== 1 || parsed?.scope !== 'wa-connect') return null;
+    if (!isValidInstanceId(parsed.instanceId) || Number(parsed.expiresAt) <= Date.now()) return null;
+    return { instanceId: parsed.instanceId, expiresAt: Number(parsed.expiresAt) };
+  } catch {
+    return null;
+  }
+}
+
+async function allowConnectPoll(req, token) {
+  if (!redisClient.isOpen) return false;
+  const fingerprint = crypto.createHash('sha256')
+    .update(`${String(req.ip || '')}:${String(token || '')}`)
+    .digest('hex')
+    .slice(0, 32);
+  const key = `whatspro:connect-rate:${fingerprint}`;
+  const count = Number(await redisClient.incr(key));
+  if (count === 1) await redisClient.expire(key, CONNECT_RATE_WINDOW_SECONDS);
+  return count <= CONNECT_RATE_LIMIT;
+}
+
 function hasChatMediaToken(req) {
   const expected = process.env.WHATSPRO_API_TOKEN || '';
   const incoming = String(req.headers['x-chat-token'] || '') || String(req.query?.token || '');
@@ -357,7 +399,7 @@ function safeJsonForScript(value) {
 }
 
 function publicApiBase(req) {
-  const configured = String(process.env.CHAT_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
+  const configured = String(process.env.WHATSPRO_PUBLIC_URL || process.env.CHAT_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
   if (configured) return configured;
   return `${req.protocol}://${req.get('host')}`;
 }
@@ -764,6 +806,10 @@ app.get('/tenants', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'tenants.html'));
 });
 
+app.get('/connect', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'connect.html'));
+});
+
 app.get(['/chat', '/inbox'], (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
@@ -1034,6 +1080,61 @@ app.post('/api/wa/tenants/:instanceId/active', requireUiOrApi, async (req, res) 
     res.json({ success: true, ...result });
   } catch (error) {
     return adminError(res, error);
+  }
+});
+
+// Bot control is deliberately separate from WhatsApp lifecycle. A paused bot
+// keeps its authenticated session online, so resuming never asks the client to
+// scan another QR code.
+app.post('/api/wa/tenants/:instanceId/bot-enabled', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    res.json({ success: true, ...(await tenantAdmin.setBotEnabled(instanceId, Boolean(req.body?.enabled))) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/tenants/:instanceId/connect-link', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const tenant = await tenantAdmin.findRow(instanceId);
+    if (!tenant) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    const expiresAt = Date.now() + CONNECT_TOKEN_TTL_MS;
+    const token = issueConnectToken(instanceId, expiresAt);
+    const locale = req.body?.locale === 'ru' ? 'ru' : 'kk';
+    const url = `${publicApiBase(req)}/connect?token=${encodeURIComponent(token)}&lang=${locale}`;
+    res.status(201).json({ success: true, url, expiresAt });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.get('/api/wa/connect/:token/status', async (req, res) => {
+  const token = String(req.params.token || '');
+  const scoped = readConnectToken(token);
+  if (!scoped) return res.status(401).json({ error: 'CONNECT_LINK_INVALID_OR_EXPIRED' });
+  try {
+    if (!(await allowConnectPoll(req, token))) return res.status(429).json({ error: 'CONNECT_RATE_LIMITED' });
+    const tenant = await tenantAdmin.findRow(scoped.instanceId);
+    if (!tenant) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    let live = await getInstanceStatus(scoped.instanceId);
+    if (!['connected', 'qr_ready', 'starting', 'initializing', 'restoring_session'].includes(String(live?.status || ''))) {
+      await startWhatsAppInstance(scoped.instanceId);
+      live = await getInstanceStatus(scoped.instanceId);
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      brand: String(tenant.brand || 'WhatsPro').slice(0, 120),
+      status: String(live?.status || 'unknown'),
+      qr: live?.qr || null,
+      expiresAt: scoped.expiresAt
+    });
+  } catch (error) {
+    res.status(error?.statusCode || 503).json({ error: error?.message || 'CONNECT_STATUS_UNAVAILABLE' });
   }
 });
 
@@ -1703,6 +1804,7 @@ module.exports = {
   renderChatHtml,
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
-    hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope
+    hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope,
+    issueConnectToken, readConnectToken
   }
 };

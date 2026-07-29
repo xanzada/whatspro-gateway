@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
-const { app } = require('../src/server');
+const { app, __test: serverHelpers } = require('../src/server');
 
 test('chat routes and static assets serve the new operator UI', async t => {
   const server = app.listen(0, '127.0.0.1');
@@ -16,6 +16,12 @@ test('chat routes and static assets serve the new operator UI', async t => {
   const base = `http://127.0.0.1:${port}`;
   const favicon = await fetch(base + '/favicon.ico');
   assert.equal(favicon.status, 204);
+
+  for (const route of ['/connect', '/connect.html']) {
+    const response = await fetch(base + route);
+    assert.equal(response.status, 200, route);
+    assert.match(await response.text(), /id="qr-frame"/);
+  }
 
   for (const route of ['/chat.html?instance=prestige', '/chat?instance=prestige']) {
     const response = await fetch(base + route, { redirect: 'manual' });
@@ -94,6 +100,13 @@ test('chat routes and static assets serve the new operator UI', async t => {
   assert.equal(badMedia.status, 400);
 });
 
+test('client QR links are signed, scoped and expiring', () => {
+  const valid = serverHelpers.issueConnectToken('prestige', Date.now() + 60_000);
+  assert.deepEqual(serverHelpers.readConnectToken(valid).instanceId, 'prestige');
+  assert.equal(serverHelpers.readConnectToken(valid + 'x'), null, 'a modified signature is rejected');
+  assert.equal(serverHelpers.readConnectToken(serverHelpers.issueConnectToken('prestige', Date.now() - 1)), null, 'an expired link is rejected');
+});
+
 test('tenant shell contains an accessible responsive login gate', async () => {
   const markup = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'tenants.html'), 'utf8');
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'tenants.js'), 'utf8');
@@ -156,6 +169,15 @@ test('tenant QR and automatic reconnect use the same WhatsPro instance manager',
   const boot = source.slice(source.indexOf('async function boot()'), source.indexOf('if (require.main === module)'));
   assert.match(boot, /const instances = await listInstances\(\)/);
   assert.match(boot, /await startWhatsAppInstance\(inst\.instanceId\)/, 'all persisted instances restore after a deployment');
+
+  const connectRoute = source.slice(source.indexOf("app.get('/api/wa/connect/:token/status'"), source.indexOf("app.delete('/api/wa/tenants/:instanceId'"));
+  assert.match(connectRoute, /readConnectToken\(token\)/);
+  assert.match(connectRoute, /startWhatsAppInstance\(scoped\.instanceId\)/, 'a shared QR starts the exact same persisted manager instance');
+  assert.doesNotMatch(connectRoute, /whatspro_api_token|webhook_secret|SESSION_SECRET/, 'the public response never exposes tenant or platform secrets');
+
+  const botRoute = source.slice(source.indexOf("app.post('/api/wa/tenants/:instanceId/bot-enabled'"), source.indexOf("app.post('/api/wa/tenants/:instanceId/connect-link'"));
+  assert.match(botRoute, /tenantAdmin\.setBotEnabled/);
+  assert.doesNotMatch(botRoute, /stopWhatsAppInstance/, 'pausing the bot must leave WhatsApp connected');
 });
 
 test('chat search normalizes Kazakhstan 8-prefixes and permits phone substrings', async () => {

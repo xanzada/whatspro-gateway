@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="kk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090c0f">
+  <meta name="robots" content="noindex,nofollow">
+  <title>WhatsPro — WhatsApp қосу</title>
+  <link rel="stylesheet" href="/connect.css">
+</head>
+<body>
+  <main class="connect-shell">
+    <section class="connect-card" aria-labelledby="connect-title">
+      <header>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 10v10h16V10M3 10l2-6h14l2 6"/><path d="M3 10c0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0 0 2 3 2 3 0"/></svg>
+          </span>
+          <div><strong>WhatsPro</strong><span id="brand-name">WhatsApp</span></div>
+        </div>
+        <button class="locale" id="locale-button" type="button" aria-label="Тілді ауыстыру">ҚАЗ</button>
+      </header>
+
+      <div class="connect-copy">
+        <span class="eyebrow" id="eyebrow">ҚАУІПСІЗ ҚОСЫЛУ</span>
+        <h1 id="connect-title">WhatsApp-ты қосыңыз</h1>
+        <p id="connect-description">WhatsApp → Байланыстырылған құрылғылар → Құрылғыны байланыстыру бөлімін ашып, QR кодты сканерлеңіз.</p>
+      </div>
+
+      <div class="qr-frame" id="qr-frame" aria-live="polite">
+        <span class="loader" aria-hidden="true"></span>
+        <span id="qr-placeholder">QR дайындалуда…</span>
+      </div>
+
+      <div class="status" id="status">
+        <i></i>
+        <div><strong id="status-title">Сессия іске қосылуда</strong><span id="status-copy">Бұл бетті жаппай тұрыңыз.</span></div>
+      </div>
+
+      <button class="retry" id="retry-button" type="button" hidden>Қайта тексеру</button>
+      <footer><span class="shield" aria-hidden="true">✓</span><span id="security-copy">Сілтеме бір нысанға ғана арналған және автоматты түрде жарамсыз болады.</span></footer>
+    </section>
+  </main>
+  <script src="/connect.js"></script>
+</body>
+</html>

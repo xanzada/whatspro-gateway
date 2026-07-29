@@ -1,0 +1,54 @@
+:root {
+  color-scheme: dark;
+  --bg: #090c0f;
+  --surface: #11171d;
+  --surface-2: #171e25;
+  --border: #26313a;
+  --text: #f3f7f5;
+  --muted: #869398;
+  --accent: #31c6a0;
+  --accent-ink: #05271e;
+  font-family: Inter, "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100svh; background: radial-gradient(circle at 50% -10%, rgba(49,198,160,.11), transparent 30rem), var(--bg); color: var(--text); }
+button { color: inherit; font: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.connect-shell { min-height: 100svh; display: grid; place-items: center; padding: 22px; }
+.connect-card { width: min(520px, 100%); padding: 26px; border: 1px solid var(--border); border-radius: 22px; background: rgba(17,23,29,.96); box-shadow: 0 30px 100px rgba(0,0,0,.45); }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.brand { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.brand-mark { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; border-radius: 12px; background: rgba(49,198,160,.1); color: var(--accent); }
+.brand-mark svg { width: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.brand > div { min-width: 0; display: grid; }
+.brand strong { font-size: 15px; }
+.brand span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.locale { min-height: 38px; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-size: 11px; font-weight: 700; }
+.connect-copy { margin: 28px 0 18px; }
+.eyebrow { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .14em; }
+h1 { margin: 7px 0 0; font-size: 27px; line-height: 1.12; letter-spacing: -.04em; }
+.connect-copy p { margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.qr-frame { position: relative; width: min(292px, 100%); aspect-ratio: 1; margin: 0 auto; display: grid; place-items: center; padding: 15px; border-radius: 18px; background: #fff; color: #334047; text-align: center; font-size: 11px; }
+.qr-frame img { width: 100%; height: 100%; object-fit: contain; }
+.loader { width: 27px; height: 27px; position: absolute; border: 2px solid #dce5e2; border-top-color: #159c7c; border-radius: 50%; animation: spin .8s linear infinite; }
+.loader + span { margin-top: 50px; }
+.status { margin-top: 18px; display: flex; align-items: center; gap: 11px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-2); }
+.status i { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #d8a853; box-shadow: 0 0 12px rgba(216,168,83,.35); }
+.status > div { min-width: 0; display: grid; }
+.status strong { font-size: 12px; }
+.status span { margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.status.connected { border-color: rgba(49,198,160,.3); background: rgba(49,198,160,.08); }
+.status.connected i { background: var(--accent); box-shadow: 0 0 13px rgba(49,198,160,.55); }
+.status.error i { background: #df776f; box-shadow: none; }
+.retry { width: 100%; min-height: 44px; margin-top: 12px; border: 1px solid var(--accent); border-radius: 11px; background: var(--accent); color: var(--accent-ink); font-weight: 750; }
+footer { display: flex; align-items: center; gap: 9px; margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; line-height: 1.45; }
+.shield { width: 25px; height: 25px; flex: 0 0 25px; display: grid; place-items: center; border-radius: 8px; background: rgba(49,198,160,.1); color: var(--accent); font-weight: 800; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 560px) {
+  .connect-shell { padding: 14px; }
+  .connect-card { padding: 20px 18px; border-radius: 18px; }
+  .connect-copy { margin: 22px 0 16px; }
+  h1 { font-size: 24px; }
+  .qr-frame { width: min(260px, 76vw); }
+}
+@media (prefers-reduced-motion: reduce) { .loader { animation-duration: 1.8s; } }

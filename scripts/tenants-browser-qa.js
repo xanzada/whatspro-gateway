@@ -19,7 +19,9 @@ const server = http.createServer((request, response) => {
     response.end();
     return;
   }
-  const file = pathname === '/tenants.html' ? 'tenants.html' : pathname === '/tenants.css' ? 'tenants.css' : pathname === '/tenants.js' ? 'tenants.js' : '';
+  const files = new Set(['tenants.html', 'tenants.css', 'tenants.js', 'connect.html', 'connect.css', 'connect.js']);
+  const requested = pathname.replace(/^\/+/, '');
+  const file = files.has(requested) ? requested : '';
   if (!file) {
     response.writeHead(404);
     response.end('not found');
@@ -47,6 +49,7 @@ const server = http.createServer((request, response) => {
     let tenantCreateCalls = 0;
     let instanceCreateCalls = 0;
     let lastStartInstance = '';
+    let shareCalls = 0;
     let authenticated = false;
     const extraInstances = [];
 
@@ -80,8 +83,8 @@ const server = http.createServer((request, response) => {
         success: true,
         total: 2,
         tenants: [
-          { instanceId: 'prestige', brand: 'Crazy суши', active: true, summary: { ready: true }, createdAt: '2026-07-20T12:00:00Z' },
-          { instanceId: 'maki', brand: 'Маки', active: true, summary: { ready: false }, createdAt: '2026-07-21T12:00:00Z' }
+          { instanceId: 'prestige', brand: 'Crazy суши', active: true, botEnabled: true, summary: { ready: true }, createdAt: '2026-07-20T12:00:00Z' },
+          { instanceId: 'maki', brand: 'Маки', active: true, botEnabled: false, summary: { ready: false }, createdAt: '2026-07-21T12:00:00Z' }
         ]
       });
       if (url.pathname === '/api/wa/instances' && request.method() === 'POST') {
@@ -117,6 +120,17 @@ const server = http.createServer((request, response) => {
         if (body.instanceId === 'prestige') prestigeStatus = 'qr_ready';
         return json({ status: 'qr_ready', qr });
       }
+      if (url.pathname.endsWith('/connect-link')) {
+        shareCalls += 1;
+        return request.respond({
+          status: 201,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, url: `${baseUrl}/connect?token=signed-test-token&lang=ru`, expiresAt: Date.now() + 3600000 })
+        });
+      }
+      if (/^\/api\/wa\/connect\/[^/]+\/status$/.test(url.pathname)) {
+        return json({ success: true, brand: 'Crazy суши', status: 'qr_ready', qr, expiresAt: Date.now() + 3600000 });
+      }
       return json({ success: true });
     });
 
@@ -140,10 +154,12 @@ const server = http.createServer((request, response) => {
     if (initial.lang !== 'kk' || initial.title !== 'Басқару панелі') throw new Error(`KAZAKH_DEFAULT:${JSON.stringify(initial)}`);
     if (initial.connected !== '1') throw new Error(`FALSE_CONNECTED_COUNT:${JSON.stringify(initial)}`);
     if (initial.nav.some(text => /Provisioning|Activity/i.test(text))) throw new Error('UNNEEDED_NAV_VISIBLE');
-    if (!initial.statuses.includes('Қосылмаған') || !initial.statuses.includes('Қосылған')) throw new Error(`LIVE_STATUS_MAPPING:${initial.statuses.join(',')}`);
+    if (!initial.nav.some(text => /Нысандар/.test(text))) throw new Error(`UNIVERSAL_TENANT_COPY:${initial.nav.join(',')}`);
+    if (!initial.statuses.includes('Қосылмаған') || !initial.statuses.includes('Тоқтатылған')) throw new Error(`LIVE_STATUS_MAPPING:${initial.statuses.join(',')}`);
 
     await page.screenshot({ path: path.join(outputDir, 'tenants-desktop-kk.png'), fullPage: true });
     await page.click('[data-action="new"]');
+    await page.waitForSelector('.modal:not(.sheet)');
     await page.type('[name="brand"]', 'QA Cafe');
     await page.click('[data-wizard-next]');
     await page.click('[data-wizard-next]');
@@ -195,7 +211,40 @@ const server = http.createServer((request, response) => {
     await page.click('.action-sheet [data-action="qr"]');
     await page.waitForSelector('#qr-frame img', { timeout: 8000 });
     if (!startCalls) throw new Error('QR_DID_NOT_START_SHARED_INSTANCE');
+    await page.click('[data-action="qr-share"]');
+    await page.waitForFunction(() => document.querySelector('[data-copy-value*="/connect?token="]'));
+    if (shareCalls !== 1) throw new Error(`QR_SHARE_LINK:${shareCalls}`);
     await page.screenshot({ path: path.join(outputDir, 'tenants-mobile-qr.png'), fullPage: true });
+
+    await page.click('[data-modal-close]');
+    await page.click('[data-action="new"]');
+    const centeredWizard = await page.evaluate(() => {
+      const rect = document.querySelector('.modal').getBoundingClientRect();
+      return {
+        delta: Math.round(Math.abs((rect.top + rect.bottom) / 2 - window.innerHeight / 2)),
+        top: Math.round(rect.top),
+        bottom: Math.round(rect.bottom)
+      };
+    });
+    if (centeredWizard.delta > 2 || centeredWizard.top < 0 || centeredWizard.bottom > 844) {
+      throw new Error(`MOBILE_WIZARD_NOT_CENTERED:${JSON.stringify(centeredWizard)}`);
+    }
+    await page.click('[data-modal-close]');
+    await page.click('tbody tr:first-child [data-action="menu"]');
+    await page.click('.action-sheet [data-action="delete"]');
+    await page.waitForSelector('.modal:not(.sheet) [data-delete-confirm]');
+    const centeredDelete = await page.evaluate(() => {
+      const rect = document.querySelector('.modal').getBoundingClientRect();
+      return {
+        delta: Math.round(Math.abs((rect.top + rect.bottom) / 2 - window.innerHeight / 2)),
+        top: Math.round(rect.top),
+        bottom: Math.round(rect.bottom)
+      };
+    });
+    if (centeredDelete.delta > 2 || centeredDelete.top < 0 || centeredDelete.bottom > 844) {
+      throw new Error(`MOBILE_DELETE_NOT_CENTERED:${JSON.stringify(centeredDelete)}`);
+    }
+    await page.click('[data-modal-close]');
 
     authenticated = false;
     await page.reload({ waitUntil: 'networkidle0' });
@@ -206,20 +255,41 @@ const server = http.createServer((request, response) => {
         visible: !document.querySelector('#login-shell').hidden,
         cardLeft: Math.round(card.left),
         cardRight: Math.round(card.right),
+        cardTop: Math.round(card.top),
+        cardBottom: Math.round(card.bottom),
         viewport: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        pageScroll: document.documentElement.scrollHeight - window.innerHeight,
         overflow: document.documentElement.scrollWidth - window.innerWidth
       };
     });
-    if (!mobileLogin.visible || mobileLogin.cardLeft < 0 || mobileLogin.cardRight > mobileLogin.viewport || mobileLogin.overflow > 0) {
+    if (!mobileLogin.visible || mobileLogin.cardLeft < 0 || mobileLogin.cardRight > mobileLogin.viewport ||
+        mobileLogin.cardTop < 0 || mobileLogin.cardBottom > mobileLogin.viewportHeight || mobileLogin.pageScroll > 0 || mobileLogin.overflow > 0) {
       throw new Error(`MOBILE_LOGIN:${JSON.stringify(mobileLogin)}`);
     }
     await page.screenshot({ path: path.join(outputDir, 'tenants-login-mobile.png'), fullPage: true });
+
+    await page.goto(`${baseUrl}/connect.html?token=signed-test-token&lang=ru`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('#qr-frame img');
+    const connectPage = await page.evaluate(() => {
+      const card = document.querySelector('.connect-card').getBoundingClientRect();
+      return {
+        title: document.querySelector('#connect-title').textContent,
+        top: Math.round(card.top),
+        bottom: Math.round(card.bottom),
+        overflow: document.documentElement.scrollWidth - window.innerWidth
+      };
+    });
+    if (connectPage.title !== 'Подключите WhatsApp' || connectPage.top < 0 || connectPage.bottom > 844 || connectPage.overflow > 0) {
+      throw new Error(`CONNECT_PAGE:${JSON.stringify(connectPage)}`);
+    }
+    await page.screenshot({ path: path.join(outputDir, 'connect-mobile.png'), fullPage: true });
 
     const unexpectedConsoleErrors = consoleErrors.filter(message => !/401\s*\(Unauthorized\)/i.test(message));
     if (unexpectedConsoleErrors.length || pageErrors.length) {
       throw new Error(`BROWSER_ERRORS:${JSON.stringify({ consoleErrors: unexpectedConsoleErrors, pageErrors })}`);
     }
-    console.log(JSON.stringify({ ok: true, outputDir, initial, mobile, mobileLogin, stableCreationModal, startCalls, tenantCreateCalls, instanceCreateCalls }, null, 2));
+    console.log(JSON.stringify({ ok: true, outputDir, initial, mobile, centeredWizard, centeredDelete, mobileLogin, connectPage, stableCreationModal, startCalls, shareCalls, tenantCreateCalls, instanceCreateCalls }, null, 2));
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

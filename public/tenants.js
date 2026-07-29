@@ -25,6 +25,7 @@
   var instanceTimer = 0;
   var qrTimer = 0;
   var qrInstanceId = '';
+  var qrShareLinks = new Map();
   var previousFocus = null;
   var appStarted = false;
   var authUsername = '';
@@ -174,6 +175,95 @@
     }
   };
 
+  // Product language stays universal: a tenant can be a shop, fast-food
+  // location, service point, or restaurant. Backend field names remain stable.
+  Object.assign(I18N.kk, {
+    documentTitle: 'WhatsPro — Нысандарды басқару',
+    restaurants: 'Нысандар',
+    platform: 'Бизнес платформасы',
+    searchPlaceholder: 'Нысан, instance немесе телефон іздеу…',
+    dashboardCopy: 'Барлық нысанның WhatsApp байланысы мен бот күйін бір жерден бақылаңыз.',
+    addRestaurant: 'Қосу',
+    restaurantCount: 'Нысандар',
+    enabledLocations: 'Боты қосылған нысандар',
+    recentRestaurants: 'Барлығы',
+    allEntities: 'Барлығы',
+    restaurant: 'Нысан',
+    noRestaurants: 'Нысандар әлі жоқ',
+    noRestaurantsCopy: 'Алғашқы нысанды қосып, WhatsApp сессиясын байланыстырыңыз.',
+    restaurantDirectory: 'НЫСАНДАР ТІЗІМІ',
+    restaurantsTitle: 'Нысандар',
+    restaurantsCopy: 'Нысандарды, олардың WhatsApp байланысын және бот күйін басқарыңыз.',
+    duplicateRestaurant: 'Нысанды дубликаттау',
+    newRestaurant: 'Жаңа нысан',
+    restaurantName: 'Нысан атауы',
+    createRestaurant: 'Нысанды құру',
+    creatingCopy: 'Нысан мен WhatsPro сессиясы бірге дайындалады.',
+    savingRecord: 'Нысан деректері сақталуда',
+    readyCopy: 'Нысан құрылды. WhatsApp қосу үшін QR кодты сканерлеңіз немесе сілтемені клиентке жіберіңіз.',
+    editRestaurant: 'Нысанды өзгерту',
+    deleteTitle: 'Нысанды өшіру',
+    deleteCopy: 'Нысан деректері мен WhatsApp сессиясы біржола өшіріледі.',
+    deleted: 'Нысан өшірілді',
+    menuFor: 'Нысан әрекеттері',
+    loginDescription: 'Нысандарды, WhatsApp сессияларын және боттарды басқару үшін кіріңіз.',
+    pauseBot: 'Ботты тоқтату',
+    resumeBot: 'Ботты қосу',
+    botPaused: 'Бот тоқтатылды',
+    botResumed: 'Бот іске қосылды',
+    botState: 'Бот',
+    botEnabled: 'Жұмыс істеп тұр',
+    shareQr: 'Сілтемемен бөлісу',
+    copyLink: 'Сілтемені көшіру',
+    shareTitle: 'WhatsApp-ты қосу',
+    shareText: 'WhatsPro сессиясын қосу үшін сілтемені ашыңыз.',
+    linkCopied: 'Қосылу сілтемесі көшірілді',
+    linkExpires: 'Сілтеме 72 сағат жарамды'
+  });
+  Object.assign(I18N.ru, {
+    documentTitle: 'WhatsPro — Управление точками',
+    restaurants: 'Точки',
+    platform: 'Бизнес-платформа',
+    searchPlaceholder: 'Поиск по точке, instance или телефону…',
+    dashboardCopy: 'Контролируйте WhatsApp-подключения и состояние ботов всех точек в одном месте.',
+    addRestaurant: 'Добавить',
+    restaurantCount: 'Точки',
+    enabledLocations: 'Точки с включённым ботом',
+    recentRestaurants: 'Все',
+    allEntities: 'Все',
+    restaurant: 'Точка',
+    noRestaurants: 'Точек пока нет',
+    noRestaurantsCopy: 'Добавьте первую точку и подключите WhatsApp-сессию.',
+    restaurantDirectory: 'СПИСОК ТОЧЕК',
+    restaurantsTitle: 'Точки',
+    restaurantsCopy: 'Управляйте точками, их WhatsApp-подключениями и состоянием бота.',
+    duplicateRestaurant: 'Дублировать точку',
+    newRestaurant: 'Новая точка',
+    restaurantName: 'Название точки',
+    createRestaurant: 'Создать точку',
+    creatingCopy: 'Точка и сессия WhatsPro подготавливаются вместе.',
+    savingRecord: 'Сохраняются данные точки',
+    readyCopy: 'Точка создана. Отсканируйте QR-код или отправьте клиенту ссылку для подключения.',
+    editRestaurant: 'Изменить точку',
+    deleteTitle: 'Удалить точку',
+    deleteCopy: 'Данные точки и WhatsApp-сессия будут удалены безвозвратно.',
+    deleted: 'Точка удалена',
+    menuFor: 'Действия точки',
+    loginDescription: 'Войдите, чтобы управлять точками, WhatsApp-сессиями и ботами.',
+    pauseBot: 'Остановить бота',
+    resumeBot: 'Включить бота',
+    botPaused: 'Бот остановлен',
+    botResumed: 'Бот включён',
+    botState: 'Бот',
+    botEnabled: 'Работает',
+    shareQr: 'Поделиться ссылкой',
+    copyLink: 'Скопировать ссылку',
+    shareTitle: 'Подключение WhatsApp',
+    shareText: 'Откройте ссылку, чтобы подключить сессию WhatsPro.',
+    linkCopied: 'Ссылка подключения скопирована',
+    linkExpires: 'Ссылка действует 72 часа'
+  });
+
   function t(key) { return (I18N[locale] && I18N[locale][key]) || key; }
   function icon(name) { return '<svg aria-hidden="true"><use href="#' + (ICONS[name] || name) + '"></use></svg>'; }
   function escapeHtml(value) {
@@ -253,6 +343,8 @@
     $('#login-remember').checked = remembered;
     $('#login-username').value = remembered ? (localStorage.getItem('whatspro_login_username') || '') : '';
     $('#login-password').value = '';
+    syncLoginInputState($('#login-username'));
+    syncLoginInputState($('#login-password'));
     window.setTimeout(function () { (remembered ? $('#login-password') : $('#login-username')).focus(); }, 0);
   }
   function startApp(username) {
@@ -353,7 +445,7 @@
   }
 
   function tenantStatus(tenant) {
-    if (tenant.active === false) return { label: t('paused'), cls: 'neutral', key: 'paused' };
+    if (tenant.botEnabled === false) return { label: t('paused'), cls: 'neutral', key: 'paused' };
     var live = statuses.get(tenant.instanceId);
     if (!live || live.__error) return { label: t('unknown'), cls: 'info', key: 'checking' };
     var value = String(live.status || '').toLowerCase();
@@ -377,8 +469,10 @@
   function counts() {
     return {
       total: report.tenants.length,
-      active: report.tenants.filter(function (item) { return item.active !== false; }).length,
-      connected: report.tenants.filter(function (item) { return tenantStatus(item).key === 'connected'; }).length,
+      active: report.tenants.filter(function (item) { return item.botEnabled !== false; }).length,
+      connected: report.tenants.filter(function (item) {
+        return String((statuses.get(item.instanceId) || {}).status || '').toLowerCase() === 'connected';
+      }).length,
       attention: report.tenants.filter(function (item) { var key = tenantStatus(item).key; return key !== 'connected' && key !== 'paused'; }).length
     };
   }
@@ -429,7 +523,9 @@
   function actionButtons(tenant, sheet) {
     var html = '<button type="button" data-action="details" data-instance="' + attr(tenant.instanceId) + '">' + icon('eye') + '<span>' + t('viewDetails') + '</span></button>';
     if (!tenant.virtual) html += '<button type="button" data-action="edit" data-instance="' + attr(tenant.instanceId) + '">' + icon('edit') + '<span>' + t('edit') + '</span></button>' +
-      '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>';
+      '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>' +
+      '<button type="button" data-action="bot-toggle" data-instance="' + attr(tenant.instanceId) + '" data-enabled="' + (tenant.botEnabled === false ? 'true' : 'false') + '">' +
+      icon('power') + '<span>' + t(tenant.botEnabled === false ? 'resumeBot' : 'pauseBot') + '</span></button>';
     html += (sheet ? '<div class="menu-rule"></div>' : '') +
       '<button type="button" data-action="restart" data-instance="' + attr(tenant.instanceId) + '">' + icon('restart') + '<span>' + t('restart') + '</span></button>' +
       '<button type="button" data-action="reconnect" data-instance="' + attr(tenant.instanceId) + '">' + icon('link') + '<span>' + t('reconnect') + '</span></button>' +
@@ -456,8 +552,8 @@
   }
   function tablePanel(items, recent) {
     if (!items.length) return '<section class="panel">' + emptyState() + '</section>';
-    return '<section class="panel"><div class="panel-head"><strong>' + (recent ? t('recentRestaurants') : t('restaurants')) +
-      '</strong><span class="meta">' + items.length + ' ' + t('shown') + '</span><span class="spacer"></span>' +
+    return '<section class="panel"><div class="panel-head"><strong>' + (recent ? t('allEntities') : t('restaurants')) +
+      '</strong><span class="count-pill" aria-label="' + attr(items.length + ' ' + t('shown')) + '">' + items.length + '</span><span class="spacer"></span>' +
       (recent ? addButton() : '') + '</div><div class="table-wrap"><table><thead><tr><th style="width:25%">' + t('restaurant') +
       '</th><th style="width:12%">' + t('instance') + '</th><th style="width:13%">' + t('phone') +
       '</th><th style="width:13%">' + t('status') + '</th><th style="width:25%">' + t('aiPrompt') +
@@ -508,7 +604,8 @@
       '</div></div></section>' +
       '<section class="detail-section" id="section-whatsapp"><div class="detail-section-head"><strong>WhatsApp</strong><span>' + t('realTime') +
       '</span></div><div class="detail-body"><div class="info-grid">' + infoItem(t('phone'), detail.whatsappPhone || t('noPhone')) +
-      infoItem(t('liveStatus'), state.label, 'detail-live-status') + infoItem(t('lastCheck'), formatTime(lastSync)) +
+      infoItem(t('liveStatus'), state.label, 'detail-live-status') + infoItem(t('botState'), tenant.botEnabled === false ? t('paused') : t('botEnabled')) +
+      infoItem(t('lastCheck'), formatTime(lastSync)) +
       infoItem('WhatsPro', instances.some(function (item) { return String(item.instanceId || item.id) === tenant.instanceId; }) ? t('instanceExists') : t('instanceMissing')) +
       '</div><p class="confirm-copy">' + t('liveStatusCopy') + '</p></div></section>' +
       '<section class="detail-section" id="section-prompt"><div class="detail-section-head"><strong>' + t('prompt') +
@@ -519,7 +616,7 @@
       '</small></div></div></div></section>' +
       '<section class="detail-section" id="section-configuration"><div class="detail-section-head"><strong>' + t('configuration') +
       '</strong></div><div class="detail-body"><pre class="log-block">' + escapeHtml(JSON.stringify({
-        instanceId: tenant.instanceId, active: tenant.active !== false, status: live.status || 'unknown',
+        instanceId: tenant.instanceId, active: tenant.active !== false, botEnabled: tenant.botEnabled !== false, status: live.status || 'unknown',
         hasStoredSession: Boolean(live.hasStoredSession)
       }, null, 2)) + '</pre></div></section></div></div></div>';
   }
@@ -621,10 +718,10 @@
       dialog.setAttribute('aria-labelledby', dialogTitle.id);
     }
   }
-  function openModal(content, wide) {
+  function openModal(content, wide, variant) {
     previousFocus = document.activeElement;
     modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal' + (wide ? ' wide' : '') +
-      '" role="dialog" aria-modal="true">' + content + '</section></div>';
+      (variant ? ' ' + variant : '') + '" role="dialog" aria-modal="true">' + content + '</section></div>';
     var dialog = $('.modal', modalRoot);
     labelDialog(dialog);
     document.body.style.overflow = 'hidden';
@@ -653,20 +750,51 @@
     openModal('<div class="modal-body"><div class="action-sheet"><div class="action-sheet-head"><span class="restaurant-avatar">' +
       escapeHtml(initials(tenant.brand)) + '</span><div><strong>' + escapeHtml(tenant.brand || tenant.instanceId) + '</strong><span>' +
       escapeHtml(t('menuFor')) + '</span></div></div>' + actionButtons(tenant, true) +
-      '<div class="menu-rule"></div><button type="button" data-modal-close>' + icon('close') + '<span>' + t('close') + '</span></button></div></div>');
+      '<div class="menu-rule"></div><button type="button" data-modal-close>' + icon('close') + '<span>' + t('close') + '</span></button></div></div>', false, 'sheet');
   }
   function qrStatusMarkup(instanceId, live) {
     var value = String((live && live.status) || '');
     var connected = value === 'connected';
     var qr = live && live.qr;
+    var shareUrl = qrShareLinks.get(instanceId) || '';
     return '<div class="qr-layout"><div class="qr-frame" id="qr-frame">' +
       (qr ? '<img src="' + attr(qr) + '" alt="' + attr(t('qrCode')) + '">' : '<span class="qr-placeholder">' +
       escapeHtml(connected ? t('qrConnected') : t('qrUnavailable')) + '</span>') +
       '</div><div class="qr-live-copy"><h3>' + escapeHtml(connected ? t('qrConnected') : t('qrTitle')) +
       '</h3><p>' + escapeHtml(t('qrCopy')) + '</p><div class="qr-status-line ' + (connected ? 'connected' : '') +
       '" id="qr-status"><i></i><span>' + escapeHtml(connected ? t('qrConnected') : (value === 'qr_ready' ? t('qrWaiting') : t('qrStart'))) +
-      '</span></div><button class="button small" type="button" data-action="qr-refresh" data-instance="' + attr(instanceId) + '">' +
-      icon('refresh') + t('refresh') + '</button></div></div>';
+      '</span></div><div class="qr-share-actions"><button class="button small" type="button" data-action="qr-refresh" data-instance="' + attr(instanceId) + '">' +
+      icon('refresh') + t('refresh') + '</button><button class="button small primary" type="button" data-action="qr-share" data-instance="' +
+      attr(instanceId) + '">' + icon('link') + t('shareQr') + '</button>' +
+      (shareUrl ? '<button class="button small" type="button" data-copy-value="' + attr(shareUrl) + '">' + icon('copy') + t('copyLink') + '</button>' : '') +
+      '</div><small class="share-expiry">' + t('linkExpires') + '</small></div></div>';
+  }
+
+  function shareQrLink(instanceId) {
+    var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
+    var existing = qrShareLinks.get(instanceId);
+    var request = existing
+      ? Promise.resolve(existing)
+      : api('POST', '/api/wa/tenants/' + encodeURIComponent(instanceId) + '/connect-link', { locale: locale })
+        .then(function (result) {
+          qrShareLinks.set(instanceId, result.url);
+          var target = $('#qr-live-body');
+          if (target) target.innerHTML = qrStatusMarkup(instanceId, statuses.get(instanceId) || {});
+          return result.url;
+        });
+    return request.then(function (url) {
+      if (navigator.share) {
+        return navigator.share({
+          title: t('shareTitle') + (tenant ? ' — ' + tenant.brand : ''),
+          text: t('shareText'),
+          url: url
+        }).catch(function (error) {
+          if (error && error.name === 'AbortError') return;
+          return copyText(url).then(function () { toast(t('linkCopied'), tenant ? tenant.brand : instanceId); });
+        });
+      }
+      return copyText(url).then(function () { toast(t('linkCopied'), tenant ? tenant.brand : instanceId); });
+    });
   }
   function refreshQrModal(instanceId) {
     if (!qrInstanceId || qrInstanceId !== instanceId || !$('#qr-live-body')) return;
@@ -882,6 +1010,19 @@
       if (action === 'reconnect' || String(live.status) === 'qr_ready') openQrModal(instanceId);
     }).catch(function (error) { toast(t('actionFailed'), error.message, true); });
   }
+  function toggleBot(instanceId, enabled) {
+    var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
+    if (!tenant || tenant.virtual) return;
+    closeModal();
+    api('POST', '/api/wa/tenants/' + encodeURIComponent(instanceId) + '/bot-enabled', { enabled: enabled })
+      .then(function () {
+        tenant.botEnabled = enabled;
+        if (settings.has(instanceId)) settings.get(instanceId).botEnabled = enabled;
+        render();
+        toast(t(enabled ? 'botResumed' : 'botPaused'), tenant.brand || instanceId);
+      })
+      .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+  }
   function openDetails(instanceId) {
     closeModal();
     currentDetail = instanceId;
@@ -927,12 +1068,15 @@
       else if (name === 'qr') { closeModal(); window.setTimeout(function () { openQrModal(instanceId); }, 0); }
       else if (name === 'edit') { closeModal(); window.setTimeout(function () { openEdit(instanceId); }, 0); }
       else if (name === 'duplicate') { closeModal(); window.setTimeout(function () { openDuplicate(instanceId); }, 0); }
+      else if (name === 'bot-toggle') toggleBot(instanceId, action.dataset.enabled === 'true');
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
       else if (name === 'delete') { closeModal(); window.setTimeout(function () { openDelete(instanceId); }, 0); }
       else if (name === 'qr-refresh') {
         api('POST', '/api/wa/start', { instanceId: instanceId, label: tenant ? tenant.brand : instanceId })
           .then(function (live) { statuses.set(instanceId, live); refreshQrModal(instanceId); })
           .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      } else if (name === 'qr-share') {
+        shareQrLink(instanceId).catch(function (error) { toast(t('actionFailed'), error.message, true); });
       }
       return;
     }
@@ -1024,6 +1168,16 @@
   $('#mobile-scrim').addEventListener('click', closeMobileNav);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) syncLiveStatuses(); });
 
+  function syncLoginInputState(input) {
+    var wrapper = input.closest('.input-with-icon');
+    if (wrapper) wrapper.classList.toggle('has-value', Boolean(input.value));
+  }
+  ['login-username', 'login-password'].forEach(function (id) {
+    var input = $('#' + id);
+    input.addEventListener('input', function () { syncLoginInputState(input); });
+    input.addEventListener('change', function () { syncLoginInputState(input); });
+  });
+
   loginForm.addEventListener('submit', function (event) {
     event.preventDefault();
     var username = $('#login-username').value.trim();
@@ -1048,6 +1202,7 @@
           localStorage.removeItem('whatspro_login_username');
         }
         $('#login-password').value = '';
+        syncLoginInputState($('#login-password'));
         return startApp(result.username || username);
       })
       .catch(function (error) {

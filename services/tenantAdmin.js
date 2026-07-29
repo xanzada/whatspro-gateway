@@ -9,7 +9,7 @@ const tenantStore = require('./tenantStore');
 // token is how two restaurants end up sharing one. This module owns that split:
 // the panel collects the eight, and everything else is generated here.
 
-const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active'];
+const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled'];
 
 function clean(value, max = 500) {
   return String(value ?? '').replace(/[\r\t]+/g, ' ').trim().slice(0, max);
@@ -116,7 +116,8 @@ function operatorFields(rawInput = {}) {
     address: clean(input.address, 300),
     work_hours: clean(input.workHours, 120),
     prompt_mode: promptMode,
-    active: input.active === undefined ? true : Boolean(input.active)
+    active: input.active === undefined ? true : Boolean(input.active),
+    bot_enabled: input.botEnabled === undefined ? true : Boolean(input.botEnabled)
   };
 }
 
@@ -175,7 +176,12 @@ async function updateTenant(instanceId, input, options = {}) {
     error.statusCode = 404;
     throw error;
   }
-  const fields = operatorFields({ ...input, instanceId });
+  const fields = operatorFields({
+    ...input,
+    instanceId,
+    active: input.active === undefined ? existing.active : input.active,
+    botEnabled: input.botEnabled === undefined ? existing.bot_enabled : input.botEnabled
+  });
   const errors = validationErrors(fields);
   if (errors.length) throw badRequest(errors);
 
@@ -204,6 +210,17 @@ async function setActive(instanceId, active) {
   }
   await tenantStore.updateRow(instanceId, { active: Boolean(active) });
   return { instanceId, active: Boolean(active) };
+}
+
+async function setBotEnabled(instanceId, enabled) {
+  const existing = await findRow(instanceId);
+  if (!existing) {
+    const error = new Error('TENANT_NOT_FOUND');
+    error.statusCode = 404;
+    throw error;
+  }
+  await tenantStore.updateRow(instanceId, { bot_enabled: Boolean(enabled) });
+  return { instanceId, botEnabled: Boolean(enabled) };
 }
 
 async function deleteTenant(instanceId) {
@@ -306,6 +323,7 @@ function presentableTenant(row) {
     promptMode: clean(row.prompt_mode, 16).toLowerCase() === 'custom' ? 'custom' : 'shared',
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
+    botEnabled: row.bot_enabled === undefined || row.bot_enabled === null ? true : Boolean(row.bot_enabled),
     createdAt: clean(row.created_at || row.CreatedAt, 64),
     updatedAt: clean(row.updated_at || row.UpdatedAt, 64),
     secrets: {
@@ -327,6 +345,7 @@ module.exports = {
   presentableTenant,
   rotateSecrets,
   setActive,
+  setBotEnabled,
   updateTenant,
   slugify,
   __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults }

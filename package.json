@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check public/chat.js && node --check public/chat-core.js && node --check services/chatMedia.js && node --check services/chatStore.js && node --check services/chatEvents.js && node --check services/incomingWebhook.js && node --check services/whatsappManager.js && node --check services/operatorLock.js && node --check services/phoneUtils.js && node --check services/tenantStore.js && node --check services/tenantMemoryStore.js && node --check services/tenantAdmin.js && node --check config/redis.js"
+    "check": "node --check src/server.js && node --check public/chat.js && node --check public/chat-core.js && node --check public/tenants.js && node --check public/connect.js && node --check services/chatMedia.js && node --check services/chatStore.js && node --check services/chatEvents.js && node --check services/incomingWebhook.js && node --check services/whatsappManager.js && node --check services/operatorLock.js && node --check services/phoneUtils.js && node --check services/tenantStore.js && node --check services/tenantMemoryStore.js && node --check services/tenantAdmin.js && node --check config/redis.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc13",
