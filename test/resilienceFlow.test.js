@@ -67,6 +67,7 @@ test('production wiring starts retry workers and exposes dependency health', () 
   assert.match(server, /await tenantStore\.listTenantRecords\(\)/);
   assert.match(server, /startIncomingWalWorker\(\)/);
   assert.match(server, /app\.get\('\/health\/detailed'/);
+  assert.match(server, /const sessions = await Promise\.all\(/);
   assert.match(incoming, /pendingRedis/);
   assert.match(incoming, /pendingOpenBot/);
 });

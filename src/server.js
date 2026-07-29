@@ -830,7 +830,9 @@ app.get('/health/detailed', async (req, res) => {
     }
   }
   const instances = await listInstances().catch(() => []);
-  const sessions = instances.map(item => getInstanceStatus(item.instanceId));
+  const sessions = await Promise.all(
+    instances.map(item => getInstanceStatus(item.instanceId).catch(() => ({ status: 'unknown' })))
+  );
   const connected = sessions.filter(item => item?.status === 'connected').length;
   res.json({
     ok: true,
