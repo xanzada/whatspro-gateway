@@ -1114,7 +1114,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         clearTimeout(watchdog); // 🚀 QR келсе, таймерді тоқтатамыз
         setInstanceState(instanceId, 'qr_ready');
         console.log(`⏳ [WHATSAPP] ${instanceId} үшін QR код дайын! Сканерлеу күтілуде...`);
-        qrcodeTerminal.generate(qr, { small: true });
+        // A live QR grants access to the WhatsApp account. Keep it out of
+        // centralized production logs; the signed onboarding UI is the only
+        // supported sharing surface.
+        if (process.env.NODE_ENV !== 'production' && process.env.LOG_QR_TO_TERMINAL === 'true') {
+            qrcodeTerminal.generate(qr, { small: true });
+        }
         try {
             const qrImageUrl = await qrcode.toDataURL(qr);
             qrCodes.set(instanceId, qrImageUrl);

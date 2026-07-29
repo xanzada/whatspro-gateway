@@ -64,10 +64,12 @@ test('tenant snapshot rejects rows stored under another tenant key', () => {
 test('production wiring starts retry workers and exposes dependency health', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
   const incoming = fs.readFileSync(path.join(__dirname, '..', 'services', 'incomingWebhook.js'), 'utf8');
+  const whatsapp = fs.readFileSync(path.join(__dirname, '..', 'services', 'whatsappManager.js'), 'utf8');
   assert.match(server, /await tenantStore\.listTenantRecords\(\)/);
   assert.match(server, /startIncomingWalWorker\(\)/);
   assert.match(server, /app\.get\('\/health\/detailed'/);
   assert.match(server, /const sessions = await Promise\.all\(/);
   assert.match(incoming, /pendingRedis/);
   assert.match(incoming, /pendingOpenBot/);
+  assert.match(whatsapp, /NODE_ENV !== 'production'.*LOG_QR_TO_TERMINAL/s);
 });
