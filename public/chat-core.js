@@ -70,6 +70,10 @@
     var text = String(item && (item.text || item.body) || '')
       .replace(/\[System:[^\]]*\]/gi, '')
       .trim();
+    // WhatsApp commonly repeats a PDF's filename as the message body. The
+    // document card already represents that file, so rendering the filename as
+    // a separate customer bubble creates a false duplicate.
+    if (isDocument(item) && /^[^/\\\r\n]{1,255}\.pdf$/i.test(text)) text = '';
     if (text) parts.push({ kind: 'text', text: text });
     if (isAudio(item) && item && item.id) parts.push({ kind: 'audio', id: String(item.id) });
     if (isImage(item)) parts.push({ kind: 'image', id: String(item.id) });

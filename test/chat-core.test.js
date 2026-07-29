@@ -26,6 +26,10 @@ test('a PDF receipt renders as its own document part and never as audio or image
     { kind: 'text', text: 'чек' },
     { kind: 'document', id: 'm9' }
   ]);
+  assert.deepEqual(core.messageParts({
+    id: 'm9-file', text: 'transfer-receipt-13_835558413111043668.pdf',
+    type: 'document', hasMedia: true, mediaType: 'application/pdf'
+  }), [{ kind: 'document', id: 'm9-file' }]);
 
   assert.equal(core.isDocument({ id: 'm10', hasMedia: true, mediaType: 'image/jpeg' }), false);
   assert.equal(core.isDocument({ id: 'm11', hasMedia: true, mediaType: 'audio/ogg' }), false);
