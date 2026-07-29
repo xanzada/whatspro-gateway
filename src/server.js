@@ -29,6 +29,7 @@ const tenantStore = require('../services/tenantStore');
 const tenantMemoryStore = require('../services/tenantMemoryStore');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
+const tenantWorkbook = require('../services/tenantWorkbook');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -373,6 +374,11 @@ async function requireApi(req, res, next) {
 async function requireUiOrApi(req, res, next) {
   if (readSession(req) || await hasApiToken(req)) return next();
   return res.status(401).json({ error: 'AUTH_REQUIRED' });
+}
+
+function requireUiSession(req, res, next) {
+  if (readSession(req)) return next();
+  return res.status(401).json({ error: 'ADMIN_SESSION_REQUIRED' });
 }
 
 async function requireChatUiOrApi(req, res, next) {
@@ -890,6 +896,51 @@ app.get('/api/wa/tenants', requireUiOrApi, async (req, res) => {
   const sessions = await listInstances().catch(() => []);
   res.json({ success: true, ...evaluateAll(records, { sessions }) });
 });
+
+app.get('/api/wa/backups/tenants.xlsx', requireUiSession, async (req, res) => {
+  try {
+    const instanceId = String(req.query?.instanceId || '').trim();
+    let records = await tenantAdmin.listRows();
+    if (instanceId) {
+      if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+      records = records.filter(row => String(row.instance_id || '') === instanceId);
+      if (!records.length) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    }
+    const filename = `whatspro-${tenantWorkbook.safeFilename(instanceId || 'all')}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const file = await tenantWorkbook.exportWorkbook(records, instanceId ? 'single' : 'all');
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    return res.send(file);
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post(
+  '/api/wa/backups/tenants/import',
+  requireUiSession,
+  express.raw({
+    type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/octet-stream'],
+    limit: '8mb'
+  }),
+  async (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'BACKUP_FILE_REQUIRED' });
+      const parsed = await tenantWorkbook.importWorkbook(req.body);
+      const result = await tenantStore.restoreRows(parsed.rows);
+      const activeRows = parsed.rows.filter(row => row.active !== false);
+      await Promise.all(activeRows.map(row => startWhatsAppInstance(row.instance_id)
+        .catch(error => console.warn('[TENANT:IMPORT] start failed', row.instance_id, error?.message || error))));
+      return res.json({ success: true, scope: parsed.scope, ...result, activeStarted: activeRows.length });
+    } catch (error) {
+      return adminError(res, error);
+    }
+  }
+);
 
 app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();

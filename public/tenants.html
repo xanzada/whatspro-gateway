@@ -120,6 +120,8 @@
             <div class="profile-menu popover" id="profile-menu" hidden>
               <div class="profile-menu-head"><strong id="profile-workspace">Әкімші панелі</strong><span id="profile-session">Қауіпсіз сессия</span></div>
               <button type="button" data-profile-action="refresh"><svg><use href="#i-refresh"></use></svg><span id="profile-refresh">Деректерді жаңарту</span></button>
+              <button type="button" data-profile-action="export"><svg><use href="#i-download"></use></svg><span id="profile-export">Excel-ге экспорттау</span></button>
+              <button type="button" data-profile-action="import"><svg><use href="#i-upload"></use></svg><span id="profile-import">Excel-ден қалпына келтіру</span></button>
               <button type="button" data-profile-action="logout"><svg><use href="#i-logout"></use></svg><span id="profile-logout">Шығу</span></button>
             </div>
           </div>
@@ -137,6 +139,7 @@
   </div>
 
   <div class="mobile-scrim" id="mobile-scrim" hidden></div>
+  <input id="tenant-import-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
   <div id="modal-root"></div>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
@@ -167,6 +170,8 @@
     <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
     <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5H5v11h3"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0 5 5m-5-5-5 5M5 20h14"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3ZM19 16l.6 2.4L22 19l-2.4.6L19 22l-.6-2.4L16 19l2.4-.6L19 16Z"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>

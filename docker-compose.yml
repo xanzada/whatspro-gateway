@@ -37,6 +37,34 @@ services:
     volumes:
       - whatspro_redis_data:/data
 
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis_local:
+        condition: service_healthy
+    environment:
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      BACKUP_SOURCE_NAME: whatspro
+      BACKUP_GIT_URL: ${BACKUP_GIT_URL:-}
+      BACKUP_GIT_BRANCH_PREFIX: snapshot-whatspro
+      BACKUP_SSH_PRIVATE_KEY_B64: ${BACKUP_SSH_PRIVATE_KEY_B64:-}
+      BACKUP_AGE_RECIPIENT_B64: ${BACKUP_AGE_RECIPIENT_B64:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-900}
+      REDIS_URL: ${REDIS_URL:-redis://redis_local:6379}
+    volumes:
+      - whatsapp_auth:/source/whatsapp_auth:ro
+      - backup_state:/work
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/backup-healthcheck"]
+      interval: 5m
+      timeout: 10s
+      retries: 4
+      start_period: 2m
+
 volumes:
   whatsapp_auth:
   whatspro_redis_data:
+  backup_state:

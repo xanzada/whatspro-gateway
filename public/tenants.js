@@ -37,7 +37,8 @@
     plus: 'i-plus', store: 'i-store', power: 'i-power', plug: 'i-plug', clock: 'i-clock',
     eye: 'i-eye', edit: 'i-edit', restart: 'i-restart', link: 'i-link', qr: 'i-qr',
     trash: 'i-trash', check: 'i-check', close: 'i-close', alert: 'i-alert',
-    back: 'i-arrow-left', refresh: 'i-refresh', copy: 'i-copy', spark: 'i-spark'
+    back: 'i-arrow-left', refresh: 'i-refresh', copy: 'i-copy', spark: 'i-spark',
+    download: 'i-download', upload: 'i-upload'
   };
 
   var I18N = {
@@ -218,7 +219,17 @@
     shareTitle: 'WhatsApp-ты қосу',
     shareText: 'WhatsPro сессиясын қосу үшін сілтемені ашыңыз.',
     linkCopied: 'Қосылу сілтемесі көшірілді',
-    linkExpires: 'Сілтеме 72 сағат жарамды'
+    linkExpires: 'Сілтеме 72 сағат жарамды',
+    exportExcel: 'Excel-ге сақтау',
+    exportAllExcel: 'Барлығын Excel-ге экспорттау',
+    importExcel: 'Excel-ден қалпына келтіру',
+    importTitle: 'Резервті қалпына келтіру',
+    importCopy: 'Файлдағы нысандар instance ID бойынша қосылады немесе жаңартылады. Басқа нысандар өшірілмейді.',
+    importConfirm: 'Импорттау',
+    importDone: 'Резерв қалпына келтірілді',
+    importSummary: 'Импортталды: {imported}, жаңа: {created}, жаңартылды: {updated}',
+    invalidExcel: 'WhatsPro жасаған .xlsx резервтік файлын таңдаңыз.',
+    sensitiveBackup: 'Файлда tenant кілттері бар. Қауіпсіз жерде сақтаңыз.'
   });
   Object.assign(I18N.ru, {
     documentTitle: 'WhatsPro — Управление точками',
@@ -261,10 +272,25 @@
     shareTitle: 'Подключение WhatsApp',
     shareText: 'Откройте ссылку, чтобы подключить сессию WhatsPro.',
     linkCopied: 'Ссылка подключения скопирована',
-    linkExpires: 'Ссылка действует 72 часа'
+    linkExpires: 'Ссылка действует 72 часа',
+    exportExcel: 'Сохранить в Excel',
+    exportAllExcel: 'Экспортировать всё в Excel',
+    importExcel: 'Восстановить из Excel',
+    importTitle: 'Восстановление резервной копии',
+    importCopy: 'Точки из файла будут созданы или обновлены по instance ID. Остальные точки не удаляются.',
+    importConfirm: 'Импортировать',
+    importDone: 'Резервная копия восстановлена',
+    importSummary: 'Импортировано: {imported}, новых: {created}, обновлено: {updated}',
+    invalidExcel: 'Выберите резервный .xlsx-файл, созданный WhatsPro.',
+    sensitiveBackup: 'Файл содержит tenant-ключи. Храните его в безопасном месте.'
   });
 
   function t(key) { return (I18N[locale] && I18N[locale][key]) || key; }
+  function tf(key, values) {
+    return Object.keys(values || {}).reduce(function (text, name) {
+      return text.replace(new RegExp('\\{' + name + '\\}', 'g'), String(values[name]));
+    }, t(key));
+  }
   function icon(name) { return '<svg aria-hidden="true"><use href="#' + (ICONS[name] || name) + '"></use></svg>'; }
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -430,6 +456,8 @@
     $('#profile-workspace').textContent = t('adminPanel');
     $('#profile-session').textContent = t('secureSession');
     $('#profile-refresh').textContent = t('refreshData');
+    $('#profile-export').textContent = t('exportAllExcel');
+    $('#profile-import').textContent = t('importExcel');
     $('#profile-logout').textContent = t('logout');
     $('#refresh-button').setAttribute('aria-label', t('refresh'));
     $('#login-platform-label').textContent = t('platform');
@@ -524,6 +552,7 @@
     var html = '<button type="button" data-action="details" data-instance="' + attr(tenant.instanceId) + '">' + icon('eye') + '<span>' + t('viewDetails') + '</span></button>';
     if (!tenant.virtual) html += '<button type="button" data-action="edit" data-instance="' + attr(tenant.instanceId) + '">' + icon('edit') + '<span>' + t('edit') + '</span></button>' +
       '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>' +
+      '<button type="button" data-action="export-excel" data-instance="' + attr(tenant.instanceId) + '">' + icon('download') + '<span>' + t('exportExcel') + '</span></button>' +
       '<button type="button" data-action="bot-toggle" data-instance="' + attr(tenant.instanceId) + '" data-enabled="' + (tenant.botEnabled === false ? 'true' : 'false') + '">' +
       icon('power') + '<span>' + t(tenant.botEnabled === false ? 'resumeBot' : 'pauseBot') + '</span></button>';
     html += (sheet ? '<div class="menu-rule"></div>' : '') +
@@ -741,6 +770,7 @@
     window.clearInterval(qrTimer);
     qrTimer = 0;
     qrInstanceId = '';
+    pendingImportFile = null;
     modalRoot.innerHTML = '';
     document.body.style.overflow = '';
     if (previousFocus && document.contains(previousFocus)) previousFocus.focus({ preventScroll: true });
@@ -796,6 +826,61 @@
       return copyText(url).then(function () { toast(t('linkCopied'), tenant ? tenant.brand : instanceId); });
     });
   }
+
+  function exportWorkbook(instanceId) {
+    var query = instanceId ? '?instanceId=' + encodeURIComponent(instanceId) : '';
+    var link = document.createElement('a');
+    link.href = '/api/wa/backups/tenants.xlsx' + query;
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast(instanceId ? t('exportExcel') : t('exportAllExcel'), t('sensitiveBackup'));
+  }
+
+  var pendingImportFile = null;
+  function openImportModal(file) {
+    pendingImportFile = file;
+    openModal(modalHeader(t('importTitle'), t('importCopy')) +
+      '<div class="modal-body"><div class="backup-file-card">' + icon('upload') +
+      '<div><strong>' + escapeHtml(file.name) + '</strong><span>' +
+      escapeHtml(Math.max(1, Math.ceil(file.size / 1024)) + ' KB') +
+      '</span></div></div><p class="confirm-copy backup-warning">' + escapeHtml(t('sensitiveBackup')) +
+      '</p></div><div class="modal-footer"><button class="button" type="button" data-modal-close>' + t('cancel') +
+      '</button><span class="spacer"></span><button class="button primary" type="button" data-import-confirm>' +
+      icon('upload') + t('importConfirm') + '</button></div>');
+  }
+
+  function importWorkbook(file, button) {
+    button.disabled = true;
+    return fetch('/api/wa/backups/tenants/import', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+      body: file
+    }).then(function (response) {
+      return response.text().then(function (raw) {
+        var data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch (error) { data = {}; }
+        if (!response.ok) {
+          if (response.status === 401) showLogin();
+          var requestError = new Error(response.status === 401 ? t('sessionExpired') : (data.error || t('invalidExcel')));
+          requestError.status = response.status;
+          throw requestError;
+        }
+        return data;
+      });
+    }).then(function (result) {
+      pendingImportFile = null;
+      closeModal();
+      toast(t('importDone'), tf('importSummary', result));
+      return loadData(true);
+    }).catch(function (error) {
+      button.disabled = false;
+      toast(t('actionFailed'), error.message || t('invalidExcel'), true);
+    });
+  }
+
   function refreshQrModal(instanceId) {
     if (!qrInstanceId || qrInstanceId !== instanceId || !$('#qr-live-body')) return;
     api('GET', '/api/wa/status/' + encodeURIComponent(instanceId)).then(function (live) {
@@ -1068,6 +1153,7 @@
       else if (name === 'qr') { closeModal(); window.setTimeout(function () { openQrModal(instanceId); }, 0); }
       else if (name === 'edit') { closeModal(); window.setTimeout(function () { openEdit(instanceId); }, 0); }
       else if (name === 'duplicate') { closeModal(); window.setTimeout(function () { openDuplicate(instanceId); }, 0); }
+      else if (name === 'export-excel') { closeModal(); exportWorkbook(instanceId); }
       else if (name === 'bot-toggle') toggleBot(instanceId, action.dataset.enabled === 'true');
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
       else if (name === 'delete') { closeModal(); window.setTimeout(function () { openDelete(instanceId); }, 0); }
@@ -1100,6 +1186,11 @@
         toast(t('deleted'), deleteId);
         return loadData(true);
       }).catch(function (error) { deleteConfirm.disabled = false; toast(t('actionFailed'), error.message, true); });
+      return;
+    }
+    var importConfirm = event.target.closest('[data-import-confirm]');
+    if (importConfirm && pendingImportFile) {
+      importWorkbook(pendingImportFile, importConfirm);
       return;
     }
     if (!event.target.closest('.action-menu') && !event.target.closest('[data-action="menu"]') && openMenuId) {
@@ -1154,10 +1245,22 @@
     var action = event.target.closest('[data-profile-action]');
     if (!action) return;
     if (action.dataset.profileAction === 'refresh') loadData();
+    if (action.dataset.profileAction === 'export') exportWorkbook('');
+    if (action.dataset.profileAction === 'import') $('#tenant-import-input').click();
     if (action.dataset.profileAction === 'logout') {
       api('POST', '/api/whatspro/logout', {}).then(function () { authUsername = ''; showLogin(); })
         .catch(function (error) { toast(t('signOutFailed'), error.message, true); });
     }
+  });
+  $('#tenant-import-input').addEventListener('change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    event.target.value = '';
+    if (!file || !/\.xlsx$/i.test(file.name) || file.size > 8 * 1024 * 1024) {
+      if (file) toast(t('actionFailed'), t('invalidExcel'), true);
+      return;
+    }
+    $('#profile-menu').hidden = true;
+    openImportModal(file);
   });
   $('#refresh-button').addEventListener('click', function () { loadData(); });
   $('#sidebar-toggle').addEventListener('click', function () { appShell.classList.toggle('collapsed'); });

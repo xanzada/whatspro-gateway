@@ -294,7 +294,7 @@ html[data-theme="light"] .text-button { background: var(--surface); }
   animation: pop .14s ease-out;
 }
 html[data-theme="light"] .popover { background: #fff; }
-.profile-menu { top: calc(100% + 8px); right: 0; width: 216px; }
+.profile-menu { top: calc(100% + 8px); right: 0; width: min(270px, calc(100vw - 24px)); }
 .profile-menu-head { display: grid; padding: 9px 10px 12px; border-bottom: 1px solid var(--border); }
 .profile-menu-head strong { font-size: 12px; }
 .profile-menu-head span { color: var(--muted); font-size: 10px; }
@@ -314,6 +314,19 @@ html[data-theme="light"] .popover { background: #fff; }
 }
 .profile-menu button:hover, .action-menu button:hover { background: var(--surface-3); color: var(--text); }
 .profile-menu button svg, .action-menu button svg { width: 15px; height: 15px; }
+.backup-file-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-2);
+}
+.backup-file-card > svg { width: 22px; height: 22px; flex: 0 0 auto; color: var(--accent); }
+.backup-file-card div { min-width: 0; display: grid; gap: 3px; }
+.backup-file-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-file-card span, .backup-warning { color: var(--muted); font-size: 12px; }
 
 main { min-height: calc(100vh - var(--topbar-h)); padding: 32px clamp(22px, 3vw, 48px) 56px; }
 .login-shell {

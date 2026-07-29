@@ -122,6 +122,32 @@ async function updateRow(instanceValue, patch) {
   return stored;
 }
 
+async function restoreRows(rows) {
+  requireRedis();
+  if (!Array.isArray(rows) || !rows.length) return { imported: 0, created: 0, updated: 0 };
+  const now = new Date().toISOString();
+  const existingIds = new Set(await redisClient.hKeys(TENANT_STORE_KEY));
+  const transaction = redisClient.multi();
+  let created = 0;
+  let updated = 0;
+
+  for (const row of rows) {
+    const instance = normalizeInstance(row?.instance_id);
+    if (!instance) throw new Error('BAD_INSTANCE_ID');
+    if (existingIds.has(instance)) updated += 1;
+    else created += 1;
+    const stored = {
+      ...row,
+      instance_id: instance,
+      created_at: row.created_at || now,
+      updated_at: now
+    };
+    transaction.hSet(TENANT_STORE_KEY, instance, JSON.stringify(stored));
+  }
+  await transaction.exec();
+  return { imported: rows.length, created, updated };
+}
+
 async function deleteRow(instanceValue) {
   const instance = normalizeInstance(instanceValue);
   requireRedis();
@@ -167,6 +193,7 @@ module.exports = {
   getTenantChatConfig,
   listTenantRecords,
   normalizeInstance,
+  restoreRows,
   sanitizeTenantConfig,
   updateRow,
   __test: { cleanString, normalizeColor, parseRow, pickFirst }
