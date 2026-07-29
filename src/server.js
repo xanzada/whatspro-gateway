@@ -1,10 +1,11 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const axios = require('axios');
 const express = require('express');
 const fs = require('fs/promises');
 const path = require('path');
-const { connectRedis, redisClient } = require('../config/redis');
+const { connectRedis, redisClient, getRedisState } = require('../config/redis');
 const {
   startWhatsAppInstance,
   stopWhatsAppInstance,
@@ -30,6 +31,8 @@ const tenantMemoryStore = require('../services/tenantMemoryStore');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
 const tenantWorkbook = require('../services/tenantWorkbook');
+const { getOpenBotWebhookUrl, startIncomingWalWorker } = require('../services/incomingWebhook');
+const { incomingWalSummary } = require('../services/incomingWal');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -795,6 +798,56 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
 }
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
+app.get('/health/detailed', async (req, res) => {
+  const redis = getRedisState();
+  const storage = await tenantStore.getStorageSummary().catch(error => ({
+    backend: 'unavailable',
+    tenants: 0,
+    initialized: false,
+    error: error.message
+  }));
+  const inboundWal = await incomingWalSummary().catch(error => ({
+    pending: -1,
+    error: error.message
+  }));
+  const openbotUrl = getOpenBotWebhookUrl();
+  let openbot = { ok: false, target: openbotUrl ? 'configured' : 'missing', status: 'not_checked' };
+  if (openbotUrl) {
+    try {
+      const healthUrl = new URL('/health', openbotUrl).toString();
+      const response = await axios.get(healthUrl, { timeout: 3000, validateStatus: () => true });
+      openbot = {
+        ok: response.status >= 200 && response.status < 400 && response.data?.ok === true,
+        target: new URL(openbotUrl).host,
+        status: response.status
+      };
+    } catch (error) {
+      openbot = {
+        ok: false,
+        target: (() => { try { return new URL(openbotUrl).host; } catch { return 'invalid'; } })(),
+        status: error.message
+      };
+    }
+  }
+  const instances = await listInstances().catch(() => []);
+  const sessions = instances.map(item => getInstanceStatus(item.instanceId));
+  const connected = sessions.filter(item => item?.status === 'connected').length;
+  res.json({
+    ok: true,
+    service: 'whatspro',
+    mode: redis.ready && openbot.ok ? 'healthy' : 'degraded',
+    checks: {
+      redis,
+      tenantStorage: storage,
+      openbot,
+      inboundWal,
+      whatsapp: {
+        tenants: instances.length,
+        connected
+      }
+    }
+  });
+});
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 // The operator shell is public so the canonical URL and its static assets can
@@ -1682,6 +1735,7 @@ app.post('/api/wa/logout', requireUiOrApi, async (req, res) => {
 
 app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   const { instanceId, phone } = req.body || {};
+  const requestId = String(req.body?.requestId || '').trim();
   if (req.body?.text != null && typeof req.body.text !== 'string') return res.status(400).json({ error: 'INVALID_TEXT' });
   const text = String(req.body?.text || '').trim();
   if (text.length > 4096) return res.status(400).json({ error: 'TEXT_TOO_LONG' });
@@ -1696,10 +1750,12 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   // Бұл 8707, +7707 форматтарының барлығын таза 7707... форматына әкеледі.
   const cleanPhone = normalizePhone(phone);
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
+  if (requestId && !isValidSendRequestId(requestId)) return res.status(400).json({ error: 'BAD_REQUEST_ID' });
 
   let sendResult = { success: true };
   let effectiveMediaType = '';
   let audioMediaData = '';
+  let apiSendLease = null;
   
   // 2-ӨЗГЕРІС: Медиа жіберу логикасын қауіпсіздендіру және cleanPhone қолдану
   if (media) {
@@ -1730,12 +1786,32 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
     if (mimeType.startsWith('audio/')) audioMediaData = encoded;
     sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption);
   } else if (text) {
-    sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
+    if (requestId) {
+      const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
+      apiSendLease = await sendIdempotency.begin(instanceId, cleanPhone, requestId, payloadHash);
+      if (apiSendLease.conflict) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+      if (apiSendLease.response) return res.json({ ...apiSendLease.response, replayed: true });
+      if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
+    }
+    try {
+      sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
+    } catch (error) {
+      if (apiSendLease) await sendIdempotency.release(apiSendLease).catch(() => {});
+      throw error;
+    }
   } else {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
 
   const ok = Boolean(sendResult?.success || sendResult);
+  const responsePayload = {
+    success: ok,
+    messageId: String(sendResult?.messageId || '')
+  };
+  if (apiSendLease) {
+    if (ok) await sendIdempotency.complete(apiSendLease, responsePayload);
+    else await sendIdempotency.release(apiSendLease);
+  }
   if (ok && (text || media)) {
     const saved = await saveChatHistoryEntry(instanceId, cleanPhone, {
       id: sendResult?.messageId || `api:${Date.now()}:${cleanPhone}`,
@@ -1756,7 +1832,7 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
     await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved?.id || sendResult?.messageId || '' }).catch(() => {});
   }
 
-  res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
+  res.status(ok ? 200 : 503).json(responsePayload);
 });
 
 app.post('/api/presence', requireApi, async (req, res) => {
@@ -1800,6 +1876,7 @@ async function boot() {
   });
 
   await connectRedis();
+  startIncomingWalWorker();
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));
   try {
     await recoverSendWal();

@@ -3,6 +3,14 @@ const { redisClient } = require('../config/redis');
 const { normalizePhoneFromCandidates } = require('./phoneUtils');
 const { chatStore } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
+const {
+  enqueueIncoming,
+  listIncoming,
+  updateIncoming
+} = require('./incomingWal');
+
+const activeWalRecords = new Set();
+let drainTimer = null;
 
 function stripUndefined(value) {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
@@ -123,7 +131,8 @@ async function saveIncomingMessage(payload, dependencies = {}) {
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
-  const redisOpen = dependencies.redisOpen ?? redisClient.isOpen;
+  const redisOpen = dependencies.redisOpen ??
+    (redisClient.isReady === undefined ? redisClient.isOpen : redisClient.isReady);
   if (!redisOpen) return { skipped: true, reason: 'redis_not_connected' };
 
   const rawTimestamp = Number(payload.timestamp || payload.messageTimestamp || payload.data?.messageTimestamp || 0);
@@ -162,36 +171,101 @@ async function forwardToOpenBot(payload) {
 }
 
 async function forwardIncomingWhatsAppMessage(payload) {
-  const started = Date.now();
-  const skipOpenBot = await shouldSkipOpenBot(payload);
-  
-  // Redis-ке жазу өте жылдам, оны күтуге болады
-  const redisResult = await saveIncomingMessage(payload).catch(err => {
-      console.error(`[INBOX REDIS] failed elapsed=${Date.now() - started}ms error=${err.message}`);
-      return { success: false, error: err };
-  });
-  
-  if (redisResult.skipped) {
-      return { redis: redisResult, openbot: { skipped: true, reason: redisResult.reason } };
+  let record;
+  try {
+    // Disk intent is written before either dependency is called. A container
+    // restart therefore cannot lose the customer's message between WhatsApp,
+    // Chat Redis and OpenBot.
+    record = await enqueueIncoming(payload);
+  } catch (error) {
+    console.error('[INBOUND WAL] enqueue failed:', error.message);
+    record = {
+      id: `volatile:${Date.now()}`,
+      payload,
+      pendingRedis: true,
+      pendingOpenBot: true,
+      attempts: 0
+    };
   }
 
-  // Webhook-ты фондық режимде (background) жібереміз, Node.js процесін тоқтатпаймыз
-  if (!skipOpenBot) {
-      forwardToOpenBot(payload).catch(err => {
-          console.error(`[OPENBOT WEBHOOK BACKGROUND] failed elapsed=${Date.now() - started}ms error=${err.message}`);
-      });
-  }
+  void processIncomingRecord(record).catch(error => {
+    console.error(`[INBOUND WAL] background delivery failed id=${record.id}:`, error.message);
+  });
 
   return {
-    redis: redisResult,
-    openbot: { status: 'processing_in_background' }
+    redis: { status: 'processing_in_background' },
+    openbot: { status: 'processing_in_background' },
+    durable: !String(record.id).startsWith('volatile:')
   };
 }
 
+async function processIncomingRecord(record, dependencies = {}) {
+  if (!record?.id || activeWalRecords.has(record.id)) return record;
+  activeWalRecords.add(record.id);
+  const started = Date.now();
+  try {
+    if (record.pendingRedis) {
+      try {
+        const redisResult = await (dependencies.saveIncomingMessage || saveIncomingMessage)(record.payload);
+        if (redisResult?.saved || (redisResult?.skipped && redisResult.reason !== 'redis_not_connected')) {
+          record.pendingRedis = false;
+        } else {
+          record.lastError = String(redisResult?.reason || 'redis_not_connected');
+        }
+      } catch (error) {
+        record.lastError = `redis:${error.message}`;
+        console.error(`[INBOX REDIS] failed elapsed=${Date.now() - started}ms error=${error.message}`);
+      }
+    }
+
+    if (record.pendingOpenBot) {
+      try {
+        const skip = await (dependencies.shouldSkipOpenBot || shouldSkipOpenBot)(record.payload);
+        if (skip) {
+          record.pendingOpenBot = false;
+        } else {
+          const result = await (dependencies.forwardToOpenBot || forwardToOpenBot)(record.payload);
+          if (result?.delivered) record.pendingOpenBot = false;
+          else record.lastError = String(result?.reason || 'openbot_not_delivered');
+        }
+      } catch (error) {
+        record.lastError = `openbot:${error.message}`;
+        console.error(`[OPENBOT WEBHOOK BACKGROUND] failed elapsed=${Date.now() - started}ms error=${error.message}`);
+      }
+    }
+
+    record.attempts = Number(record.attempts || 0) + 1;
+    record.nextAttemptAt = Date.now() + Math.min(60_000, 1000 * (2 ** Math.min(record.attempts, 6)));
+    if (!String(record.id).startsWith('volatile:')) await updateIncoming(record);
+    return record;
+  } finally {
+    activeWalRecords.delete(record.id);
+  }
+}
+
+async function drainIncomingWal(limit = 25) {
+  const records = await listIncoming(limit);
+  for (const record of records) await processIncomingRecord(record);
+  return records.length;
+}
+
+function startIncomingWalWorker() {
+  if (drainTimer) return drainTimer;
+  void drainIncomingWal().catch(error => console.warn('[INBOUND WAL] initial drain failed:', error.message));
+  drainTimer = setInterval(() => {
+    void drainIncomingWal().catch(error => console.warn('[INBOUND WAL] drain failed:', error.message));
+  }, Math.max(1000, Number(process.env.WHATSPRO_INBOUND_WAL_INTERVAL_MS || 5000)));
+  drainTimer.unref?.();
+  return drainTimer;
+}
+
 module.exports = {
+  drainIncomingWal,
   forwardIncomingWhatsAppMessage,
   getOpenBotWebhookUrl,
   getOpenBotWebhookToken,
+  processIncomingRecord,
   saveIncomingMessage,
+  startIncomingWalWorker,
   __test: { buildHistoryEntry, saveIncomingMessage }
 };

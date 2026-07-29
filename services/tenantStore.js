@@ -1,6 +1,14 @@
 'use strict';
 
 const { redisClient } = require('../config/redis');
+const {
+  deleteSnapshot,
+  findSnapshot,
+  listSnapshot,
+  replaceSnapshot,
+  snapshotSummary,
+  upsertSnapshot
+} = require('./tenantSnapshot');
 
 const TENANT_STORE_KEY = 'whatspro:tenants:v1';
 
@@ -34,7 +42,14 @@ function unavailable() {
 }
 
 function requireRedis() {
-  if (!redisClient.isOpen) throw unavailable();
+  if (!redisUsable()) throw unavailable();
+}
+
+function redisUsable() {
+  return Boolean(
+    redisClient.isReady ||
+    (process.env.NODE_TEST_CONTEXT && redisClient.isOpen)
+  );
 }
 
 function parseRow(raw) {
@@ -85,14 +100,33 @@ function sanitizeTenantConfig(record, instance) {
 async function findRow(instanceValue) {
   const instance = normalizeInstance(instanceValue);
   if (!instance) return null;
-  requireRedis();
-  return parseRow(await redisClient.hGet(TENANT_STORE_KEY, instance));
+  if (redisUsable()) {
+    try {
+      const row = parseRow(await redisClient.hGet(TENANT_STORE_KEY, instance));
+      if (row) await upsertSnapshot(row).catch(error => console.warn('[TENANT SNAPSHOT] write failed:', error.message));
+      return row || await findSnapshot(instance);
+    } catch (error) {
+      console.warn(`[TENANT STORE] Redis read failed (${instance}), using snapshot:`, error.message);
+    }
+  }
+  return findSnapshot(instance);
 }
 
 async function listTenantRecords() {
-  requireRedis();
-  const values = Object.values(await redisClient.hGetAll(TENANT_STORE_KEY));
-  return values.map(parseRow).filter(Boolean).sort((a, b) => String(a.brand || a.instance_id).localeCompare(String(b.brand || b.instance_id)));
+  let records = [];
+  if (redisUsable()) {
+    try {
+      const values = Object.values(await redisClient.hGetAll(TENANT_STORE_KEY));
+      records = values.map(parseRow).filter(Boolean);
+      if (records.length) {
+        await replaceSnapshot(records).catch(error => console.warn('[TENANT SNAPSHOT] replace failed:', error.message));
+      }
+    } catch (error) {
+      console.warn('[TENANT STORE] Redis list failed, using snapshot:', error.message);
+    }
+  }
+  if (!records.length) records = await listSnapshot();
+  return records.sort((a, b) => String(a.brand || a.instance_id).localeCompare(String(b.brand || b.instance_id)));
 }
 
 async function createRow(row) {
@@ -106,6 +140,7 @@ async function createRow(row) {
     error.statusCode = 409;
     throw error;
   }
+  await upsertSnapshot(stored).catch(error => console.warn('[TENANT SNAPSHOT] create mirror failed:', error.message));
   return stored;
 }
 
@@ -119,6 +154,7 @@ async function updateRow(instanceValue, patch) {
   }
   const stored = { ...existing, ...patch, instance_id: instance, created_at: existing.created_at || new Date().toISOString(), updated_at: new Date().toISOString() };
   await redisClient.hSet(TENANT_STORE_KEY, instance, JSON.stringify(stored));
+  await upsertSnapshot(stored).catch(error => console.warn('[TENANT SNAPSHOT] update mirror failed:', error.message));
   return stored;
 }
 
@@ -131,29 +167,34 @@ async function deleteRow(instanceValue) {
     error.statusCode = 404;
     throw error;
   }
+  await deleteSnapshot(instance).catch(error => console.warn('[TENANT SNAPSHOT] delete mirror failed:', error.message));
   return true;
 }
 
 async function getTenantChatConfig(instanceValue) {
   const instance = normalizeInstance(instanceValue);
-  if (!instance || !redisClient.isOpen) return sanitizeTenantConfig(null, instance);
+  if (!instance) return sanitizeTenantConfig(null, instance);
   return sanitizeTenantConfig(await findRow(instance), instance);
 }
 
 async function getTenantApiToken(instanceValue) {
-  if (!redisClient.isOpen) return '';
   const row = await findRow(instanceValue);
   return cleanString(pickFirst(row, ['whatspro_api_token', 'api_token'], ''));
 }
 
 async function getStorageSummary() {
-  requireRedis();
-  const tenants = await redisClient.hLen(TENANT_STORE_KEY);
+  const snapshot = await snapshotSummary();
+  const tenants = redisUsable()
+    ? await redisClient.hLen(TENANT_STORE_KEY).catch(() => snapshot.tenants)
+    : snapshot.tenants;
   return {
-    backend: 'redis',
+    backend: redisUsable() ? 'redis+snapshot' : 'snapshot',
     keyVersion: 1,
     tenants,
-    initialized: tenants > 0
+    initialized: tenants > 0,
+    redisReady: redisUsable(),
+    snapshotReady: snapshot.ready,
+    snapshotUpdatedAt: snapshot.updatedAt
   };
 }
 
