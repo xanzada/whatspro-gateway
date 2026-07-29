@@ -53,7 +53,7 @@ services:
       BACKUP_SSH_PRIVATE_KEY_B64: ${BACKUP_SSH_PRIVATE_KEY_B64:-}
       BACKUP_AGE_RECIPIENT_B64: ${BACKUP_AGE_RECIPIENT_B64:-}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-900}
-      REDIS_URL: ${REDIS_URL:-redis://redis_local:6379}
+      REDIS_URL: ${BACKUP_REDIS_URL:-redis://redis_local:6379}
     volumes:
       - whatsapp_auth:/source/whatsapp_auth:ro
       - backup_state:/work
