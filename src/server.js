@@ -586,7 +586,10 @@ async function chatTtlSeconds(instanceId, phone) {
 async function saveChatHistoryEntry(instanceId, phone, entry) {
   if (!redisClient.isOpen || !isValidChatPhone(phone)) return;
   const state = isOperatorEntry(entry) ? 'operator' : undefined;
-  return chatStore.appendMessage(instanceId, phone, entry, { state });
+  return chatStore.appendMessageOnce(instanceId, phone, entry, {
+    state,
+    preserveStateOnDuplicate: true
+  });
 }
 
 function parseInboxListEntry(raw) {
@@ -1354,7 +1357,10 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   const stalePhones = [];
 
   candidates.forEach((item, index) => {
-    const historyRows = [...(histories[index] || []), ...(openbotHistories[index] || [])];
+    // The gateway timeline is canonical. OpenBot history is an internal model
+    // memory and is used only to recover older chats that have no gateway rows.
+    const gatewayRows = histories[index] || [];
+    const historyRows = gatewayRows.length ? gatewayRows : (openbotHistories[index] || []);
     if (!historyRows.length) {
       stalePhones.push(item.phone);
       return;
@@ -1831,7 +1837,9 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
       deliveryStatus: 'sent',
       source: 'api_send'
     });
-    await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved?.id || sendResult?.messageId || '' }).catch(() => {});
+    if (saved?.inserted !== false) {
+      await publishChatEvent({ type: 'chat.message', instanceId, phone: cleanPhone, messageId: saved?.id || sendResult?.messageId || '' }).catch(() => {});
+    }
   }
 
   res.status(ok ? 200 : 503).json(responsePayload);

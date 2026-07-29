@@ -380,11 +380,11 @@ test('missing persisted audio can be found again in the WhatsApp chat history', 
   const client = {
     getMessageById: async () => null,
     getContactLidAndPhone: async userIds => {
-      assert.deepEqual(userIds, ['77476884956@c.us']);
-      return [{ lid: '224043110273161@lid', pn: '77476884956@c.us' }];
+      assert.deepEqual(userIds, ['77005551234@c.us']);
+      return [{ lid: '224043110273161@lid', pn: '77005551234@c.us' }];
     },
     getChatById: async chatId => {
-      if (chatId === '77476884956@c.us') throw new Error('PN chat is unavailable after linked-device restart');
+      if (chatId === '77005551234@c.us') throw new Error('PN chat is unavailable after linked-device restart');
       assert.equal(chatId, '224043110273161@lid');
       return {
         fetchMessages: async options => {
@@ -395,7 +395,7 @@ test('missing persisted audio can be found again in the WhatsApp chat history', 
     }
   };
 
-  assert.equal(await whatsappTest.findMessageForMediaRecovery(client, '77476884956', 'AUDIO_MISSING'), expected);
+  assert.equal(await whatsappTest.findMessageForMediaRecovery(client, '77005551234', 'AUDIO_MISSING'), expected);
   assert.equal(fetchLimit, 200);
 });
 

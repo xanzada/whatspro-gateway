@@ -180,9 +180,9 @@ test('media endpoint recovers a missing persisted voice note before returning 40
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   t.after(() => new Promise(resolve => server.close(resolve)));
 
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/prestige/audio-missing?phone=77476884956`);
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/prestige/audio-missing?phone=77005551234`);
   assert.equal(response.status, 200);
-  assert.deepEqual(recoveryRequest, { instanceId: 'prestige', messageId: 'audio-missing', phone: '77476884956' });
+  assert.deepEqual(recoveryRequest, { instanceId: 'prestige', messageId: 'audio-missing', phone: '77005551234' });
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture);
 });
 

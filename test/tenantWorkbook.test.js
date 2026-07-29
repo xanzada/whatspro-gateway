@@ -23,7 +23,7 @@ function tenant(overrides = {}) {
     whatspro_base_url: 'https://whatspro.example.com',
     whatspro_send_url: 'https://whatspro.example.com/api/send',
     whatspro_presence_url: 'https://whatspro.example.com/api/presence',
-    dev_phone: '+77476884956',
+    dev_phone: '+77005551234',
     created_at: '2026-07-29T00:00:00.000Z',
     updated_at: '2026-07-29T00:00:00.000Z',
     future_field: 'preserved',

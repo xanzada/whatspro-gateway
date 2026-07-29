@@ -241,6 +241,41 @@ test('chat data is isolated by tenant instance while sharing one Redis store', a
   assert.deepEqual((await store.readInbox('tenant-b', 10)).map(row => row.phone), [phone]);
 });
 
+test('operator chat prefers its canonical timeline and uses OpenBot history only as fallback', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 2000 });
+  const phone = '77001234567';
+
+  await redis.sendCommand([
+    'RPUSH',
+    store.keys.legacyHistory('acme', phone),
+    JSON.stringify({ id: 'legacy-user', text: 'Сәлем', role: 'user', createdAt: 1000 }),
+    JSON.stringify({ id: 'legacy-combined', text: 'Толық біріктірілген жауап', role: 'assistant', createdAt: 1001 })
+  ]);
+  await store.appendMessageOnce('acme', phone, {
+    id: 'gateway-user', text: 'Сәлем', direction: 'incoming', createdAt: 1000
+  }, { state: 'new' });
+  await store.appendMessageOnce('acme', phone, {
+    id: 'gateway-chunk', text: 'Қысқа жауап', direction: 'outgoing', role: 'assistant', createdAt: 1001
+  });
+
+  assert.deepEqual(
+    (await store.getHistory('acme', phone)).map(row => row.id),
+    ['gateway-user', 'gateway-chunk']
+  );
+
+  const legacyOnlyPhone = '77007654321';
+  await redis.sendCommand([
+    'RPUSH',
+    store.keys.legacyHistory('acme', legacyOnlyPhone),
+    JSON.stringify({ id: 'legacy-only', text: 'Қалпына келетін тарих', role: 'user', createdAt: 900 })
+  ]);
+  assert.deepEqual(
+    (await store.getHistory('acme', legacyOnlyPhone)).map(row => row.id),
+    ['legacy-only']
+  );
+});
+
 test('operator reply is stored while preserving archive state and its 72 hour TTL', async () => {
   const redis = new FakeRedis();
   const store = createChatStore(redis, { now: () => 5000 });

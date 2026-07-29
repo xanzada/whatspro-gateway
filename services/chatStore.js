@@ -238,7 +238,14 @@ function createChatStore(redis, options = {}) {
       const stored = String(receiptPairs[i + 1] || '');
       receipts.set(receiptPairs[i], stored.includes(':') ? stored.slice(stored.indexOf(':') + 1) : stored);
     }
-    return [...rows, ...legacyRows].map(parseJson).filter(Boolean).map(item => {
+    // chatwoot:history is the canonical operator-chat timeline. OpenBot keeps a
+    // second, internal history for model context; merging both creates the exact
+    // duplicate pattern users see (individual WhatsApp chunks plus one combined
+    // assistant reply). Legacy history is therefore recovery-only.
+    const canonical = rows.map(parseJson).filter(Boolean);
+    const legacy = legacyRows.map(parseJson).filter(Boolean);
+    const selected = canonical.length ? canonical : legacy;
+    return selected.map(item => {
       const normalized = cleanEntry(item, now);
       const deliveryStatus = normalized.id ? receipts.get(String(normalized.id)) : '';
       return deliveryStatus ? { ...normalized, deliveryStatus } : normalized;
