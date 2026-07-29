@@ -21,6 +21,8 @@ test('offsite snapshots are encrypted, split and alternated', () => {
   assert.match(backup, /StrictHostKeyChecking=yes/);
   assert.match(backup, /cd "\$\{stage\}"[\s\S]+sha256sum snapshot\.tar\.zst\.age\.part-\*/);
   assert.match(backup, /--exclude='\*\/Cache\/\*'/);
+  assert.match(backup, /\[\[ -s "\$\{stage\}\/redis\.rdb" \]\]/);
+  assert.match(backup, /push --quiet --force[\s\S]+\|\| return 1/);
   assert.doesNotMatch(backup, /BEGIN OPENSSH PRIVATE KEY/);
 });
 

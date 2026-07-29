@@ -58,17 +58,21 @@ write_manifest() {
   local stage="$1"
   local created="$2"
   local redis_hash auth_hash auth_present
-  redis_hash="$(sha256sum "${stage}/redis.rdb")"
+  [[ -s "${stage}/redis.rdb" ]] || {
+    log 'Redis snapshot is missing or empty'
+    return 1
+  }
+  redis_hash="$(sha256sum "${stage}/redis.rdb")" || return 1
   redis_hash="${redis_hash%% *}"
   auth_hash=''
   auth_present='false'
   if [[ -f "${stage}/whatsapp_auth.tar" ]]; then
-    auth_hash="$(sha256sum "${stage}/whatsapp_auth.tar")"
+    auth_hash="$(sha256sum "${stage}/whatsapp_auth.tar")" || return 1
     auth_hash="${auth_hash%% *}"
     auth_present='true'
   fi
   printf '{"format":1,"source":"%s","createdAt":"%s","redisSha256":"%s","whatsappAuthIncluded":%s,"whatsappAuthSha256":"%s"}\n' \
-    "${BACKUP_SOURCE_NAME}" "${created}" "${redis_hash}" "${auth_present}" "${auth_hash}" > "${stage}/manifest.json"
+    "${BACKUP_SOURCE_NAME}" "${created}" "${redis_hash}" "${auth_present}" "${auth_hash}" > "${stage}/manifest.json" || return 1
 }
 
 make_snapshot() {
@@ -77,7 +81,14 @@ make_snapshot() {
   local created="$3"
   local -a payload=('manifest.json' 'redis.rdb')
 
-  redis-cli -u "${REDIS_URL}" --rdb "${stage}/redis.rdb" >/dev/null
+  if ! redis-cli --no-auth-warning -u "${REDIS_URL}" --rdb "${stage}/redis.rdb" >/dev/null; then
+    log 'redis-cli failed to create an RDB snapshot'
+    return 1
+  fi
+  [[ -s "${stage}/redis.rdb" ]] || {
+    log 'redis-cli returned without a usable RDB snapshot'
+    return 1
+  }
   if [[ -d /source/whatsapp_auth ]]; then
     # Chromium can recreate these caches. Excluding them keeps the offsite
     # snapshot focused on WhatsApp credentials, cookies and durable browser
@@ -100,20 +111,29 @@ make_snapshot() {
       --exclude='*/SingletonCookie' \
       --exclude='*/SingletonLock' \
       --exclude='*/SingletonSocket' \
-      -cf "${stage}/whatsapp_auth.tar" whatsapp_auth
+      -cf "${stage}/whatsapp_auth.tar" whatsapp_auth || return 1
+    [[ -s "${stage}/whatsapp_auth.tar" ]] || {
+      log 'WhatsApp authentication archive is empty'
+      return 1
+    }
     payload+=('whatsapp_auth.tar')
   fi
-  write_manifest "${stage}" "${created}"
+  write_manifest "${stage}" "${created}" || return 1
 
   tar -C "${stage}" -cf - "${payload[@]}" \
     | zstd -T0 -8 --quiet \
     | age -r "${recipient}" \
-    | split -b 90m -d -a 3 - "${stage}/snapshot.tar.zst.age.part-"
+    | split -b 90m -d -a 3 - "${stage}/snapshot.tar.zst.age.part-" || return 1
+
+  compgen -G "${stage}/snapshot.tar.zst.age.part-*" >/dev/null || {
+    log 'encrypted snapshot has no output parts'
+    return 1
+  }
 
   (
     cd "${stage}"
     sha256sum snapshot.tar.zst.age.part-* > encrypted-parts.sha256
-  )
+  ) || return 1
 }
 
 publish_snapshot() {
@@ -127,12 +147,12 @@ publish_snapshot() {
     git -C "${REPO_DIR}" checkout --orphan snapshot-build >/dev/null 2>&1
   }
   git -C "${REPO_DIR}" rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
-  git -C "${REPO_DIR}" clean -fdx >/dev/null
+  git -C "${REPO_DIR}" clean -fdx >/dev/null || return 1
 
-  cp "${stage}/manifest.json" "${stage}/encrypted-parts.sha256" "${stage}"/snapshot.tar.zst.age.part-* "${REPO_DIR}/"
-  git -C "${REPO_DIR}" add -- manifest.json encrypted-parts.sha256 snapshot.tar.zst.age.part-*
-  git -C "${REPO_DIR}" commit --quiet -m "backup(${BACKUP_SOURCE_NAME}): ${created}"
-  git -C "${REPO_DIR}" push --quiet --force origin "HEAD:refs/heads/${branch}"
+  cp "${stage}/manifest.json" "${stage}/encrypted-parts.sha256" "${stage}"/snapshot.tar.zst.age.part-* "${REPO_DIR}/" || return 1
+  git -C "${REPO_DIR}" add -- manifest.json encrypted-parts.sha256 snapshot.tar.zst.age.part-* || return 1
+  git -C "${REPO_DIR}" commit --quiet -m "backup(${BACKUP_SOURCE_NAME}): ${created}" || return 1
+  git -C "${REPO_DIR}" push --quiet --force origin "HEAD:refs/heads/${branch}" || return 1
   git -C "${REPO_DIR}" checkout --detach >/dev/null 2>&1
   git -C "${REPO_DIR}" branch -D snapshot-build >/dev/null 2>&1 || true
 }
@@ -145,7 +165,11 @@ backup_once() {
   created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   recipient="$(decode_b64 "${BACKUP_AGE_RECIPIENT_B64}")"
 
-  if ! make_snapshot "${stage}" "${recipient}" "${created}" || ! publish_snapshot "${stage}" "${branch}" "${created}"; then
+  if ! make_snapshot "${stage}" "${recipient}" "${created}"; then
+    [[ "${stage}" == "${WORK_ROOT}"/snapshot.* ]] && rm -rf -- "${stage}"
+    return 1
+  fi
+  if ! publish_snapshot "${stage}" "${branch}" "${created}"; then
     [[ "${stage}" == "${WORK_ROOT}"/snapshot.* ]] && rm -rf -- "${stage}"
     return 1
   fi
