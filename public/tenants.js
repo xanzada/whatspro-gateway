@@ -335,7 +335,7 @@
           requestError.fields = data.fields || [];
           requestError.code = data.error || '';
           requestError.status = response.status;
-          if (response.status === 401 && path !== '/api/whatspro/login' && path !== '/api/whatspro/session') showLogin();
+          if (response.status === 401 && path !== '/api/platform/login' && path !== '/api/platform/session') showLogin();
           throw requestError;
         }
         return data;
@@ -366,9 +366,12 @@
     stopAppTimers();
     appShell.hidden = true;
     loginShell.hidden = false;
-    var remembered = localStorage.getItem('whatspro_remember_login') === '1';
+    var remembered = localStorage.getItem('platform_remember_login') === '1' ||
+      localStorage.getItem('whatspro_remember_login') === '1';
     $('#login-remember').checked = remembered;
-    $('#login-username').value = remembered ? (localStorage.getItem('whatspro_login_username') || '') : '';
+    $('#login-username').value = remembered
+      ? (localStorage.getItem('platform_login_username') || localStorage.getItem('whatspro_login_username') || '')
+      : '';
     $('#login-password').value = '';
     syncLoginInputState($('#login-username'));
     syncLoginInputState($('#login-password'));
@@ -391,7 +394,7 @@
     return loadData(true);
   }
   function checkSession() {
-    return api('GET', '/api/whatspro/session').then(function (session) {
+    return api('GET', '/api/platform/session').then(function (session) {
       return startApp(session.username);
     }).catch(function (error) {
       if (error.status !== 401) setLoginError(error.message);
@@ -1262,7 +1265,7 @@
     if (action.dataset.profileAction === 'export') exportWorkbook('');
     if (action.dataset.profileAction === 'import') $('#tenant-import-input').click();
     if (action.dataset.profileAction === 'logout') {
-      api('POST', '/api/whatspro/logout', {}).then(function () { authUsername = ''; showLogin(); })
+      api('POST', '/api/platform/logout', {}).then(function () { authUsername = ''; showLogin(); })
         .catch(function (error) { toast(t('signOutFailed'), error.message, true); });
     }
   });
@@ -1309,12 +1312,16 @@
     var submit = $('#login-submit');
     submit.disabled = true;
     $('#login-submit-label').textContent = t('signingIn');
-    api('POST', '/api/whatspro/login', { username: username, password: password, remember: remember })
+    api('POST', '/api/platform/login', { username: username, password: password, remember: remember })
       .then(function (result) {
         if (remember) {
-          localStorage.setItem('whatspro_remember_login', '1');
-          localStorage.setItem('whatspro_login_username', username);
+          localStorage.setItem('platform_remember_login', '1');
+          localStorage.setItem('platform_login_username', username);
+          localStorage.removeItem('whatspro_remember_login');
+          localStorage.removeItem('whatspro_login_username');
         } else {
+          localStorage.removeItem('platform_remember_login');
+          localStorage.removeItem('platform_login_username');
           localStorage.removeItem('whatspro_remember_login');
           localStorage.removeItem('whatspro_login_username');
         }

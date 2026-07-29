@@ -831,13 +831,13 @@ app.get('/', (req, res) => {
 
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
-app.get('/api/whatspro/session', async (req, res) => {
+app.get(['/api/platform/session', '/api/whatspro/session'], async (req, res) => {
   const session = readSession(req);
   if (!session && !await hasApiToken(req)) return res.status(401).json({ error: 'AUTH_REQUIRED' });
   res.json({ authenticated: true, username: session?.username || process.env.WHATSPRO_USER || 'admin' });
 });
 
-app.post('/api/whatspro/login', (req, res) => {
+app.post(['/api/platform/login', '/api/whatspro/login'], (req, res) => {
   const configuredUser = String(process.env.WHATSPRO_USER || 'admin');
   const configuredPassword = String(process.env.WHATSPRO_PASSWORD || '');
   if (configuredPassword.length < MIN_ADMIN_PASSWORD_LENGTH || ['change-me', 'password', 'admin123'].includes(configuredPassword.toLowerCase())) {
@@ -873,7 +873,7 @@ app.post('/api/whatspro/login', (req, res) => {
   res.json({ success: true, username });
 });
 
-app.post('/api/whatspro/logout', (req, res) => {
+app.post(['/api/platform/logout', '/api/whatspro/logout'], (req, res) => {
   res.clearCookie('whatspro_session');
   res.json({ success: true });
 });
