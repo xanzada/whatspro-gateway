@@ -12,6 +12,7 @@ test('backup sidecar reads WhatsApp auth without writing to the live volume', ()
   assert.match(compose, /whatsapp_auth:\/source\/whatsapp_auth:ro/);
   assert.match(compose, /BACKUP_ENABLED: \$\{BACKUP_ENABLED:-false\}/);
   assert.match(compose, /REDIS_URL: \$\{BACKUP_REDIS_URL:-redis:\/\/redis_local:6379\}/);
+  assert.match(compose, /backup:[\s\S]+networks:[\s\S]+dokploy-network/);
   assert.match(compose, /backup_state:\/work/);
 });
 

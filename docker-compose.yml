@@ -57,6 +57,9 @@ services:
     volumes:
       - whatsapp_auth:/source/whatsapp_auth:ro
       - backup_state:/work
+    networks:
+      - default
+      - dokploy-network
     healthcheck:
       test: ["CMD", "/usr/local/bin/backup-healthcheck"]
       interval: 5m
@@ -68,3 +71,7 @@ volumes:
   whatsapp_auth:
   whatspro_redis_data:
   backup_state:
+
+networks:
+  dokploy-network:
+    external: true
