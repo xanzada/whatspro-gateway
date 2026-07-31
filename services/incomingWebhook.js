@@ -50,6 +50,37 @@ function isGroupOrStatusPayload(payload = {}) {
   return values.some(value => value.includes('@g.us') || value.includes('status@broadcast') || value.includes('@broadcast'));
 }
 
+const PROTOCOL_NOISE_TYPES = new Set([
+  'system',
+  'notification',
+  'notification_template',
+  'e2e_notification',
+  'protocol',
+  'protocol_message',
+  'app_state_sync',
+  'history_sync'
+]);
+
+/**
+ * Phantom-contact filter.
+ *
+ * WhatsApp emits protocol events (encryption notices, template notices, app
+ * state syncs) for numbers that never sent a single real message. They used
+ * to be appended to the chat store exactly like customer texts, so the
+ * operator inbox filled with "new" contacts nobody ever wrote to. Only real
+ * conversational content - text or supported media - may create a chat.
+ */
+function isNonConversationalPayload(payload = {}) {
+  const type = String(payload.type || payload.mediaKind || '').trim().toLowerCase();
+  if (PROTOCOL_NOISE_TYPES.has(type)) return true;
+  if (payload.fromMe === true || payload.data?.key?.fromMe === true) return false;
+  const body = String(payload.body || payload.text || payload.data?.message?.conversation || '').trim();
+  if (body) return false;
+  if (Boolean(payload.hasMedia)) return false;
+  // No type at all means the event had no message content worth showing.
+  return !type || type === 'chat' || type === 'message';
+}
+
 function getPayloadPhone(payload = {}) {
   return normalizePhoneFromCandidates([
     payload.normalizedPhone,
@@ -131,6 +162,7 @@ async function saveIncomingMessage(payload, dependencies = {}) {
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
+  if (isNonConversationalPayload(payload)) return { skipped: true, reason: 'non_conversational' };
   const redisOpen = dependencies.redisOpen ??
     (redisClient.isReady === undefined ? redisClient.isOpen : redisClient.isReady);
   if (!redisOpen) return { skipped: true, reason: 'redis_not_connected' };
@@ -220,7 +252,8 @@ async function processIncomingRecord(record, dependencies = {}) {
 
     if (record.pendingOpenBot) {
       try {
-        const skip = await (dependencies.shouldSkipOpenBot || shouldSkipOpenBot)(record.payload);
+        const skip = isNonConversationalPayload(record.payload) ||
+          await (dependencies.shouldSkipOpenBot || shouldSkipOpenBot)(record.payload);
         if (skip) {
           record.pendingOpenBot = false;
         } else {
@@ -267,5 +300,5 @@ module.exports = {
   processIncomingRecord,
   saveIncomingMessage,
   startIncomingWalWorker,
-  __test: { buildHistoryEntry, saveIncomingMessage }
+  __test: { buildHistoryEntry, isNonConversationalPayload, saveIncomingMessage }
 };
