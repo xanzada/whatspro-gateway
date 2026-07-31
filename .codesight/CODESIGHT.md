@@ -2,9 +2,9 @@
 
 > **Stack:** express | none | unknown | javascript
 
-> 44 routes (44 inferred) | 0 models | 0 components | 0 lib files | 46 env vars | 1 middleware
-> **Token savings:** this file is ~2 500 tokens. Without it, AI exploration would cost ~35 700 tokens. **Saves ~33 200 tokens per conversation.**
-> **Last scanned:** 2026-07-28 20:19 — re-run after significant changes
+> 54 routes (54 inferred) | 0 models | 0 components | 0 lib files | 34 env vars | 2 middleware
+> **Token savings:** this file is ~2 600 tokens. Without it, AI exploration would cost ~40 800 tokens. **Saves ~38 200 tokens per conversation.**
+> **Last scanned:** 2026-07-29 15:10 — re-run after significant changes
 
 ---
 
@@ -19,20 +19,29 @@
 ## Other Routes
 
 - `GET` `/health` [auth, db, cache, queue] `[inferred]`
+- `GET` `/favicon.ico` [auth, db, cache, queue] `[inferred]`
 - `GET` `/chat.html` [auth, db, cache, queue] `[inferred]`
 - `GET` `/whatspro` [auth, db, cache, queue] `[inferred]`
 - `GET` `/tenants` [auth, db, cache, queue] `[inferred]`
+- `GET` `/connect` [auth, db, cache, queue] `[inferred]`
 - `GET` `/` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/whatspro/session` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/whatspro/login` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/whatspro/logout` [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/backups/tenants.xlsx` [auth, db, cache, queue] `[inferred]`
+- `POST` `/api/wa/backups/tenants/import` [auth, db, cache, queue] `[inferred]`
 - `GET` `/api/wa/tenant-defaults` [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/platform-storage` [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/runtime-configs` [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/runtime-configs/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue] `[inferred]`
+- `POST` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `GET` `/api/wa/shared-prompt` [auth, db, cache, queue] `[inferred]`
 - `PUT` `/api/wa/shared-prompt` [auth, db, cache, queue] `[inferred]`
 - `GET` `/api/wa/tenants/:instanceId/settings` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/tenants/:instanceId/clone` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/tenants/:instanceId/rotate` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/tenants/:instanceId/active` params(instanceId) [auth, db, cache, queue] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/bot-enabled` params(instanceId) [auth, db, cache, queue] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/connect-link` params(instanceId) [auth, db, cache, queue] `[inferred]`
+- `GET` `/api/wa/connect/:token/status` params(token) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/scan-requests/:requestId/approve` params(requestId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/scan-requests/:requestId/reject` params(requestId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/scan-requests/:requestId/open` params(requestId) [auth, db, cache, queue] `[inferred]`
@@ -46,6 +55,7 @@
 - `GET` `/api/chat/operator-lock/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/chat/action/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/start` [auth, db, cache, queue] `[inferred]`
+- `POST` `/api/wa/statuses` [auth, db, cache, queue] `[inferred]`
 - `GET` `/api/wa/status/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/restart/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
 - `POST` `/api/wa/logout` [auth, db, cache, queue] `[inferred]`
@@ -59,18 +69,6 @@
 ## Environment Variables
 
 - `CHAT_PUBLIC_API_BASE` **required** — .env.example
-- `NOCODB_CONFIG_CACHE_MAX` (has default) — .env.example
-- `NOCODB_CONFIG_CACHE_MS` (has default) — .env.example
-- `NOCODB_CONFIG_CIRCUIT_MS` (has default) — .env.example
-- `NOCODB_CONFIG_MAX_CONCURRENCY` (has default) — .env.example
-- `NOCODB_CONFIG_MAX_PENDING` (has default) — .env.example
-- `NOCODB_CONFIG_NEGATIVE_CACHE_MS` (has default) — .env.example
-- `NOCODB_CONFIG_QUEUE_TIMEOUT_MS` (has default) — .env.example
-- `NOCODB_RESTAURANTS_TABLE_ID` **required** — .env.example
-- `NOCODB_TABLE_ID` **required** — .env.example
-- `NOCODB_TIMEOUT_MS` (has default) — .env.example
-- `NOCODB_TOKEN` **required** — .env.example
-- `NOCODB_URL` **required** — .env.example
 - `NODE_ENV` **required** — src\server.js
 - `OPENBOT_WEBHOOK_TIMEOUT_MS` (has default) — .env.example
 - `OPENBOT_WEBHOOK_TOKEN` **required** — .env.example
@@ -122,6 +120,7 @@
 # Middleware
 
 ## auth
+- requireUiSession — `src\server.js`
 - requireChatMediaAuth — `src\server.js`
 
 ---
@@ -130,10 +129,10 @@
 
 ## Most Imported Files (change these carefully)
 
-- `config\redis.js` — imported by **7** files
+- `config\redis.js` — imported by **10** files
+- `services\tenantStore.js` — imported by **9** files
 - `services\phoneUtils.js` — imported by **7** files
 - `src\server.js` — imported by **6** files
-- `services\nocodbConfig.js` — imported by **6** files
 - `services\redisReply.js` — imported by **5** files
 - `services\chatStore.js` — imported by **5** files
 - `services\chatEvents.js` — imported by **5** files
@@ -142,16 +141,18 @@
 - `services\whatsappManager.js` — imported by **3** files
 - `services\operatorLock.js` — imported by **2** files
 - `services\sosStore.js` — imported by **2** files
+- `services\tenantMemoryStore.js` — imported by **2** files
 - `services\tenantReadiness.js` — imported by **2** files
 - `services\tenantAdmin.js` — imported by **2** files
+- `services\tenantWorkbook.js` — imported by **2** files
 - `public\chat-core.js` — imported by **2** files
 
 ## Import Map (who imports what)
 
-- `config\redis.js` ← `services\chatEvents.js`, `services\chatStore.js`, `services\incomingWebhook.js`, `services\operatorLock.js`, `services\sosStore.js` +2 more
+- `config\redis.js` ← `services\chatEvents.js`, `services\chatStore.js`, `services\incomingWebhook.js`, `services\operatorLock.js`, `services\sosStore.js` +5 more
+- `services\tenantStore.js` ← `services\tenantAdmin.js`, `services\tenantMemoryStore.js`, `src\server.js`, `test\routing.test.js`, `test\tenantAdmin.test.js` +4 more
 - `services\phoneUtils.js` ← `services\chatEvents.js`, `services\chatStore.js`, `services\incomingWebhook.js`, `services\operatorLock.js`, `services\sosStore.js` +2 more
 - `src\server.js` ← `scripts\browser-qa.js`, `test\backendDefects.test.js`, `test\realtimeSync.test.js`, `test\routing.test.js`, `test\tenantReadiness.test.js` +1 more
-- `services\nocodbConfig.js` ← `services\tenantAdmin.js`, `src\server.js`, `src\server.js`, `test\nocodbConfig.test.js`, `test\tenantReadiness.test.js` +1 more
 - `services\redisReply.js` ← `services\chatStore.js`, `services\sosStore.js`, `src\server.js`, `test\sosStore.test.js`, `test\sosStore.test.js`
 - `services\chatStore.js` ← `services\incomingWebhook.js`, `services\whatsappManager.js`, `src\server.js`, `test\chatStore.test.js`, `test\pdfReceiptFlow.test.js`
 - `services\chatEvents.js` ← `services\incomingWebhook.js`, `services\whatsappManager.js`, `src\server.js`, `test\chatEvents.test.js`, `test\realtimeSync.test.js`

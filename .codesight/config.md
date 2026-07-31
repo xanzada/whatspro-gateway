@@ -3,18 +3,6 @@
 ## Environment Variables
 
 - `CHAT_PUBLIC_API_BASE` **required** — .env.example
-- `NOCODB_CONFIG_CACHE_MAX` (has default) — .env.example
-- `NOCODB_CONFIG_CACHE_MS` (has default) — .env.example
-- `NOCODB_CONFIG_CIRCUIT_MS` (has default) — .env.example
-- `NOCODB_CONFIG_MAX_CONCURRENCY` (has default) — .env.example
-- `NOCODB_CONFIG_MAX_PENDING` (has default) — .env.example
-- `NOCODB_CONFIG_NEGATIVE_CACHE_MS` (has default) — .env.example
-- `NOCODB_CONFIG_QUEUE_TIMEOUT_MS` (has default) — .env.example
-- `NOCODB_RESTAURANTS_TABLE_ID` **required** — .env.example
-- `NOCODB_TABLE_ID` **required** — .env.example
-- `NOCODB_TIMEOUT_MS` (has default) — .env.example
-- `NOCODB_TOKEN` **required** — .env.example
-- `NOCODB_URL` **required** — .env.example
 - `NODE_ENV` **required** — src\server.js
 - `OPENBOT_WEBHOOK_TIMEOUT_MS` (has default) — .env.example
 - `OPENBOT_WEBHOOK_TOKEN` **required** — .env.example
