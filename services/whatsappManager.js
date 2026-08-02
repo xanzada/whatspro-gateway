@@ -672,6 +672,20 @@ function getRestartAttempts(instanceId) {
     return restartAttempts.get(instanceId) || 0;
 }
 
+function buildReconnectPlan(reason, options = {}) {
+    const attempts = Math.max(0, Number(options.attempts) || 0);
+    const configuredMax = Number(options.maxRetries);
+    const maxRetries = Math.max(0, Number.isFinite(configuredMax) ? Math.floor(configuredMax) : 1);
+    const hasStoredSession = Boolean(options.hasStoredSession);
+    const freshQr = !hasStoredSession || /LOGOUT|UNPAIRED|QR_START_TIMEOUT|AUTH[_\s-]?FAIL/i.test(String(reason || ''));
+
+    return {
+        shouldRetry: attempts < maxRetries,
+        allowQrRequired: freshQr,
+        mode: freshQr ? 'fresh_qr' : 'session_restore'
+    };
+}
+
 function isAuthenticationFailureReason(reason) {
     return /DISCONNECTED|LOGOUT|UNPAIRED|UNPAIRED_IDLE|AUTH[_\s-]?FAIL|AUTHENTICATION|INVALID[_\s-]?(SESSION|CREDENTIAL|AUTH)|SESSION[_\s-]?CLOSED|NOT[_\s-]?LOGGED|401|403/i.test(String(reason || ''));
 }
@@ -705,10 +719,10 @@ function scheduleFlush(instanceId, delayMs = 1000) {
     }, delayMs));
 }
 
-function scheduleRestart(instanceId, delayMs = 3000, reason = 'restart') {
+function scheduleRestart(instanceId, delayMs = 3000, reason = 'restart', options = {}) {
     if (shutdownInProgress) return;
     if (intentionallyStopped.has(instanceId)) return;
-    if (instanceStates.get(instanceId)?.status === 'qr_required') return;
+    if (instanceStates.get(instanceId)?.status === 'qr_required' && !options.allowQrRequired) return;
 
     clearRestartTimer(instanceId);
     const finalDelayMs = calculateRestartDelay(instanceId, delayMs, reason);
@@ -1090,13 +1104,21 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 await resetInvalidSession(instanceId, client, 'restore_timeout', true);
                 return;
             }
-            console.warn(`[WHATSAPP] ${instanceId} QR startup timed out; waiting for manual restart.`);
+            console.warn(`[WHATSAPP] ${instanceId} QR startup timed out; scheduling a bounded fresh QR retry.`);
             await destroyClient(client);
             initializingClients.delete(instanceId);
             cleanupChromiumRuntimeLocks(instanceId);
             clients.delete(instanceId);
             qrCodes.delete(instanceId);
             setInstanceState(instanceId, 'qr_required', { reason: 'qr_start_timeout', hasStoredSession: false });
+            const recovery = buildReconnectPlan('qr_start_timeout', {
+                attempts: getRestartAttempts(instanceId),
+                maxRetries: WHATSAPP_INITIALIZE_MAX_RETRIES,
+                hasStoredSession: false
+            });
+            if (recovery.shouldRetry) {
+                scheduleRestart(instanceId, 5000, 'qr_start_timeout', { allowQrRequired: recovery.allowQrRequired });
+            }
             return;
         }
     }, SESSION_RESTORE_TIMEOUT_MS); // restore can be slow after deploy
@@ -1168,6 +1190,14 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             console.log(`❌ [WHATSAPP] ${instanceId} ТЕЛЕФОННАН ШЫҒЫП КЕТТІ (LOGOUT).`);
             removeSessionFolder(instanceId, 'logout_by_user');
             setInstanceState(instanceId, 'qr_required', { reason: 'Телефоннан шығып кеттіңіз. Жаңа QR күтіңіз.', hasStoredSession: false });
+            const recovery = buildReconnectPlan(reasonText, {
+                attempts: getRestartAttempts(instanceId),
+                maxRetries: WHATSAPP_INITIALIZE_MAX_RETRIES,
+                hasStoredSession: false
+            });
+            if (recovery.shouldRetry) {
+                scheduleRestart(instanceId, 5000, 'logout_unpaired', { allowQrRequired: recovery.allowQrRequired });
+            }
             return;
         }
 
@@ -1401,8 +1431,18 @@ client.initialize().catch(async err => {
 
         if (shutdownInProgress || intentionallyStopped.has(instanceId)) return;
 
-        setInstanceState(instanceId, 'error', { reason: `Қате: ${err.message}` });
-        scheduleRestart(instanceId, 15000, `init_failed`); // Шексіз циклді тоқтатып, 15 сек үзіліс жасаймыз
+        const recovery = buildReconnectPlan('init_failed', {
+            attempts: getRestartAttempts(instanceId),
+            maxRetries: WHATSAPP_INITIALIZE_MAX_RETRIES,
+            hasStoredSession: hasStoredSession(instanceId)
+        });
+        if (recovery.shouldRetry) {
+            setInstanceState(instanceId, 'error', { reason: `Қате: ${err.message}` });
+            scheduleRestart(instanceId, 15000, 'init_failed', { allowQrRequired: recovery.allowQrRequired });
+        } else {
+            setInstanceState(instanceId, 'error', { reason: `initialize_retries_exhausted: ${err.message}` });
+            console.error(`[WHATSAPP] ${instanceId} initialize retry budget exhausted.`);
+        }
     });
 
     return { success: true, message: 'Инстанс іске қосылуда. Күте тұрыңыз...' };
@@ -1873,6 +1913,7 @@ module.exports = {
         },
         clearPendingTextQueue(instanceId) {
             pendingTextQueues.delete(instanceId);
-        }
+        },
+        buildReconnectPlan
     }
 };
