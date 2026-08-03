@@ -103,6 +103,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
 });
 
 test('call handling resolves WhatsApp privacy LIDs before applying the test-mode allowlist', async () => {
+  whatsappTest.clearJidMap();
   const delivered = [];
   const client = {
     getContactLidAndPhone: async ids => {
@@ -125,4 +126,34 @@ test('call handling resolves WhatsApp privacy LIDs before applying the test-mode
   assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].phone, '77476884956');
+});
+
+test('call handling verifies an unresolved LID against the tenant developer phone mapping', async () => {
+  whatsappTest.clearJidMap();
+  const rawLid = '123456789012345@lid';
+  const lookups = [];
+  const client = {
+    getContactLidAndPhone: async ids => {
+      lookups.push(ids);
+      if (ids[0] === rawLid) return [{ lid: rawLid, pn: '' }];
+      if (ids[0] === '77476884956@c.us') return [{ lid: rawLid, pn: '77476884956@c.us' }];
+      return [];
+    },
+    getContactById: async () => null
+  };
+  const delivered = [];
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: rawLid,
+    reject: async () => {}
+  }, {
+    getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
+    deliverText: async (_client, _instanceId, phone) => {
+      delivered.push(phone);
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(lookups, [[rawLid], ['77476884956@c.us']]);
+  assert.deepEqual(delivered, ['77476884956']);
 });
