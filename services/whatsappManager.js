@@ -1617,12 +1617,46 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
 
+function serializeWhatsAppJid(value) {
+    if (typeof value === 'string') return value.trim();
+    if (!value || typeof value !== 'object') return '';
+
+    const serialized = value._serialized || value.serialized;
+    if (typeof serialized === 'string' && serialized.trim()) return serialized.trim();
+
+    const user = String(value.user || '').trim();
+    const server = String(value.server || '').trim();
+    return user && server ? `${user}@${server}` : '';
+}
+
+function getCallParticipantCandidates(participants) {
+    if (!participants || typeof participants !== 'object') return [];
+
+    const entries = Array.isArray(participants)
+        ? participants
+        : [...Object.keys(participants), ...Object.values(participants)];
+
+    return entries.flatMap(participant => {
+        if (typeof participant === 'string') return [participant];
+        if (!participant || typeof participant !== 'object') return [];
+        return [
+            serializeWhatsAppJid(participant),
+            serializeWhatsAppJid(participant.jid),
+            serializeWhatsAppJid(participant.id),
+            participant.phoneNumber,
+            participant.number
+        ];
+    }).filter(Boolean);
+}
+
 async function resolveCallPhone(client, call, knownPhone = '') {
-    const rawJid = String(call?.from || call?.peerJid || '').trim();
-    const participantValues = Array.isArray(call?.participants)
-        ? call.participants.flatMap(participant => [participant?.phoneNumber, participant?.number, participant?.id?.user, participant?.id, participant?.jid])
-        : [];
-    const direct = normalizePhoneFromCandidates([rawJid, call?.id?.remote, ...participantValues]);
+    const rawJid = serializeWhatsAppJid(call?.from) || serializeWhatsAppJid(call?.peerJid);
+    const participantValues = getCallParticipantCandidates(call?.participants);
+    const direct = normalizePhoneFromCandidates([
+        rawJid,
+        serializeWhatsAppJid(call?.id?.remote),
+        ...participantValues
+    ]);
     if (direct) return direct;
 
     for (const [phone, jid] of jidMap.entries()) {
