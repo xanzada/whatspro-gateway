@@ -308,6 +308,22 @@ test('call reply stays silent when reliable rejection cannot be confirmed', asyn
   assert.deepEqual(delivered, []);
 });
 
+test('reliable rejection prefers the whatsapp-web.js call reject bridge', async () => {
+  const sequence = [];
+  const rejected = await whatsappTest.rejectIncomingCallReliably({
+    pupPage: {
+      evaluate: async () => { throw new Error('WPP fallback must not run'); },
+      addScriptTag: async () => { throw new Error('WPP fallback must not load'); }
+    }
+  }, {
+    id: 'call-native-123',
+    reject: async () => { sequence.push('native-reject'); }
+  });
+
+  assert.equal(rejected, true);
+  assert.deepEqual(sequence, ['native-reject']);
+});
+
 test('reliable rejection injects the current call API and confirms its result', async () => {
   const previousWindow = global.window;
   const rejectedIds = [];

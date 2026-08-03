@@ -1173,11 +1173,6 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         
         // 🚀 ЕҢ МАҢЫЗДЫ ӨЗГЕРІС: Инстансты тек 100% ҚОСЫЛҒАНДА ғана жадыға жазамыз!
         clients.set(instanceId, client); 
-        void ensureWppCallApi(client).then(ready => {
-            if (!ready) console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call API was not preloaded.`);
-        }).catch(error => {
-            console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call API preload failed: ${error.message}`);
-        });
         scheduleFlush(instanceId, 500);
     });
 
@@ -1649,6 +1644,18 @@ async function ensureWppCallApi(client) {
 }
 
 async function rejectIncomingCallReliably(client, call) {
+    if (typeof call?.reject === 'function') {
+        const rejectedByClient = await withTimeout(
+            Promise.resolve().then(() => call.reject()),
+            5000,
+            'WWEBJS_CALL_REJECT_TIMEOUT'
+        ).then(() => true).catch(error => {
+            console.warn(`[WHATSAPP CALL] whatsapp-web.js call rejection failed: ${error.message}`);
+            return false;
+        });
+        if (rejectedByClient) return true;
+    }
+
     const ready = await withTimeout(ensureWppCallApi(client), 5000, 'WPP_CALL_API_TIMEOUT').catch(error => {
         console.warn(`[WHATSAPP CALL] Reliable call API unavailable: ${error.message}`);
         return false;
