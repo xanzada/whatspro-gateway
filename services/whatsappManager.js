@@ -1617,13 +1617,44 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
 
+async function resolveCallPhone(client, call) {
+    const rawJid = String(call?.from || call?.peerJid || '').trim();
+    const participantValues = Array.isArray(call?.participants)
+        ? call.participants.flatMap(participant => [participant?.phoneNumber, participant?.number, participant?.id?.user, participant?.id, participant?.jid])
+        : [];
+    const direct = normalizePhoneFromCandidates([rawJid, call?.id?.remote, ...participantValues]);
+    if (direct) return direct;
+
+    for (const [phone, jid] of jidMap.entries()) {
+        if (rawJid && String(jid || '') === rawJid) return phone;
+    }
+
+    if (!rawJid || typeof client?.getContactById !== 'function') return '';
+    const contact = await withTimeout(client.getContactById(rawJid), 3000, 'CALL_CONTACT_LOOKUP_TIMEOUT').catch(() => null);
+    const resolved = normalizePhoneFromCandidates([
+        contact?.number,
+        contact?.userid,
+        contact?.id?.user,
+        contact?.id?._serialized
+    ]);
+    if (resolved) jidMap.set(resolved, rawJid);
+    return resolved;
+}
+
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     await call.reject();
-    const phone = normalizePhoneFromCandidates([call?.from, call?.peerJid, call?.id?.remote]);
-    if (!isValidChatPhone(phone)) return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
+    const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
+    const phone = await resolvePhone(client, call);
+    if (!isValidChatPhone(phone)) {
+        console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved.`);
+        return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
+    }
 
     const allowed = await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone);
-    if (!allowed) return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
+    if (!allowed) {
+        console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected without reply by test-mode policy.`);
+        return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
+    }
 
     const deliverText = dependencies.deliverText || deliverWhatsAppText;
     const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT);
@@ -1922,6 +1953,7 @@ module.exports = {
         },
         buildOperatorHistoryEntry,
         handleIncomingCall,
+        resolveCallPhone,
         queueOutgoingText,
         clearRestartTimer,
         scheduleFlush,
