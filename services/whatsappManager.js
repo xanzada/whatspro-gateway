@@ -1629,7 +1629,18 @@ async function resolveCallPhone(client, call) {
         if (rawJid && String(jid || '') === rawJid) return phone;
     }
 
-    if (!rawJid || typeof client?.getContactById !== 'function') return '';
+    if (!rawJid) return '';
+    if (typeof client?.getContactLidAndPhone === 'function') {
+        const mappings = await withTimeout(client.getContactLidAndPhone([rawJid]), 3000, 'CALL_LID_LOOKUP_TIMEOUT').catch(() => []);
+        const mapping = (Array.isArray(mappings) ? mappings : []).find(item => String(item?.lid || '') === rawJid) || mappings?.[0];
+        const mappedPhone = normalizePhoneFromCandidates([mapping?.pn, mapping?.phone]);
+        if (mappedPhone) {
+            jidMap.set(mappedPhone, rawJid);
+            return mappedPhone;
+        }
+    }
+
+    if (typeof client?.getContactById !== 'function') return '';
     const contact = await withTimeout(client.getContactById(rawJid), 3000, 'CALL_CONTACT_LOOKUP_TIMEOUT').catch(() => null);
     const resolved = normalizePhoneFromCandidates([
         contact?.number,
