@@ -11,6 +11,18 @@ test('chat lifecycle states are exclusive and prefer archive', () => {
   assert.equal(core.chatState({ state: 'operator', archived: true }), 'archive');
 });
 
+test('a stale inbox refresh cannot move an opened chat back to New', () => {
+  const serverRows = [
+    { phone: '77769156184', state: 'new', unread: true },
+    { phone: '77022754235', state: 'new', unread: true }
+  ];
+
+  assert.deepEqual(core.applyPendingViews(serverRows, ['+7 776 915 61 84']), [
+    { phone: '77769156184', state: 'all', unread: false, viewed: true },
+    { phone: '77022754235', state: 'new', unread: true }
+  ]);
+});
+
 test('message roles enforce client left and bot/operator outgoing semantics', () => {
   assert.equal(core.roleOf({ role: 'customer', direction: 'incoming' }), 'client');
   assert.equal(core.roleOf({ role: 'assistant' }), 'bot');
