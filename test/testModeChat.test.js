@@ -188,3 +188,53 @@ test('call handling resolves the structured Wid payload emitted by whatsapp-web.
   assert.deepEqual(lookups, [[rawLid]]);
   assert.deepEqual(delivered, ['77476884956']);
 });
+
+test('call handling discovers a caller JID nested inside the live call payload', async () => {
+  whatsappTest.clearJidMap();
+  const rawLid = '123456789012345@lid';
+  const lookups = [];
+  const delivered = [];
+  const client = {
+    getContactLidAndPhone: async ids => {
+      lookups.push(ids);
+      return [{ lid: rawLid, pn: '77476884956@c.us' }];
+    },
+    getContactById: async () => null
+  };
+
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: { _serialized: { value: rawLid } },
+    participants: { active: { contact: { wid: { _serialized: rawLid } } } },
+    reject: async () => {}
+  }, {
+    getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
+    deliverText: async (_client, _instanceId, phone) => {
+      delivered.push(phone);
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(lookups, [[rawLid]]);
+  assert.deepEqual(delivered, ['77476884956']);
+});
+
+test('call reply is not blocked when whatsapp-web.js reject never settles', async () => {
+  const delivered = [];
+  const result = await Promise.race([
+    whatsappTest.handleIncomingCall('prestige', {}, {
+      from: '77476884956@c.us',
+      reject: () => new Promise(() => {})
+    }, {
+      isPhoneAllowed: async () => true,
+      deliverText: async (_client, _instanceId, phone) => {
+        delivered.push(phone);
+        return { success: true };
+      }
+    }),
+    new Promise(resolve => setTimeout(() => resolve('timed_out'), 100))
+  ]);
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(delivered, ['77476884956']);
+});
