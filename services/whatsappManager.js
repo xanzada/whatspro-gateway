@@ -13,7 +13,7 @@ const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
-const { isPhoneAllowed } = require('./testModePolicy');
+const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -1617,7 +1617,7 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
 
-async function resolveCallPhone(client, call) {
+async function resolveCallPhone(client, call, knownPhone = '') {
     const rawJid = String(call?.from || call?.peerJid || '').trim();
     const participantValues = Array.isArray(call?.participants)
         ? call.participants.flatMap(participant => [participant?.phoneNumber, participant?.number, participant?.id?.user, participant?.id, participant?.jid])
@@ -1638,6 +1638,21 @@ async function resolveCallPhone(client, call) {
             jidMap.set(mappedPhone, rawJid);
             return mappedPhone;
         }
+
+        const normalizedKnownPhone = normalizePhoneFromCandidates([knownPhone]);
+        if (normalizedKnownPhone) {
+            const knownMappings = await withTimeout(
+                client.getContactLidAndPhone([`${normalizedKnownPhone}@c.us`]),
+                3000,
+                'CALL_KNOWN_PHONE_LOOKUP_TIMEOUT'
+            ).catch(() => []);
+            const knownMapping = (Array.isArray(knownMappings) ? knownMappings : []).find(item => String(item?.lid || '') === rawJid);
+            const verifiedPhone = normalizePhoneFromCandidates([knownMapping?.pn, knownMapping?.phone]);
+            if (verifiedPhone === normalizedKnownPhone) {
+                jidMap.set(verifiedPhone, rawJid);
+                return verifiedPhone;
+            }
+        }
     }
 
     if (typeof client?.getContactById !== 'function') return '';
@@ -1653,15 +1668,19 @@ async function resolveCallPhone(client, call) {
 }
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
+    if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
     await call.reject();
+    const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
     const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
-    const phone = await resolvePhone(client, call);
+    const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
     if (!isValidChatPhone(phone)) {
         console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved.`);
         return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
     }
 
-    const allowed = await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone);
+    const allowed = dependencies.isPhoneAllowed
+        ? await dependencies.isPhoneAllowed(instanceId, phone)
+        : allowsPhone(policy, phone);
     if (!allowed) {
         console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected without reply by test-mode policy.`);
         return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
@@ -1961,6 +1980,9 @@ module.exports = {
         releaseLocalBotSend,
         clearLocalBotSends() {
             localBotSends.clear();
+        },
+        clearJidMap() {
+            jidMap.clear();
         },
         buildOperatorHistoryEntry,
         handleIncomingCall,
