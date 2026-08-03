@@ -244,22 +244,54 @@ test('call handling canonicalizes a multi-device LID before phone mapping', asyn
   assert.deepEqual(lookups, [[canonicalLid]]);
 });
 
-test('call reply is not blocked when whatsapp-web.js reject never settles', async () => {
+test('call reply is sent only after reliable rejection is confirmed', async () => {
   const delivered = [];
-  const result = await Promise.race([
-    whatsappTest.handleIncomingCall('prestige', {}, {
-      from: '77476884956@c.us',
-      reject: () => new Promise(() => {})
-    }, {
-      isPhoneAllowed: async () => true,
-      deliverText: async (_client, _instanceId, phone) => {
-        delivered.push(phone);
-        return { success: true };
-      }
-    }),
-    new Promise(resolve => setTimeout(() => resolve('timed_out'), 100))
-  ]);
+  const sequence = [];
+  let releaseRejection;
+  const rejectionGate = new Promise(resolve => { releaseRejection = resolve; });
+  const handling = whatsappTest.handleIncomingCall('prestige', {}, {
+    from: '77476884956@c.us',
+    reject: async () => { throw new Error('legacy reject must not be used'); }
+  }, {
+    rejectCall: async () => {
+      sequence.push('reject-start');
+      await rejectionGate;
+      sequence.push('reject-done');
+      return true;
+    },
+    isPhoneAllowed: async () => true,
+    deliverText: async (_client, _instanceId, phone) => {
+      sequence.push('reply');
+      delivered.push(phone);
+      return { success: true };
+    }
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(sequence, ['reject-start']);
+  assert.deepEqual(delivered, []);
+  releaseRejection();
+  const result = await handling;
 
   assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(sequence, ['reject-start', 'reject-done', 'reply']);
   assert.deepEqual(delivered, ['77476884956']);
+});
+
+test('call reply stays silent when reliable rejection cannot be confirmed', async () => {
+  const delivered = [];
+  const result = await whatsappTest.handleIncomingCall('prestige', {}, {
+    from: '77476884956@c.us',
+    reject: async () => {}
+  }, {
+    rejectCall: async () => false,
+    isPhoneAllowed: async () => true,
+    deliverText: async () => {
+      delivered.push('unexpected');
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: false, replied: false, phone: '', reason: 'reject_failed' });
+  assert.deepEqual(delivered, []);
 });
