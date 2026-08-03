@@ -1105,7 +1105,26 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         if (!isReady && !qrCodes.has(instanceId)) {
             if (shutdownInProgress || intentionallyStopped.has(instanceId)) return;
             if (sessionExists) {
-                await resetInvalidSession(instanceId, client, 'restore_timeout', true);
+                console.warn(`[WHATSAPP] ${instanceId} stored session restore timed out; preserving credentials for a bounded retry.`);
+                await destroyClient(client);
+                initializingClients.delete(instanceId);
+                cleanupChromiumRuntimeLocks(instanceId);
+                clients.delete(instanceId);
+                qrCodes.delete(instanceId);
+                const recovery = buildReconnectPlan('restore_timeout', {
+                    attempts: getRestartAttempts(instanceId),
+                    maxRetries: WHATSAPP_INITIALIZE_MAX_RETRIES,
+                    hasStoredSession: true
+                });
+                if (recovery.shouldRetry) {
+                    scheduleRestart(instanceId, 5000, 'restore_timeout');
+                } else {
+                    setInstanceState(instanceId, 'qr_required', {
+                        reason: 'restore_timeout',
+                        hasStoredSession: true
+                    });
+                    console.error(`[WHATSAPP] ${instanceId} restore retry budget exhausted; credentials were preserved for operator recovery.`);
+                }
                 return;
             }
             console.warn(`[WHATSAPP] ${instanceId} QR startup timed out; scheduling a bounded fresh QR retry.`);

@@ -52,3 +52,9 @@ test('runtime lifecycle handlers use the reconnect policy', async () => {
   assert.match(source, /buildReconnectPlan\(reasonText/);
   assert.match(source, /buildReconnectPlan\('init_failed'/);
 });
+
+test('a slow persisted-session restore is retried without deleting credentials', async () => {
+  const source = await readFile(path.join(__dirname, '..', 'services', 'whatsappManager.js'), 'utf8');
+  assert.match(source, /buildReconnectPlan\('restore_timeout'/);
+  assert.doesNotMatch(source, /resetInvalidSession\(instanceId, client, 'restore_timeout'/);
+});
