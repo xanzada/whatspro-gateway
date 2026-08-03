@@ -308,20 +308,56 @@ test('call reply stays silent when reliable rejection cannot be confirmed', asyn
   assert.deepEqual(delivered, []);
 });
 
-test('reliable rejection prefers the whatsapp-web.js call reject bridge', async () => {
-  const sequence = [];
-  const rejected = await whatsappTest.rejectIncomingCallReliably({
-    pupPage: {
-      evaluate: async () => { throw new Error('WPP fallback must not run'); },
-      addScriptTag: async () => { throw new Error('WPP fallback must not load'); }
+test('reliable rejection serializes a structured caller JID for the whatsapp-web.js bridge', async () => {
+  const previousWindow = global.window;
+  const rejected = [];
+  global.window = {
+    WWebJS: {
+      rejectCall: async (peerJid, id) => { rejected.push([peerJid, id]); }
     }
-  }, {
-    id: 'call-native-123',
-    reject: async () => { sequence.push('native-reject'); }
-  });
+  };
 
+  try {
+    const result = await whatsappTest.rejectIncomingCallReliably({
+      pupPage: {
+        evaluate: async (fn, ...args) => fn(...args),
+        addScriptTag: async () => { throw new Error('WPP fallback must not load'); }
+      }
+    }, {
+      id: 'call-native-123',
+      from: { user: '123456789012345', server: 'lid', _serialized: '123456789012345@lid' },
+      reject: async () => { throw new Error('structured legacy reject must not run'); }
+    });
+
+    assert.equal(result, true);
+    assert.deepEqual(rejected, [['123456789012345@lid', 'call-native-123']]);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
+});
+
+test('numeric call ids never override the caller LID phone mapping', async () => {
+  whatsappTest.clearJidMap();
+  const rawLid = '123456789012345@lid';
+  const rejected = await whatsappTest.rejectIncomingCallReliably({
+    pupPage: { evaluate: async () => true }
+  }, {
+    id: '73362499446',
+    from: rawLid,
+    reject: async () => {}
+  });
   assert.equal(rejected, true);
-  assert.deepEqual(sequence, ['native-reject']);
+
+  const resolved = await whatsappTest.resolveCallPhone({
+    getContactLidAndPhone: async ids => {
+      assert.deepEqual(ids, [rawLid]);
+      return [{ lid: rawLid, pn: '77476884956@c.us' }];
+    },
+    getContactById: async () => null
+  }, { id: '73362499446', from: rawLid }, '77476884956');
+
+  assert.equal(resolved, '77476884956');
 });
 
 test('reliable rejection injects the current call API and confirms its result', async () => {

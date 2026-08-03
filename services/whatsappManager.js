@@ -1644,12 +1644,21 @@ async function ensureWppCallApi(client) {
 }
 
 async function rejectIncomingCallReliably(client, call) {
-    if (typeof call?.reject === 'function') {
+    const page = client?.pupPage;
+    const peerJid = canonicalizeWhatsAppJid(
+        serializeWhatsAppJid(call?.from) || serializeWhatsAppJid(call?.peerJid)
+    );
+    const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
+    if (page && typeof page.evaluate === 'function' && peerJid && callId) {
         const rejectedByClient = await withTimeout(
-            Promise.resolve().then(() => call.reject()),
+            page.evaluate(async (serializedPeerJid, id) => {
+                if (typeof window.WWebJS?.rejectCall !== 'function') return false;
+                await window.WWebJS.rejectCall(serializedPeerJid, id);
+                return true;
+            }, peerJid, callId),
             5000,
             'WWEBJS_CALL_REJECT_TIMEOUT'
-        ).then(() => true).catch(error => {
+        ).then(result => result === true).catch(error => {
             console.warn(`[WHATSAPP CALL] whatsapp-web.js call rejection failed: ${error.message}`);
             return false;
         });
@@ -1662,7 +1671,6 @@ async function rejectIncomingCallReliably(client, call) {
     });
     if (!ready) return false;
 
-    const callId = String(call?.id || '').trim();
     return withTimeout(client.pupPage.evaluate(async id => {
         try {
             if (typeof window.WPP?.call?.reject !== 'function') return false;
@@ -1760,24 +1768,32 @@ function describeCallIdentityShape(call) {
     };
 }
 
-function getCallParticipantCandidates(participants) {
-    if (!participants || typeof participants !== 'object') return [];
+function getDirectCallPhoneCandidates(call) {
+    const candidates = [];
+    for (const value of [call?.from, call?.peerJid]) {
+        const jid = serializeWhatsAppJid(value);
+        if (jid && !/@lid$/i.test(jid)) candidates.push(jid);
+    }
 
-    const entries = Array.isArray(participants)
-        ? participants
-        : [...Object.keys(participants), ...Object.values(participants)];
-
-    return entries.flatMap(participant => {
-        if (typeof participant === 'string') return [participant];
-        if (!participant || typeof participant !== 'object') return [];
-        return [
-            serializeWhatsAppJid(participant),
-            serializeWhatsAppJid(participant.jid),
-            serializeWhatsAppJid(participant.id),
-            participant.phoneNumber,
-            participant.number
-        ];
-    }).filter(Boolean);
+    const participants = call?.participants;
+    const entries = !participants || typeof participants !== 'object'
+        ? []
+        : Array.isArray(participants)
+            ? participants
+            : [...Object.keys(participants), ...Object.values(participants)];
+    for (const participant of entries) {
+        if (typeof participant === 'string') {
+            if (/@(c\.us|s\.whatsapp\.net)$/i.test(participant)) candidates.push(participant);
+            continue;
+        }
+        if (!participant || typeof participant !== 'object') continue;
+        for (const value of [participant, participant.jid, participant.id]) {
+            const jid = serializeWhatsAppJid(value);
+            if (/@(c\.us|s\.whatsapp\.net)$/i.test(jid)) candidates.push(jid);
+        }
+        candidates.push(participant.phoneNumber, participant.number);
+    }
+    return candidates.filter(Boolean);
 }
 
 async function resolveCallPhone(client, call, knownPhone = '') {
@@ -1787,15 +1803,11 @@ async function resolveCallPhone(client, call, knownPhone = '') {
         id: call?.id,
         participants: call?.participants
     });
-    const participantValues = getCallParticipantCandidates(call?.participants);
     const rawJids = [...new Set(identityCandidates
         .filter(value => /@(lid|c\.us|s\.whatsapp\.net)$/i.test(value))
         .map(canonicalizeWhatsAppJid))];
     const rawJid = rawJids[0] || '';
-    const direct = normalizePhoneFromCandidates([
-        ...identityCandidates,
-        ...participantValues
-    ]);
+    const direct = normalizePhoneFromCandidates(getDirectCallPhoneCandidates(call));
     if (direct) return direct;
 
     for (const [phone, jid] of jidMap.entries()) {
