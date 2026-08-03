@@ -1629,6 +1629,72 @@ function serializeWhatsAppJid(value) {
     return user && server ? `${user}@${server}` : '';
 }
 
+function collectWhatsAppIdentityCandidates(value, maxDepth = 5) {
+    const candidates = [];
+    const seen = new Set();
+
+    function add(candidate) {
+        const normalized = typeof candidate === 'string' ? candidate.trim() : '';
+        if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
+    }
+
+    function visit(current, depth) {
+        if (typeof current === 'string') {
+            add(current);
+            return;
+        }
+        if (!current || typeof current !== 'object' || depth > maxDepth || seen.has(current)) return;
+        seen.add(current);
+
+        add(serializeWhatsAppJid(current));
+        if (typeof current.toString === 'function' && current.toString !== Object.prototype.toString) {
+            try {
+                const rendered = current.toString();
+                if (rendered !== '[object Object]') add(rendered);
+            } catch (error) {}
+        }
+
+        if (current instanceof Map) {
+            for (const [key, nested] of current.entries()) {
+                visit(key, depth + 1);
+                visit(nested, depth + 1);
+            }
+            return;
+        }
+        if (current instanceof Set) {
+            for (const nested of current.values()) visit(nested, depth + 1);
+            return;
+        }
+
+        for (const [key, nested] of Object.entries(current)) {
+            if (key.includes('@')) add(key);
+            if (typeof nested === 'number' && /phone|number|user/i.test(key)) add(String(nested));
+            else visit(nested, depth + 1);
+        }
+    }
+
+    visit(value, 0);
+    return candidates;
+}
+
+function describeCallIdentityShape(call) {
+    const candidates = collectWhatsAppIdentityCandidates({
+        from: call?.from,
+        peerJid: call?.peerJid,
+        id: call?.id,
+        participants: call?.participants
+    });
+    return {
+        fromType: Array.isArray(call?.from) ? 'array' : typeof call?.from,
+        fromKeys: call?.from && typeof call.from === 'object' ? Object.keys(call.from).slice(0, 12) : [],
+        participantType: Array.isArray(call?.participants) ? 'array' : typeof call?.participants,
+        participantKeys: call?.participants && typeof call.participants === 'object'
+            ? Object.keys(call.participants).slice(0, 12).map(key => key.includes('@') ? `*@${key.split('@').pop()}` : key)
+            : [],
+        jidKinds: [...new Set(candidates.filter(value => value.includes('@')).map(value => `*@${value.split('@').pop()}`))]
+    };
+}
+
 function getCallParticipantCandidates(participants) {
     if (!participants || typeof participants !== 'object') return [];
 
@@ -1650,26 +1716,32 @@ function getCallParticipantCandidates(participants) {
 }
 
 async function resolveCallPhone(client, call, knownPhone = '') {
-    const rawJid = serializeWhatsAppJid(call?.from) || serializeWhatsAppJid(call?.peerJid);
+    const identityCandidates = collectWhatsAppIdentityCandidates({
+        from: call?.from,
+        peerJid: call?.peerJid,
+        id: call?.id,
+        participants: call?.participants
+    });
     const participantValues = getCallParticipantCandidates(call?.participants);
+    const rawJids = [...new Set(identityCandidates.filter(value => /@(lid|c\.us|s\.whatsapp\.net)$/i.test(value)))];
+    const rawJid = rawJids[0] || '';
     const direct = normalizePhoneFromCandidates([
-        rawJid,
-        serializeWhatsAppJid(call?.id?.remote),
+        ...identityCandidates,
         ...participantValues
     ]);
     if (direct) return direct;
 
     for (const [phone, jid] of jidMap.entries()) {
-        if (rawJid && String(jid || '') === rawJid) return phone;
+        if (rawJids.includes(String(jid || ''))) return phone;
     }
 
     if (!rawJid) return '';
     if (typeof client?.getContactLidAndPhone === 'function') {
-        const mappings = await withTimeout(client.getContactLidAndPhone([rawJid]), 3000, 'CALL_LID_LOOKUP_TIMEOUT').catch(() => []);
-        const mapping = (Array.isArray(mappings) ? mappings : []).find(item => String(item?.lid || '') === rawJid) || mappings?.[0];
+        const mappings = await withTimeout(client.getContactLidAndPhone(rawJids), 3000, 'CALL_LID_LOOKUP_TIMEOUT').catch(() => []);
+        const mapping = (Array.isArray(mappings) ? mappings : []).find(item => rawJids.includes(String(item?.lid || ''))) || mappings?.[0];
         const mappedPhone = normalizePhoneFromCandidates([mapping?.pn, mapping?.phone]);
         if (mappedPhone) {
-            jidMap.set(mappedPhone, rawJid);
+            jidMap.set(mappedPhone, String(mapping?.lid || rawJid));
             return mappedPhone;
         }
 
@@ -1680,10 +1752,10 @@ async function resolveCallPhone(client, call, knownPhone = '') {
                 3000,
                 'CALL_KNOWN_PHONE_LOOKUP_TIMEOUT'
             ).catch(() => []);
-            const knownMapping = (Array.isArray(knownMappings) ? knownMappings : []).find(item => String(item?.lid || '') === rawJid);
+            const knownMapping = (Array.isArray(knownMappings) ? knownMappings : []).find(item => rawJids.includes(String(item?.lid || '')));
             const verifiedPhone = normalizePhoneFromCandidates([knownMapping?.pn, knownMapping?.phone]);
             if (verifiedPhone === normalizedKnownPhone) {
-                jidMap.set(verifiedPhone, rawJid);
+                jidMap.set(verifiedPhone, String(knownMapping?.lid || rawJid));
                 return verifiedPhone;
             }
         }
@@ -1703,12 +1775,22 @@ async function resolveCallPhone(client, call, knownPhone = '') {
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
-    await call.reject();
+    let rejectAttempt;
+    try {
+        rejectAttempt = call.reject();
+    } catch (error) {
+        console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection attempt failed: ${error.message}`);
+    }
+    if (rejectAttempt && typeof rejectAttempt.then === 'function') {
+        void withTimeout(rejectAttempt, 1500, 'CALL_REJECT_TIMEOUT').catch(error => {
+            console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection attempt did not complete: ${error.message}`);
+        });
+    }
     const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
     const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
     const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
     if (!isValidChatPhone(phone)) {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved.`);
+        console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
         return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
     }
 
