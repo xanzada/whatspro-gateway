@@ -157,3 +157,34 @@ test('call handling verifies an unresolved LID against the tenant developer phon
   assert.deepEqual(lookups, [[rawLid], ['77476884956@c.us']]);
   assert.deepEqual(delivered, ['77476884956']);
 });
+
+test('call handling resolves the structured Wid payload emitted by whatsapp-web.js', async () => {
+  whatsappTest.clearJidMap();
+  const rawLid = '123456789012345@lid';
+  const lookups = [];
+  const client = {
+    getContactLidAndPhone: async ids => {
+      lookups.push(ids);
+      return [{ lid: rawLid, pn: '77476884956@c.us' }];
+    },
+    getContactById: async () => null
+  };
+  const delivered = [];
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: { user: '123456789012345', server: 'lid', _serialized: rawLid },
+    participants: {
+      [rawLid]: { jid: { user: '123456789012345', server: 'lid', _serialized: rawLid } }
+    },
+    reject: async () => {}
+  }, {
+    getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
+    deliverText: async (_client, _instanceId, phone) => {
+      delivered.push(phone);
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(lookups, [[rawLid]]);
+  assert.deepEqual(delivered, ['77476884956']);
+});
