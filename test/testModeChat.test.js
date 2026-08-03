@@ -101,3 +101,27 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
   assert.deepEqual(blocked, { rejected: true, replied: false, phone: '77022754235', reason: 'test_mode_blocked' });
   assert.deepEqual(calls, ['reject', 'reject-blocked']);
 });
+
+test('call handling resolves WhatsApp privacy LIDs before applying the test-mode allowlist', async () => {
+  const delivered = [];
+  const client = {
+    getContactById: async id => {
+      assert.equal(id, '123456789012345@lid');
+      return { number: '77476884956', id: { user: '77476884956' } };
+    }
+  };
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: '123456789012345@lid',
+    reject: async () => {}
+  }, {
+    isPhoneAllowed: async (_instanceId, phone) => phone === '77476884956',
+    deliverText: async (_client, _instanceId, phone, text) => {
+      delivered.push({ phone, text });
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].phone, '77476884956');
+});
