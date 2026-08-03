@@ -15,6 +15,8 @@ const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } =
 const { publishChatEvent } = require('./chatEvents');
 const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
 
+const WPP_CALL_BUNDLE_PATH = require.resolve('@wppconnect/wa-js');
+
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
 const MEDIA_CDN_TIMEOUT_MS = 12000;
@@ -30,6 +32,7 @@ const mediaDownloadJobs = new Map();
 const mediaDownloadCooldowns = new Map();
 const mediaRecoveryJobs = new Map();
 const mediaRecoveryMisses = new Set();
+const wppCallApiLoads = new WeakMap();
 let activeMediaDownloads = 0;
 let baileysMediaDownloaderPromise;
 
@@ -1170,6 +1173,11 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         
         // 🚀 ЕҢ МАҢЫЗДЫ ӨЗГЕРІС: Инстансты тек 100% ҚОСЫЛҒАНДА ғана жадыға жазамыз!
         clients.set(instanceId, client); 
+        void ensureWppCallApi(client).then(ready => {
+            if (!ready) console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call API was not preloaded.`);
+        }).catch(error => {
+            console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call API preload failed: ${error.message}`);
+        });
         scheduleFlush(instanceId, 500);
     });
 
@@ -1617,6 +1625,50 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
 
+async function ensureWppCallApi(client) {
+    const page = client?.pupPage;
+    if (!page || typeof page.evaluate !== 'function') return false;
+
+    const alreadyReady = await page.evaluate(() => Boolean(window.WPP?.call?.reject)).catch(() => false);
+    if (alreadyReady) return true;
+    if (typeof page.addScriptTag !== 'function') return false;
+
+    let loading = wppCallApiLoads.get(page);
+    if (!loading) {
+        loading = (async () => {
+            await page.addScriptTag({ path: WPP_CALL_BUNDLE_PATH });
+            return page.evaluate(() => Boolean(window.WPP?.call?.reject));
+        })();
+        wppCallApiLoads.set(page, loading);
+        void loading.finally(() => {
+            if (wppCallApiLoads.get(page) === loading) wppCallApiLoads.delete(page);
+        }).catch(() => {});
+    }
+
+    return Boolean(await loading);
+}
+
+async function rejectIncomingCallReliably(client, call) {
+    const ready = await withTimeout(ensureWppCallApi(client), 5000, 'WPP_CALL_API_TIMEOUT').catch(error => {
+        console.warn(`[WHATSAPP CALL] Reliable call API unavailable: ${error.message}`);
+        return false;
+    });
+    if (!ready) return false;
+
+    const callId = String(call?.id || '').trim();
+    return withTimeout(client.pupPage.evaluate(async id => {
+        try {
+            if (typeof window.WPP?.call?.reject !== 'function') return false;
+            return (await window.WPP.call.reject(id || undefined)) === true;
+        } catch {
+            return false;
+        }
+    }, callId), 5000, 'WPP_CALL_REJECT_TIMEOUT').catch(error => {
+        console.warn(`[WHATSAPP CALL] Reliable call rejection failed: ${error.message}`);
+        return false;
+    });
+}
+
 function serializeWhatsAppJid(value) {
     if (typeof value === 'string') return value.trim();
     if (!value || typeof value !== 'object') return '';
@@ -1783,17 +1835,18 @@ async function resolveCallPhone(client, call, knownPhone = '') {
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
-    let rejectAttempt;
+    const rejectCall = dependencies.rejectCall || rejectIncomingCallReliably;
+    let rejected = false;
     try {
-        rejectAttempt = call.reject();
+        rejected = (await rejectCall(client, call)) === true;
     } catch (error) {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection attempt failed: ${error.message}`);
+        console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call rejection failed: ${error.message}`);
     }
-    if (rejectAttempt && typeof rejectAttempt.then === 'function') {
-        void withTimeout(rejectAttempt, 1500, 'CALL_REJECT_TIMEOUT').catch(error => {
-            console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection attempt did not complete: ${error.message}`);
-        });
+    if (!rejected) {
+        console.warn(`[WHATSAPP CALL] ${instanceId}: reply suppressed because call rejection was not confirmed.`);
+        return { rejected: false, replied: false, phone: '', reason: 'reject_failed' };
     }
+
     const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
     const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
     const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
@@ -2109,6 +2162,8 @@ module.exports = {
             jidMap.clear();
         },
         buildOperatorHistoryEntry,
+        ensureWppCallApi,
+        rejectIncomingCallReliably,
         handleIncomingCall,
         resolveCallPhone,
         queueOutgoingText,

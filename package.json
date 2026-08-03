@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc13",
+    "@wppconnect/wa-js": "4.5.0",
     "axios": "^1.18.1",
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",

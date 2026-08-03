@@ -9,6 +9,11 @@ const { __test: webhookTest } = incomingWebhook;
 const { __test: whatsappTest } = require('../services/whatsappManager');
 const tenantStore = require('../services/tenantStore');
 
+async function confirmRejected(_client, call) {
+  await call.reject();
+  return true;
+}
+
 test('strict test mode allows only the tenant developer phone', async () => {
   const dependencies = {
     env: { TEST_MODE_ENABLED: 'true' },
@@ -83,6 +88,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
   const delivered = [];
 
   const allowed = await whatsappTest.handleIncomingCall('prestige', client, call, {
+    rejectCall: confirmRejected,
     isPhoneAllowed: async () => true,
     deliverText: async (...args) => { delivered.push(args); return { success: true }; }
   });
@@ -95,6 +101,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
 
   const blockedCall = { from: '77022754235@c.us', reject: async () => { calls.push('reject-blocked'); } };
   const blocked = await whatsappTest.handleIncomingCall('prestige', client, blockedCall, {
+    rejectCall: confirmRejected,
     isPhoneAllowed: async () => false,
     deliverText: async () => { throw new Error('blocked caller must not receive a message'); }
   });
@@ -116,6 +123,7 @@ test('call handling resolves WhatsApp privacy LIDs before applying the test-mode
     from: '123456789012345@lid',
     reject: async () => {}
   }, {
+    rejectCall: confirmRejected,
     isPhoneAllowed: async (_instanceId, phone) => phone === '77476884956',
     deliverText: async (_client, _instanceId, phone, text) => {
       delivered.push({ phone, text });
@@ -146,6 +154,7 @@ test('call handling verifies an unresolved LID against the tenant developer phon
     from: rawLid,
     reject: async () => {}
   }, {
+    rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
       delivered.push(phone);
@@ -177,6 +186,7 @@ test('call handling resolves the structured Wid payload emitted by whatsapp-web.
     },
     reject: async () => {}
   }, {
+    rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
       delivered.push(phone);
@@ -207,6 +217,7 @@ test('call handling discovers a caller JID nested inside the live call payload',
     participants: { active: { contact: { wid: { _serialized: rawLid } } } },
     reject: async () => {}
   }, {
+    rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
       delivered.push(phone);
@@ -236,6 +247,7 @@ test('call handling canonicalizes a multi-device LID before phone mapping', asyn
     from: deviceLid,
     reject: async () => {}
   }, {
+    rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async () => ({ success: true })
   });
@@ -294,4 +306,33 @@ test('call reply stays silent when reliable rejection cannot be confirmed', asyn
 
   assert.deepEqual(result, { rejected: false, replied: false, phone: '', reason: 'reject_failed' });
   assert.deepEqual(delivered, []);
+});
+
+test('reliable rejection injects the current call API and confirms its result', async () => {
+  const previousWindow = global.window;
+  const rejectedIds = [];
+  global.window = {};
+  const page = {
+    evaluate: async (fn, ...args) => fn(...args),
+    addScriptTag: async ({ path }) => {
+      assert.equal(path, require.resolve('@wppconnect/wa-js'));
+      global.window.WPP = {
+        call: {
+          reject: async id => {
+            rejectedIds.push(id);
+            return true;
+          }
+        }
+      };
+    }
+  };
+
+  try {
+    const rejected = await whatsappTest.rejectIncomingCallReliably({ pupPage: page }, { id: 'call-123' });
+    assert.equal(rejected, true);
+    assert.deepEqual(rejectedIds, ['call-123']);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
 });
