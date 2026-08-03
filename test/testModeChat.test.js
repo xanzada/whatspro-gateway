@@ -219,6 +219,31 @@ test('call handling discovers a caller JID nested inside the live call payload',
   assert.deepEqual(delivered, ['77476884956']);
 });
 
+test('call handling canonicalizes a multi-device LID before phone mapping', async () => {
+  whatsappTest.clearJidMap();
+  const canonicalLid = '123456789012345@lid';
+  const deviceLid = '123456789012345:17@lid';
+  const lookups = [];
+  const client = {
+    getContactLidAndPhone: async ids => {
+      lookups.push(ids);
+      return [{ lid: canonicalLid, pn: '77476884956@c.us' }];
+    },
+    getContactById: async () => null
+  };
+
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: deviceLid,
+    reject: async () => {}
+  }, {
+    getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
+    deliverText: async () => ({ success: true })
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
+  assert.deepEqual(lookups, [[canonicalLid]]);
+});
+
 test('call reply is not blocked when whatsapp-web.js reject never settles', async () => {
   const delivered = [];
   const result = await Promise.race([
