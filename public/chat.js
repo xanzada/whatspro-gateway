@@ -71,7 +71,8 @@
     inboxBusy: false, historyBusy: false, inboxDirty: false, historyDirty: false, actionBusy: false, sending: false,
     inboxSignature: '', historySignature: '', lockUntil: 0,
     pollTimer: 0, lockTimer: 0, reconnectTimer: 0, eventAbort: null, eventFailures: 0,
-    eventRefreshTimer: 0, toastTimer: 0, mediaAbort: null, audioUrls: new Map(), retrySend: null
+    eventRefreshTimer: 0, toastTimer: 0, mediaAbort: null, audioUrls: new Map(), retrySend: null,
+    pendingViews: Object.create(null)
   };
 
   function t(key) { return dictionary[state.lang][key] == null ? key : dictionary[state.lang][key]; }
@@ -411,6 +412,11 @@
     try {
       var data = await getJson(endpoint('inbox', '/' + encodeURIComponent(instanceId) + '?limit=1000'));
       var chats = Array.isArray(data.items) ? data.items : Array.isArray(data.chats) ? data.chats : [];
+      chats.forEach(function (chat) {
+        var phone = core.normalizePhone(chat && chat.phone);
+        if (state.pendingViews[phone] && core.chatState(chat) !== 'new') delete state.pendingViews[phone];
+      });
+      chats = core.applyPendingViews(chats, Object.keys(state.pendingViews));
       var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt]; }));
       state.chats = chats;
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
@@ -471,8 +477,15 @@
   }
 
   async function markViewed(phone) {
-    try { await postJson(endpoint('action', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), { action: 'view' }); }
-    catch (_) {}
+    for (var attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await postJson(endpoint('action', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), { action: 'view' });
+        return true;
+      } catch (_) {
+        if (attempt < 2) await new Promise(function (resolve) { setTimeout(resolve, 250 * Math.pow(2, attempt)); });
+      }
+    }
+    return false;
   }
 
   function openChat(phone) {
@@ -481,11 +494,18 @@
     state.activePhone = phone; state.history = []; state.historySignature = ''; state.lockUntil = 0;
     var chat = currentChat();
     if (chat && chat.sosUnread) chat.sosUnread = false;
-    if (chat && core.chatState(chat) === 'new') { chat.state = 'all'; chat.unread = false; if (core.chatColumn(chat) !== 'sos') state.activeTab = 'all'; }
+    if (chat && core.chatState(chat) === 'new') {
+      state.pendingViews[phone] = Date.now();
+      chat.state = 'all'; chat.unread = false;
+      if (core.chatColumn(chat) !== 'sos') state.activeTab = 'all';
+    }
     el.app.classList.add('chat-open'); el.messageInput.value = ''; el.messageInput.style.height = 'auto';
     renderContacts(); renderHeader();
     el.messages.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loading')) + '</p></div>';
-    loadHistory(true, true); loadLock(); markViewed(phone).then(function () { loadInbox(true); });
+    loadHistory(true, true); loadLock(); markViewed(phone).then(function (saved) {
+      if (!saved) delete state.pendingViews[phone];
+      loadInbox(true);
+    });
     if (window.innerWidth > 768) el.messageInput.focus();
   }
 

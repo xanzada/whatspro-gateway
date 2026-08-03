@@ -13,6 +13,7 @@ const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
+const { isPhoneAllowed } = require('./testModePolicy');
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -1230,6 +1231,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             const text = String(msg.body || '').trim();
             const phone = await getOutgoingPhoneFromMessage(client, msg);
             if (!isValidChatPhone(phone)) return;
+            if (!(await isPhoneAllowed(instanceId, phone))) return;
             if (await wasBotSending(instanceId, phone)) return;
 
             await markOperatorActive(instanceId, phone, 'whatsapp_app');
@@ -1414,11 +1416,10 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         }
     });
 
-    client.on('call', async (call) => {
-        try {
-            await call.reject();
-            await client.sendMessage(call.from, '🚫 Кешіріңіз, бот қоңырауларды қабылдамайды. Өтініш, сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз 🙏');
-        } catch (err) {}
+    client.on('call', call => {
+        void handleIncomingCall(instanceId, client, call).catch(error => {
+            console.error(`[WHATSAPP CALL] ${instanceId}:`, error.message);
+        });
     });
 
 client.initialize().catch(async err => {
@@ -1612,6 +1613,21 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
         messageId: String(message?.id?.id || ''),
         ack: Number(message?.ack || 0)
     };
+}
+
+const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
+
+async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
+    await call.reject();
+    const phone = normalizePhoneFromCandidates([call?.from, call?.peerJid, call?.id?.remote]);
+    if (!isValidChatPhone(phone)) return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
+
+    const allowed = await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone);
+    if (!allowed) return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
+
+    const deliverText = dependencies.deliverText || deliverWhatsAppText;
+    const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT);
+    return { rejected: true, replied: Boolean(sent), phone };
 }
 
 async function flushPendingOutgoingText(instanceId) {
@@ -1905,6 +1921,7 @@ module.exports = {
             localBotSends.clear();
         },
         buildOperatorHistoryEntry,
+        handleIncomingCall,
         queueOutgoingText,
         clearRestartTimer,
         scheduleFlush,

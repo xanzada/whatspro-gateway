@@ -4,8 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const testMode = require('../services/testModePolicy');
-const { __test: webhookTest } = require('../services/incomingWebhook');
+const incomingWebhook = require('../services/incomingWebhook');
+const { __test: webhookTest } = incomingWebhook;
 const { __test: whatsappTest } = require('../services/whatsappManager');
+const tenantStore = require('../services/tenantStore');
 
 test('strict test mode allows only the tenant developer phone', async () => {
   const dependencies = {
@@ -46,6 +48,32 @@ test('incoming storage is skipped before a foreign test-mode phone can create a 
 
   assert.deepEqual(result, { skipped: true, reason: 'test_mode_blocked', instanceId: 'prestige', phone: '77022754235' });
   assert.equal(appends, 0);
+});
+
+test('a foreign test-mode phone is never forwarded to OpenBot', async () => {
+  const previousEnabled = process.env.TEST_MODE_ENABLED;
+  const previousFindRow = tenantStore.findRow;
+  let forwards = 0;
+  process.env.TEST_MODE_ENABLED = 'true';
+  tenantStore.findRow = async () => ({ instance_id: 'prestige', dev_phone: '77769156184' });
+  try {
+    const record = {
+      id: 'volatile:test-mode-forward',
+      payload: { instanceId: 'prestige', phone: '77022754235', body: 'hello' },
+      pendingRedis: false,
+      pendingOpenBot: true,
+      attempts: 0
+    };
+    await incomingWebhook.processIncomingRecord(record, {
+      forwardToOpenBot: async () => { forwards += 1; return { delivered: true }; }
+    });
+    assert.equal(record.pendingOpenBot, false);
+    assert.equal(forwards, 0);
+  } finally {
+    tenantStore.findRow = previousFindRow;
+    if (previousEnabled === undefined) delete process.env.TEST_MODE_ENABLED;
+    else process.env.TEST_MODE_ENABLED = previousEnabled;
+  }
 });
 
 test('call handling rejects everyone, replies only to the allowed phone via bot delivery', async () => {

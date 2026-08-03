@@ -31,6 +31,7 @@ const tenantMemoryStore = require('../services/tenantMemoryStore');
 const { evaluateAll } = require('../services/tenantReadiness');
 const tenantAdmin = require('../services/tenantAdmin');
 const tenantWorkbook = require('../services/tenantWorkbook');
+const { allowsPhone, getTestModePolicy } = require('../services/testModePolicy');
 const { getOpenBotWebhookUrl, startIncomingWalWorker } = require('../services/incomingWebhook');
 const { incomingWalSummary } = require('../services/incomingWal');
 
@@ -1324,6 +1325,7 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
 
   const limit = parseLimit(req.query.limit, 100, 1000);
+  const testModePolicy = await getTestModePolicy(instanceId);
   const [inboxRows, sosRows] = await Promise.all([
     readInboxEntries(instanceId, limit * 2),
     sosStore.list(instanceId, limit)
@@ -1338,7 +1340,7 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
 
   for (const row of [...sosRows.map(row => ({ phone: row.phone, updatedAt: row.sosCreatedAt || 0 })), ...inboxRows, ...legacyHistoryKeys]) {
     const phone = normalizePhone(row.phone);
-    if (!isValidChatPhone(phone) || seen.has(phone)) continue;
+    if (!isValidChatPhone(phone) || !allowsPhone(testModePolicy, phone) || seen.has(phone)) continue;
     seen.add(phone);
     candidates.push({ phone, updatedAt: Number(row.updatedAt) || 0 });
     if (candidates.length >= limit) break;
@@ -1494,6 +1496,7 @@ app.get('/api/chat/history/:instanceId/:phone', requireChatUiOrApi, async (req, 
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
+  if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
 
   const limit = parseLimit(req.query.limit, 200, 1000);
@@ -1534,6 +1537,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
 
     if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
     if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
+    if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
     if (!text || text.length > 4096) return res.status(400).json({ error: 'TEXT_REQUIRED' });
     if (!isValidSendRequestId(requestId)) return res.status(400).json({ error: 'BAD_REQUEST_ID' });
     if (!walRecoveryComplete) return res.status(503).json({ error: 'SEND_RECOVERY_NOT_READY' });
@@ -1646,6 +1650,7 @@ app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async 
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = normalizePhone(req.params.phone || '');
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
+  if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
   const ttl = redisClient.isOpen ? await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => 0) : 0;
   const safeTtl = Math.max(0, Number(ttl) || 0);
   return res.json({ success: true, instanceId, phone, ttl: safeTtl, expiresAt: safeTtl ? Date.now() + safeTtl * 1000 : 0 });
@@ -1656,6 +1661,7 @@ app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, 
   const phone = normalizePhone(req.params.phone || '');
   const action = String(req.body?.action || '').trim().toLowerCase();
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
+  if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
   if (!['view', 'close', 'archive', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
   await chatStore.applyAction(instanceId, phone, action);

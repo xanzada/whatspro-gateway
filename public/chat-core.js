@@ -27,6 +27,14 @@
     return chat && chat.sos === true && Number(chat.sosExpiresAt || 0) > Date.now() ? 'sos' : chatState(chat);
   }
 
+  function applyPendingViews(chats, phones) {
+    var pending = new Set((Array.isArray(phones) ? phones : []).map(normalizePhone).filter(Boolean));
+    return (Array.isArray(chats) ? chats : []).map(function (chat) {
+      if (!pending.has(normalizePhone(chat && chat.phone)) || chatState(chat) !== 'new') return chat;
+      return Object.assign({}, chat, { state: 'all', unread: false, viewed: true });
+    });
+  }
+
   function roleOf(item) {
     var role = String(item && item.role || '').toLowerCase();
     var source = String(item && item.source || '').toLowerCase();
@@ -96,6 +104,7 @@
   }
 
   return {
+    applyPendingViews: applyPendingViews,
     chatColumn: chatColumn,
     chatState: chatState,
     escapeHtml: escapeHtml,

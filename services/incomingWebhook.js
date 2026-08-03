@@ -3,6 +3,7 @@ const { redisClient } = require('../config/redis');
 const { normalizePhoneFromCandidates } = require('./phoneUtils');
 const { chatStore } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
+const { isPhoneAllowed } = require('./testModePolicy');
 const {
   enqueueIncoming,
   listIncoming,
@@ -102,11 +103,11 @@ function muteKey(instanceId, phone) {
 }
 
 async function shouldSkipOpenBot(payload = {}) {
-  if (!redisClient.isOpen) return false;
-
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || !isValidChatPhone(phone)) return false;
+  if (!(await isPhoneAllowed(instanceId, phone))) return true;
+  if (!redisClient.isOpen) return false;
 
   const [operatorTtl, muteTtl] = await Promise.all([
     redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => -2),
@@ -163,6 +164,8 @@ async function saveIncomingMessage(payload, dependencies = {}) {
   const phone = getPayloadPhone(payload);
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
   if (isNonConversationalPayload(payload)) return { skipped: true, reason: 'non_conversational' };
+  const allowed = await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone);
+  if (!allowed) return { skipped: true, reason: 'test_mode_blocked', instanceId, phone };
   const redisOpen = dependencies.redisOpen ??
     (redisClient.isReady === undefined ? redisClient.isOpen : redisClient.isReady);
   if (!redisOpen) return { skipped: true, reason: 'redis_not_connected' };
