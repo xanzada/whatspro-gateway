@@ -105,10 +105,11 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
 test('call handling resolves WhatsApp privacy LIDs before applying the test-mode allowlist', async () => {
   const delivered = [];
   const client = {
-    getContactById: async id => {
-      assert.equal(id, '123456789012345@lid');
-      return { number: '77476884956', id: { user: '77476884956' } };
-    }
+    getContactLidAndPhone: async ids => {
+      assert.deepEqual(ids, ['123456789012345@lid']);
+      return [{ lid: '123456789012345@lid', pn: '77476884956@c.us' }];
+    },
+    getContactById: async () => null
   };
   const result = await whatsappTest.handleIncomingCall('prestige', client, {
     from: '123456789012345@lid',
