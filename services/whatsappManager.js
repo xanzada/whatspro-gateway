@@ -1629,6 +1629,11 @@ function serializeWhatsAppJid(value) {
     return user && server ? `${user}@${server}` : '';
 }
 
+function canonicalizeWhatsAppJid(value) {
+    const jid = String(value || '').trim();
+    return jid.replace(/^([^@]+):\d+@(lid|c\.us|s\.whatsapp\.net)$/i, '$1@$2');
+}
+
 function collectWhatsAppIdentityCandidates(value, maxDepth = 5) {
     const candidates = [];
     const seen = new Set();
@@ -1691,7 +1696,8 @@ function describeCallIdentityShape(call) {
         participantKeys: call?.participants && typeof call.participants === 'object'
             ? Object.keys(call.participants).slice(0, 12).map(key => key.includes('@') ? `*@${key.split('@').pop()}` : key)
             : [],
-        jidKinds: [...new Set(candidates.filter(value => value.includes('@')).map(value => `*@${value.split('@').pop()}`))]
+        jidKinds: [...new Set(candidates.filter(value => value.includes('@')).map(value => `*@${value.split('@').pop()}`))],
+        hasDeviceSuffix: candidates.some(value => /^[^@]+:\d+@/.test(value))
     };
 }
 
@@ -1723,7 +1729,9 @@ async function resolveCallPhone(client, call, knownPhone = '') {
         participants: call?.participants
     });
     const participantValues = getCallParticipantCandidates(call?.participants);
-    const rawJids = [...new Set(identityCandidates.filter(value => /@(lid|c\.us|s\.whatsapp\.net)$/i.test(value)))];
+    const rawJids = [...new Set(identityCandidates
+        .filter(value => /@(lid|c\.us|s\.whatsapp\.net)$/i.test(value))
+        .map(canonicalizeWhatsAppJid))];
     const rawJid = rawJids[0] || '';
     const direct = normalizePhoneFromCandidates([
         ...identityCandidates,
@@ -1732,7 +1740,7 @@ async function resolveCallPhone(client, call, knownPhone = '') {
     if (direct) return direct;
 
     for (const [phone, jid] of jidMap.entries()) {
-        if (rawJids.includes(String(jid || ''))) return phone;
+        if (rawJids.includes(canonicalizeWhatsAppJid(jid))) return phone;
     }
 
     if (!rawJid) return '';
