@@ -2,9 +2,9 @@
 
 > **Stack:** express | none | unknown | javascript
 
-> 54 routes (54 inferred) | 0 models | 0 components | 0 lib files | 34 env vars | 2 middleware
-> **Token savings:** this file is ~2 600 tokens. Without it, AI exploration would cost ~40 800 tokens. **Saves ~38 200 tokens per conversation.**
-> **Last scanned:** 2026-07-29 15:10 — re-run after significant changes
+> 55 routes (55 inferred) | 0 models | 0 components | 0 lib files | 42 env vars | 2 middleware
+> **Token savings:** this file is ~0 tokens. Without it, AI exploration would cost ~0 tokens. **Saves ~0 tokens per conversation.**
+> **Last scanned:** 2026-08-02 17:44 — re-run after significant changes
 
 ---
 
@@ -18,49 +18,50 @@
 
 ## Other Routes
 
-- `GET` `/health` [auth, db, cache, queue] `[inferred]`
-- `GET` `/favicon.ico` [auth, db, cache, queue] `[inferred]`
-- `GET` `/chat.html` [auth, db, cache, queue] `[inferred]`
-- `GET` `/whatspro` [auth, db, cache, queue] `[inferred]`
-- `GET` `/tenants` [auth, db, cache, queue] `[inferred]`
-- `GET` `/connect` [auth, db, cache, queue] `[inferred]`
-- `GET` `/` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/backups/tenants.xlsx` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/backups/tenants/import` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/tenant-defaults` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/platform-storage` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/runtime-configs` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/runtime-configs/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/shared-prompt` [auth, db, cache, queue] `[inferred]`
-- `PUT` `/api/wa/shared-prompt` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/tenants/:instanceId/settings` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/tenants/:instanceId/clone` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/tenants/:instanceId/rotate` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/tenants/:instanceId/active` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/tenants/:instanceId/bot-enabled` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/tenants/:instanceId/connect-link` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/connect/:token/status` params(token) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/scan-requests/:requestId/approve` params(requestId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/scan-requests/:requestId/reject` params(requestId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/scan-requests/:requestId/open` params(requestId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/scan-invitations` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/inbox/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/events/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/inbox-legacy/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/history/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/media/:instanceId/:messageId` params(instanceId, messageId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/chat/send/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/chat/operator-lock/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/chat/action/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/start` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/statuses` [auth, db, cache, queue] `[inferred]`
-- `GET` `/api/wa/status/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/restart/:instanceId` params(instanceId) [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/wa/logout` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/send` [auth, db, cache, queue] `[inferred]`
-- `POST` `/api/presence` [auth, db, cache, queue] `[inferred]`
+- `GET` `/health` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/health/detailed` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/favicon.ico` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/chat.html` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/whatspro` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/tenants` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/connect` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/backups/tenants.xlsx` [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/backups/tenants/import` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/tenant-defaults` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/platform-storage` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/runtime-configs` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/runtime-configs/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/runtime-configs/:instanceId/memories` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/shared-prompt` [auth, db, cache, queue, payment] `[inferred]`
+- `PUT` `/api/wa/shared-prompt` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/tenants/:instanceId/settings` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/clone` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/rotate` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/active` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/bot-enabled` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/tenants/:instanceId/connect-link` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/connect/:token/status` params(token) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/scan-requests/:requestId/approve` params(requestId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/scan-requests/:requestId/reject` params(requestId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/scan-requests/:requestId/open` params(requestId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/scan-invitations` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/inbox/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/events/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/inbox-legacy/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/history/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/media/:instanceId/:messageId` params(instanceId, messageId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/chat/send/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/chat/operator-lock/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/chat/action/:instanceId/:phone` params(instanceId, phone) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/start` [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/statuses` [auth, db, cache, queue, payment] `[inferred]`
+- `GET` `/api/wa/status/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/restart/:instanceId` params(instanceId) [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/wa/logout` [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/send` [auth, db, cache, queue, payment] `[inferred]`
+- `POST` `/api/presence` [auth, db, cache, queue, payment] `[inferred]`
 
 ---
 
@@ -69,7 +70,9 @@
 ## Environment Variables
 
 - `CHAT_PUBLIC_API_BASE` **required** — .env.example
-- `NODE_ENV` **required** — src\server.js
+- `LOG_QR_TO_TERMINAL` **required** — services\whatsappManager.js
+- `NODE_ENV` **required** — services\whatsappManager.js
+- `NODE_TEST_CONTEXT` **required** — services\tenantStore.js
 - `OPENBOT_WEBHOOK_TIMEOUT_MS` (has default) — .env.example
 - `OPENBOT_WEBHOOK_TOKEN` **required** — .env.example
 - `OPENBOT_WEBHOOK_URL` (has default) — .env.example
@@ -79,6 +82,7 @@
 - `QA_BASE_URL` **required** — scripts\browser-qa.js
 - `QA_EMBED_TOKEN` **required** — scripts\browser-qa.js
 - `QA_OUTPUT` **required** — scripts\browser-qa.js
+- `REDIS_CONNECT_TIMEOUT_MS` (has default) — .env.example
 - `REDIS_URL` (has default) — .env.example
 - `TRUST_PROXY_HOPS` **required** — src\server.js
 - `WHATSAPP_AUTH_PATH` (has default) — .env.example
@@ -96,11 +100,16 @@
 - `WHATSPRO_BOOT_GAP_MS` **required** — src\server.js
 - `WHATSPRO_DEFAULT_WORK_HOURS` **required** — services\tenantAdmin.js
 - `WHATSPRO_DEVELOPER_PHONE` **required** — services\tenantAdmin.js
+- `WHATSPRO_INBOUND_WAL_DIR` **required** — .env.example
+- `WHATSPRO_INBOUND_WAL_INTERVAL_MS` (has default) — .env.example
+- `WHATSPRO_INBOUND_WAL_MAX` (has default) — .env.example
+- `WHATSPRO_INBOUND_WAL_MAX_AGE_MS` (has default) — .env.example
 - `WHATSPRO_PASSWORD` (has default) — .env.example
 - `WHATSPRO_PUBLIC_URL` **required** — services\tenantAdmin.js
 - `WHATSPRO_SEND_WAL_DIR` **required** — src\server.js
 - `WHATSPRO_SESSION_SECRET` (has default) — .env.example
 - `WHATSPRO_TENANT_DOMAIN_SUFFIX` **required** — services\tenantAdmin.js
+- `WHATSPRO_TENANT_SNAPSHOT_PATH` **required** — .env.example
 - `WHATSPRO_USER` (has default) — .env.example
 
 ## Config Files
@@ -133,12 +142,14 @@
 - `services\tenantStore.js` — imported by **9** files
 - `services\phoneUtils.js` — imported by **7** files
 - `src\server.js` — imported by **6** files
+- `services\incomingWebhook.js` — imported by **6** files
 - `services\redisReply.js` — imported by **5** files
 - `services\chatStore.js` — imported by **5** files
 - `services\chatEvents.js` — imported by **5** files
 - `services\chatMedia.js` — imported by **4** files
-- `services\incomingWebhook.js` — imported by **3** files
+- `services\incomingWal.js` — imported by **3** files
 - `services\whatsappManager.js` — imported by **3** files
+- `services\tenantSnapshot.js` — imported by **2** files
 - `services\operatorLock.js` — imported by **2** files
 - `services\sosStore.js` — imported by **2** files
 - `services\tenantMemoryStore.js` — imported by **2** files
@@ -153,12 +164,12 @@
 - `services\tenantStore.js` ← `services\tenantAdmin.js`, `services\tenantMemoryStore.js`, `src\server.js`, `test\routing.test.js`, `test\tenantAdmin.test.js` +4 more
 - `services\phoneUtils.js` ← `services\chatEvents.js`, `services\chatStore.js`, `services\incomingWebhook.js`, `services\operatorLock.js`, `services\sosStore.js` +2 more
 - `src\server.js` ← `scripts\browser-qa.js`, `test\backendDefects.test.js`, `test\realtimeSync.test.js`, `test\routing.test.js`, `test\tenantReadiness.test.js` +1 more
+- `services\incomingWebhook.js` ← `services\whatsappManager.js`, `src\server.js`, `test\backendDefects.test.js`, `test\incomingNoiseFilter.test.js`, `test\pdfReceiptFlow.test.js` +1 more
 - `services\redisReply.js` ← `services\chatStore.js`, `services\sosStore.js`, `src\server.js`, `test\sosStore.test.js`, `test\sosStore.test.js`
 - `services\chatStore.js` ← `services\incomingWebhook.js`, `services\whatsappManager.js`, `src\server.js`, `test\chatStore.test.js`, `test\pdfReceiptFlow.test.js`
 - `services\chatEvents.js` ← `services\incomingWebhook.js`, `services\whatsappManager.js`, `src\server.js`, `test\chatEvents.test.js`, `test\realtimeSync.test.js`
 - `services\chatMedia.js` ← `src\server.js`, `test\chatMedia.test.js`, `test\chatStore.test.js`, `test\pdfReceiptFlow.test.js`
-- `services\incomingWebhook.js` ← `services\whatsappManager.js`, `test\backendDefects.test.js`, `test\pdfReceiptFlow.test.js`
-- `services\whatsappManager.js` ← `src\server.js`, `test\backendDefects.test.js`, `test\pdfReceiptFlow.test.js`
+- `services\incomingWal.js` ← `services\incomingWebhook.js`, `src\server.js`, `test\resilienceFlow.test.js`
 
 ---
 
