@@ -155,6 +155,12 @@ publish_snapshot() {
   git -C "${REPO_DIR}" push --quiet --force origin "HEAD:refs/heads/${branch}" || return 1
   git -C "${REPO_DIR}" checkout --detach >/dev/null 2>&1
   git -C "${REPO_DIR}" branch -D snapshot-build >/dev/null 2>&1 || true
+
+  # Each run orphans the previous snapshot commit, but its ~70MB blob stays
+  # reachable through the HEAD reflog, so plain gc never collects it and the
+  # repo grows by a full snapshot every cycle. Drop the reflog first, then gc.
+  git -C "${REPO_DIR}" reflog expire --expire=now --all >/dev/null 2>&1 || true
+  git -C "${REPO_DIR}" gc --prune=now --quiet >/dev/null 2>&1 || true
 }
 
 backup_once() {
