@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const { __test: whatsappTest } = require('../services/whatsappManager');
 
-test('reconnect policy retries initialization only within its configured budget', () => {
+test('a stored session restore is retried indefinitely, never abandoned', () => {
   assert.deepEqual(
     whatsappTest.buildReconnectPlan('init_failed', {
       attempts: 0,
@@ -18,13 +18,16 @@ test('reconnect policy retries initialization only within its configured budget'
       mode: 'session_restore'
     }
   );
+  // Abandoning a restore left a paired tenant offline until someone noticed.
+  // Credentials are only invalidated by an owner unlink or a tenant deletion,
+  // so the restore keeps retrying for as long as they exist.
   assert.equal(
     whatsappTest.buildReconnectPlan('init_failed', {
       attempts: 2,
       maxRetries: 2,
       hasStoredSession: true
     }).shouldRetry,
-    false
+    true
   );
 });
 

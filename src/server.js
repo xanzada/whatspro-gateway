@@ -8,6 +8,7 @@ const path = require('path');
 const { connectRedis, redisClient, getRedisState } = require('../config/redis');
 const {
   startWhatsAppInstance,
+  startSessionSupervisor,
   stopWhatsAppInstance,
   getInstanceStatus,
   sendWhatsAppText,
@@ -1948,6 +1949,10 @@ async function boot() {
     console.error('[BOOT] Автоқосылу кезіндегі қате:', err);
   }
 
+  // Keeps every registered tenant connected 24/7 without waiting for customer
+  // traffic, a dashboard visit, or a manual restart.
+  startSessionSupervisor();
+
   return server;
 }
 
@@ -1965,7 +1970,14 @@ process.on('uncaughtException', (error, origin) => {
   setTimeout(() => process.exit(1), 1500).unref();
 });
 
+// A deploy sends SIGTERM. Closing the browsers cleanly is what lets the stored
+// credentials survive the restart, so no QR rescan is needed afterwards.
 process.on('SIGTERM', async () => {
+  await shutdownWhatsAppClients().catch(() => {});
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
   await shutdownWhatsAppClients().catch(() => {});
   process.exit(0);
 });

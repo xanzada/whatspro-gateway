@@ -607,6 +607,12 @@ const authResetting = new Set();
 const pendingTextQueues = new Map();
 const flushTimers = new Map();
 const intentionallyStopped = new Set();
+// Every instance the process has ever been asked to run. The supervisor keeps
+// this set connected until an operator explicitly stops or deletes it.
+const supervisedInstances = new Set();
+const stateCheckFailures = new Map();
+const throttledLogs = new Map();
+let supervisorTimer = null;
 
 const jidMap = new Map();
 let shutdownInProgress = false;
@@ -618,9 +624,22 @@ const CHROME_LOCK_RESTART_DELAY_MS = Number(process.env.WHATSAPP_CHROME_LOCK_RES
 const WHATSAPP_RESTART_BASE_DELAY_MS = Number(process.env.WHATSAPP_RESTART_BASE_DELAY_MS || 5000);
 const WHATSAPP_RESTART_MAX_DELAY_MS = Number(process.env.WHATSAPP_RESTART_MAX_DELAY_MS || 300000);
 const WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS = Number(process.env.WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS || 30000);
-const WHATSAPP_INITIALIZE_MAX_RETRIES = Number(process.env.WHATSAPP_INITIALIZE_MAX_RETRIES || 1);
+const WHATSAPP_INITIALIZE_MAX_RETRIES = Number(process.env.WHATSAPP_INITIALIZE_MAX_RETRIES || 5);
 const OUTGOING_TEXT_QUEUE_TTL_MS = Number(process.env.WHATSAPP_OUTGOING_QUEUE_TTL_MS || 5 * 60 * 1000);
 const OUTGOING_TEXT_QUEUE_MAX = Number(process.env.WHATSAPP_OUTGOING_QUEUE_MAX || 50);
+// A tenant that still holds stored credentials is expected back within seconds,
+// so it never inherits the long generic restart ceiling.
+const SESSION_RECONNECT_MAX_DELAY_MS = Number(process.env.WHATSAPP_SESSION_RECONNECT_MAX_DELAY_MS || 60000);
+// Background watchdog sweep. Sessions must come back on their own, without
+// waiting for a customer message or an operator opening the dashboard.
+const SESSION_SUPERVISOR_INTERVAL_MS = Number(process.env.WHATSAPP_SUPERVISOR_INTERVAL_MS || 30000);
+// getState() legitimately fails while WhatsApp Web re-syncs, so a client is only
+// treated as dead after repeated consecutive failures.
+const SESSION_HEALTH_FAILURE_LIMIT = Number(process.env.WHATSAPP_HEALTH_FAILURE_LIMIT || 3);
+const LOG_THROTTLE_MS = Number(process.env.WHATSAPP_LOG_THROTTLE_MS || 60000);
+// Restart delays carry up to a second of jitter, so two requests for the same
+// nominal delay must still be treated as the same reconnect attempt.
+const RESTART_DEDUPE_SLACK_MS = 2000;
 
 function getSessionPath(instanceId) {
     return path.join(AUTH_DATA_PATH, `session-${instanceId}`);
@@ -646,26 +665,57 @@ function setInstanceState(instanceId, status, extra = {}) {
 }
 
 function clearRestartTimer(instanceId) {
-    const timer = restartTimers.get(instanceId);
-    if (timer) clearTimeout(timer);
+    const entry = restartTimers.get(instanceId);
+    if (entry) clearTimeout(entry.timer || entry);
     restartTimers.delete(instanceId);
+}
+
+function getRestartTimerInfo(instanceId) {
+    const entry = restartTimers.get(instanceId);
+    if (!entry) return null;
+    return { dueAt: entry.dueAt, reason: entry.reason };
+}
+
+// Repeated identical warnings used to fill the log with tens of thousands of
+// lines per day, which hid the events that actually mattered.
+function logThrottled(key, message, level = 'warn') {
+    const now = Date.now();
+    const entry = throttledLogs.get(key);
+    if (entry && now - entry.at < LOG_THROTTLE_MS) {
+        entry.suppressed += 1;
+        return false;
+    }
+
+    const suppressed = entry ? entry.suppressed : 0;
+    throttledLogs.set(key, { at: now, suppressed: 0 });
+    const suffix = suppressed > 0 ? ` (+${suppressed} similar suppressed)` : '';
+    const write = console[level] || console.log;
+    write(`${message}${suffix}`);
+    return true;
 }
 
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function calculateRestartDelay(instanceId, requestedDelayMs = 3000, reason = 'restart') {
-    const attempts = (restartAttempts.get(instanceId) || 0) + 1;
-    restartAttempts.set(instanceId, attempts);
+function calculateRestartDelay(instanceId, requestedDelayMs = 3000, reason = 'restart', options = {}) {
+    const countAttempt = options.countAttempt !== false;
+    const attempts = countAttempt
+        ? (restartAttempts.get(instanceId) || 0) + 1
+        : Math.max(1, restartAttempts.get(instanceId) || 1);
+    if (countAttempt) restartAttempts.set(instanceId, attempts);
 
     const resourceFailure = isChromiumResourceError(reason);
     const baseDelay = resourceFailure ? WHATSAPP_RESOURCE_RESTART_BASE_DELAY_MS : WHATSAPP_RESTART_BASE_DELAY_MS;
-    const maxDelay = Math.max(baseDelay, WHATSAPP_RESTART_MAX_DELAY_MS);
+    // A stored session reconnects on a short ceiling. Only a tenant that needs a
+    // human to scan a QR is allowed to back off for minutes.
+    const ceiling = options.hasStoredSession ? SESSION_RECONNECT_MAX_DELAY_MS : WHATSAPP_RESTART_MAX_DELAY_MS;
+    const maxDelay = Math.max(baseDelay, ceiling);
     const exponentialDelay = baseDelay * Math.pow(2, Math.min(attempts - 1, 6));
     const jitter = Math.floor(Math.random() * 1000);
+    const requested = Math.max(Number(requestedDelayMs) || 0, Math.min(exponentialDelay, maxDelay));
 
-    return Math.max(Number(requestedDelayMs) || 0, Math.min(exponentialDelay, maxDelay)) + jitter;
+    return Math.min(requested + jitter, maxDelay + 1000);
 }
 
 function resetRestartAttempts(instanceId) {
@@ -684,7 +734,11 @@ function buildReconnectPlan(reason, options = {}) {
     const freshQr = !hasStoredSession || /LOGOUT|UNPAIRED|QR_START_TIMEOUT|AUTH[_\s-]?FAIL/i.test(String(reason || ''));
 
     return {
-        shouldRetry: attempts < maxRetries,
+        // Stored credentials are only invalidated by the owner unlinking the
+        // device in WhatsApp or by an operator deleting the tenant here, so a
+        // session restore retries for as long as the folder exists. Only a
+        // fresh-QR lifecycle, which needs a human with a phone, is budgeted.
+        shouldRetry: freshQr ? attempts < maxRetries : true,
         allowQrRequired: freshQr,
         mode: freshQr ? 'fresh_qr' : 'session_restore'
     };
@@ -726,13 +780,29 @@ function scheduleFlush(instanceId, delayMs = 1000) {
 function scheduleRestart(instanceId, delayMs = 3000, reason = 'restart', options = {}) {
     if (shutdownInProgress) return;
     if (intentionallyStopped.has(instanceId)) return;
-    if (instanceStates.get(instanceId)?.status === 'qr_required' && !options.allowQrRequired) return;
+
+    const storedSession = hasStoredSession(instanceId);
+    // A tenant waiting for a human to scan a QR must not be yanked out of that
+    // state by background traffic, but one holding credentials always reconnects.
+    if (instanceStates.get(instanceId)?.status === 'qr_required' && !options.allowQrRequired && !storedSession) return;
+
+    const pending = restartTimers.get(instanceId);
+    const requestedDueAt = Date.now() + Math.max(0, Number(delayMs) || 0);
+    if (pending && pending.dueAt <= requestedDueAt + RESTART_DEDUPE_SLACK_MS) {
+        // Keep the earliest pending reconnect. Clearing and re-arming the timer
+        // on every status poll or queued message is what previously pushed the
+        // restart permanently into the future and starved reconnection.
+        return;
+    }
 
     clearRestartTimer(instanceId);
-    const finalDelayMs = calculateRestartDelay(instanceId, delayMs, reason);
+    const finalDelayMs = calculateRestartDelay(instanceId, delayMs, reason, {
+        hasStoredSession: storedSession,
+        countAttempt: options.countAttempt
+    });
     setInstanceState(instanceId, 'restarting', { reason, nextRestartInMs: finalDelayMs });
-    console.warn(`[WHATSAPP] ${instanceId} restart scheduled in ${finalDelayMs}ms (${reason}).`);
-    restartTimers.set(instanceId, setTimeout(() => {
+    logThrottled(`restart:${instanceId}:${reason}`, `[WHATSAPP] ${instanceId} restart scheduled in ${finalDelayMs}ms (${reason}).`);
+    const timer = setTimeout(() => {
         restartTimers.delete(instanceId);
         if (!clients.has(instanceId) && !intentionallyStopped.has(instanceId)) {
             instanceStates.delete(instanceId);
@@ -740,7 +810,105 @@ function scheduleRestart(instanceId, delayMs = 3000, reason = 'restart', options
                 console.error(`[WHATSAPP] ${instanceId} restart failed:`, error.message);
             });
         }
-    }, finalDelayMs));
+    }, finalDelayMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    restartTimers.set(instanceId, { timer, dueAt: Date.now() + finalDelayMs, reason });
+}
+
+// Non-destructive reconnect request used by traffic paths. It never deletes
+// credentials and never disturbs an in-flight startup.
+function requestReconnect(instanceId, reason = 'reconnect_requested') {
+    if (shutdownInProgress || intentionallyStopped.has(instanceId)) return false;
+    if (clients.has(instanceId)) return false;
+    if (initializingClients.has(instanceId)) return false;
+    if (restartTimers.has(instanceId)) return false;
+    if (qrCodes.has(instanceId)) return false;
+
+    scheduleRestart(instanceId, 5000, reason);
+    return true;
+}
+
+// Drops queued outgoing text that outlived its TTL. This runs before any client
+// check so a missing client can never keep the queue alive forever.
+function purgeExpiredOutgoingText(instanceId) {
+    const queue = pendingTextQueues.get(instanceId) || [];
+    if (!queue.length) return queue;
+
+    const now = Date.now();
+    const alive = queue.filter(item => {
+        if (now - item.createdAt <= OUTGOING_TEXT_QUEUE_TTL_MS) return true;
+        console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: dropped expired text (${item.reason}).`);
+        return false;
+    });
+
+    if (alive.length) pendingTextQueues.set(instanceId, alive);
+    else pendingTextQueues.delete(instanceId);
+
+    return alive;
+}
+
+// A single failed health probe means nothing; several in a row mean the browser
+// is gone. Credentials are never touched here.
+function registerHealthFailure(instanceId, reason = 'state_check_failed') {
+    const failures = (stateCheckFailures.get(instanceId) || 0) + 1;
+    stateCheckFailures.set(instanceId, failures);
+    if (failures < SESSION_HEALTH_FAILURE_LIMIT) return failures;
+
+    stateCheckFailures.delete(instanceId);
+    clients.delete(instanceId);
+    setInstanceState(instanceId, 'disconnected', { reason });
+    scheduleRestart(instanceId, 5000, `health_check_failed`);
+    return failures;
+}
+
+// 24/7 watchdog: brings back anything that is not connected, with no dependency
+// on customer traffic or on an operator opening the dashboard.
+async function reviveSupervisedInstances() {
+    if (shutdownInProgress) return;
+
+    for (const instanceId of [...supervisedInstances]) {
+        if (intentionallyStopped.has(instanceId)) continue;
+
+        try {
+            if (clients.has(instanceId)) {
+                // Probing the status is enough: it detects a closed browser or a
+                // repeatedly unresponsive client and hands it to the scheduler.
+                await getInstanceStatus(instanceId);
+                continue;
+            }
+
+            if (initializingClients.has(instanceId)) continue;
+            if (restartTimers.has(instanceId)) continue;
+            if (qrCodes.has(instanceId)) continue;
+
+            const state = instanceStates.get(instanceId);
+            if (state && ['starting', 'qr_ready', 'restoring_session', 'restarting'].includes(state.status)) continue;
+
+            logThrottled(`supervisor:${instanceId}`, `[WHATSAPP SUPERVISOR] ${instanceId} is not connected; reconnecting.`);
+            instanceStates.delete(instanceId);
+            await startWhatsAppInstance(instanceId);
+        } catch (error) {
+            console.error(`[WHATSAPP SUPERVISOR] ${instanceId} revive failed:`, error?.message || error);
+        }
+    }
+}
+
+function startSessionSupervisor() {
+    if (supervisorTimer) return supervisorTimer;
+
+    supervisorTimer = setInterval(() => {
+        reviveSupervisedInstances().catch(error => {
+            console.error('[WHATSAPP SUPERVISOR] sweep failed:', error?.message || error);
+        });
+    }, SESSION_SUPERVISOR_INTERVAL_MS);
+    if (typeof supervisorTimer.unref === 'function') supervisorTimer.unref();
+    console.log(`[WHATSAPP SUPERVISOR] session watchdog started (${SESSION_SUPERVISOR_INTERVAL_MS}ms).`);
+    return supervisorTimer;
+}
+
+function stopSessionSupervisor() {
+    if (supervisorTimer) clearInterval(supervisorTimer);
+    supervisorTimer = null;
 }
 
 function removeSessionFolder(instanceId, reason = 'manual') {
@@ -1060,6 +1228,8 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
     clearRestartTimer(instanceId);
     intentionallyStopped.delete(instanceId);
+    supervisedInstances.add(instanceId);
+    stateCheckFailures.delete(instanceId);
     const sessionExists = hasStoredSession(instanceId);
     setInstanceState(instanceId, sessionExists ? 'restoring_session' : 'qr_required', { hasStoredSession: sessionExists });
     if (sessionExists) {
@@ -1473,6 +1643,8 @@ client.initialize().catch(async err => {
 
 async function stopWhatsAppInstance(instanceId) {
     intentionallyStopped.add(instanceId);
+    supervisedInstances.delete(instanceId);
+    stateCheckFailures.delete(instanceId);
     clearRestartTimer(instanceId);
     pendingTextQueues.delete(instanceId);
     const flushTimer = flushTimers.get(instanceId);
@@ -1582,23 +1754,27 @@ async function getInstanceStatus(instanceId) {
     try {
         const state = await withTimeout(client.getState(), WA_STATE_TIMEOUT_MS, 'WA_STATE_TIMEOUT');
         if (isConnectedState(state) || client.info?.wid) {
+            stateCheckFailures.delete(instanceId);
+            resetRestartAttempts(instanceId);
             setInstanceState(instanceId, 'connected', { waState: state || 'CONNECTED' });
             return { status: 'connected', waState: state || 'CONNECTED', hasStoredSession: storedSession };
         }
 
-        if (storedSession && isAuthenticationFailureReason(state || 'DISCONNECTED')) {
-            await resetInvalidSession(instanceId, client, `state_${state || 'DISCONNECTED'}`, true);
-            return { ...(instanceStates.get(instanceId) || { status: 'qr_required' }), hasStoredSession: false };
-        }
-
+        // Reading a status must never destroy credentials. getState() returns
+        // null or a DISCONNECTED-ish value during a perfectly normal reconnect,
+        // and the dashboard polls this for every tenant every few seconds, so
+        // deleting the session folder here unpaired healthy tenants. Only the
+        // WhatsApp 'disconnected' / 'auth_failure' events or an explicit
+        // operator action may clear stored credentials.
         const status = state ? 'starting' : 'disconnected';
         setInstanceState(instanceId, status, { waState: state || null });
-        return instanceStates.get(instanceId);
+        if (status === 'disconnected') registerHealthFailure(instanceId, `state_${state || 'NULL'}`);
+        else stateCheckFailures.delete(instanceId);
+
+        return { ...instanceStates.get(instanceId), hasStoredSession: storedSession };
     } catch (error) {
-        clients.delete(instanceId);
-        setInstanceState(instanceId, 'disconnected', { reason: error.message });
-        scheduleRestart(instanceId, 3000, 'state_check_failed');
-        return instanceStates.get(instanceId);
+        registerHealthFailure(instanceId, error.message || 'state_check_failed');
+        return { ...(instanceStates.get(instanceId) || { status: 'starting' }), hasStoredSession: storedSession };
     }
 }
 
@@ -1907,26 +2083,24 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
 }
 
 async function flushPendingOutgoingText(instanceId) {
-    const queue = pendingTextQueues.get(instanceId) || [];
+    // Expiry is applied first. It used to sit behind the client check, so while
+    // a client was missing the queue could never drain and the retry loop ran
+    // forever, re-arming the restart timer every few seconds.
+    const queue = purgeExpiredOutgoingText(instanceId);
     if (!queue.length) return;
 
     const client = await getReadyClient(instanceId);
     if (!client) {
-        scheduleRestart(instanceId, 3000, 'queued_text_waiting_for_client');
-        scheduleFlush(instanceId, 5000);
+        // Reconnecting is the supervisor's job, not the send queue's.
+        requestReconnect(instanceId, 'outgoing_text_waiting_for_client');
+        scheduleFlush(instanceId, 10000);
         return;
     }
 
     pendingTextQueues.set(instanceId, []);
     const retry = [];
-    const now = Date.now();
 
     for (const item of queue) {
-        if (now - item.createdAt > OUTGOING_TEXT_QUEUE_TTL_MS) {
-            console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: dropped expired text (${item.reason}).`);
-            continue;
-        }
-
         try {
             const sent = await deliverWhatsAppText(client, instanceId, item.phone, item.text);
             if (!sent && item.attempts < 3) {
@@ -1959,8 +2133,8 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
             console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendWhatsAppText skipped because client is not initialized.`);
             if (!options.skipQueue) {
                 queueOutgoingText(instanceId, phone, text, 'client_missing');
-                scheduleRestart(instanceId, 3000, 'queued_text_client_missing');
-                scheduleFlush(instanceId, 5000);
+                requestReconnect(instanceId, 'outgoing_text_client_missing');
+                scheduleFlush(instanceId, 10000);
             }
             return options.skipQueue ? { success: false, attempted: false } : false;
         }
@@ -2154,6 +2328,8 @@ async function getBase64Media(instanceId, keyObj) {
 }
 module.exports = {
     startWhatsAppInstance,
+    startSessionSupervisor,
+    stopSessionSupervisor,
     getInstanceStatus,
     clients,
     stopWhatsAppInstance,
@@ -2213,6 +2389,18 @@ module.exports = {
         clearPendingTextQueue(instanceId) {
             pendingTextQueues.delete(instanceId);
         },
-        buildReconnectPlan
+        buildReconnectPlan,
+        calculateRestartDelay,
+        scheduleRestart,
+        getRestartTimerInfo,
+        getRestartAttempts,
+        resetRestartAttempts,
+        requestReconnect,
+        purgeExpiredOutgoingText,
+        flushPendingOutgoingText,
+        registerHealthFailure,
+        reviveSupervisedInstances,
+        logThrottled,
+        supervisedInstances
     }
 };
