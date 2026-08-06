@@ -2342,7 +2342,7 @@ module.exports = {
             jidMap.clear();
         },
         buildOperatorHistoryEntry,
-        ensureWppCallApi,
+
         rejectIncomingCallReliably,
         handleIncomingCall,
         resolveCallPhone,
