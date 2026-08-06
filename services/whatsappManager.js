@@ -1845,6 +1845,24 @@ async function rejectIncomingCallReliably(client, call) {
         serializeWhatsAppJid(call?.from) || serializeWhatsAppJid(call?.peerJid)
     );
     const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
+    
+    let rejectedByWpp = false;
+    const wppReady = await withTimeout(ensureWppCallApi(client), 3000, 'WPP_CALL_API_TIMEOUT').catch(() => false);
+    if (wppReady && page) {
+        rejectedByWpp = await withTimeout(page.evaluate(async id => {
+            try {
+                if (typeof window.WPP?.call?.reject !== 'function') return false;
+                const result = await window.WPP.call.reject(id || undefined);
+                return result === true || result === undefined; // WPP might return undefined on success
+            } catch {
+                return false;
+            }
+        }, callId), 4000, 'WPP_CALL_REJECT_TIMEOUT').catch(() => false);
+    }
+    
+    console.log(`[WHATSAPP CALL] WPP reject attempt for ${callId}: ready=${wppReady}, success=${rejectedByWpp}`);
+    if (rejectedByWpp) return true;
+
     if (page && typeof page.evaluate === 'function' && peerJid && callId) {
         const rejectedByClient = await withTimeout(
             page.evaluate(async (serializedPeerJid, id) => {
@@ -1858,26 +1876,10 @@ async function rejectIncomingCallReliably(client, call) {
             console.warn(`[WHATSAPP CALL] whatsapp-web.js call rejection failed: ${error.message}`);
             return false;
         });
+        console.log(`[WHATSAPP CALL] WWebJS reject attempt for ${callId}: success=${rejectedByClient}`);
         if (rejectedByClient) return true;
     }
-
-    const ready = await withTimeout(ensureWppCallApi(client), 5000, 'WPP_CALL_API_TIMEOUT').catch(error => {
-        console.warn(`[WHATSAPP CALL] Reliable call API unavailable: ${error.message}`);
-        return false;
-    });
-    if (!ready) return false;
-
-    return withTimeout(client.pupPage.evaluate(async id => {
-        try {
-            if (typeof window.WPP?.call?.reject !== 'function') return false;
-            return (await window.WPP.call.reject(id || undefined)) === true;
-        } catch {
-            return false;
-        }
-    }, callId), 5000, 'WPP_CALL_REJECT_TIMEOUT').catch(error => {
-        console.warn(`[WHATSAPP CALL] Reliable call rejection failed: ${error.message}`);
-        return false;
-    });
+    return false;
 }
 
 function serializeWhatsAppJid(value) {
@@ -2038,6 +2040,11 @@ async function resolveCallPhone(client, call, knownPhone = '') {
 
     if (typeof client?.getContactById !== 'function') return '';
     const contact = await withTimeout(client.getContactById(rawJid), 3000, 'CALL_CONTACT_LOOKUP_TIMEOUT').catch(() => null);
+    
+    console.log(`[WHATSAPP CALL] getContactById(${rawJid}) returned:`, contact ? JSON.stringify({
+        id: contact.id, number: contact.number, isMe: contact.isMe, isUser: contact.isUser
+    }) : 'null');
+    
     const resolved = normalizePhoneFromCandidates([
         contact?.number,
         contact?.userid,
