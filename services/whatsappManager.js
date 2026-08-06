@@ -1609,6 +1609,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     });
 
     client.on('call', call => {
+        console.log(`[WHATSAPP CALL RAW] ${instanceId} ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
         void handleIncomingCall(instanceId, client, call).catch(error => {
             console.error(`[WHATSAPP CALL] ${instanceId}:`, error.message);
         });
