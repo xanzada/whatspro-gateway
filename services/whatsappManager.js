@@ -2003,6 +2003,8 @@ async function resolveCallPhone(client, call, knownPhone = '') {
     return resolved;
 }
 
+const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
+
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
     
