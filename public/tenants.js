@@ -213,6 +213,11 @@
     resumeBot: 'Ботты қосу',
     botPaused: 'Бот тоқтатылды',
     botResumed: 'Бот іске қосылды',
+    calls: 'Қоңырау',
+    disableCalls: 'Қоңырауды өшіру',
+    enableCalls: 'Қоңырауды қосу',
+    callsDisabledMsg: 'Қоңырау өшіріп қойылды',
+    callsEnabledMsg: 'Қоңырау қосылды',
     botState: 'Бот',
     botEnabled: 'Жұмыс істеп тұр',
     shareQr: 'Сілтемемен бөлісу',
@@ -266,6 +271,11 @@
     resumeBot: 'Включить бота',
     botPaused: 'Бот остановлен',
     botResumed: 'Бот включён',
+    calls: 'Звонки',
+    disableCalls: 'Отключить звонки',
+    enableCalls: 'Включить звонки',
+    callsDisabledMsg: 'Звонки отключены',
+    callsEnabledMsg: 'Звонки включены',
     botState: 'Бот',
     botEnabled: 'Работает',
     shareQr: 'Поделиться ссылкой',
@@ -558,7 +568,10 @@
       '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>' +
       '<button type="button" data-action="export-excel" data-instance="' + attr(tenant.instanceId) + '">' + icon('download') + '<span>' + t('exportExcel') + '</span></button>' +
       '<button type="button" data-action="bot-toggle" data-instance="' + attr(tenant.instanceId) + '" data-enabled="' + (tenant.botEnabled === false ? 'true' : 'false') + '">' +
-      icon('power') + '<span>' + t(tenant.botEnabled === false ? 'resumeBot' : 'pauseBot') + '</span></button>';
+      icon('power') + '<span>' + t(tenant.botEnabled === false ? 'resumeBot' : 'pauseBot') + '</span></button>' +
+      '<button type="button" class="calls-toggle-btn" data-action="calls-toggle" data-instance="' + attr(tenant.instanceId) + '" data-disabled="' + (tenant.callsDisabled === false ? 'true' : 'false') + '">' +
+      icon('phone') + '<span class="toggle-label">' + t('calls') + '</span>' +
+      '<span class="toggle-pill ' + (tenant.callsDisabled === false ? 'on' : '') + '"></span></button>';
     html += (sheet ? '<div class="menu-rule"></div>' : '') +
       '<button type="button" data-action="restart" data-instance="' + attr(tenant.instanceId) + '">' + icon('restart') + '<span>' + t('restart') + '</span></button>' +
       '<button type="button" data-action="reconnect" data-instance="' + attr(tenant.instanceId) + '">' + icon('link') + '<span>' + t('reconnect') + '</span></button>' +
@@ -1120,6 +1133,19 @@
       })
       .catch(function (error) { toast(t('actionFailed'), error.message, true); });
   }
+  function toggleCalls(instanceId, disabled) {
+    var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
+    if (!tenant || tenant.virtual) return;
+    closeModal();
+    api('POST', '/api/wa/tenants/' + encodeURIComponent(instanceId) + '/calls-disabled', { disabled: disabled })
+      .then(function () {
+        tenant.callsDisabled = disabled;
+        if (settings.has(instanceId)) settings.get(instanceId).callsDisabled = disabled;
+        render();
+        toast(t(disabled ? 'callsDisabledMsg' : 'callsEnabledMsg'), tenant.brand || instanceId);
+      })
+      .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+  }
   function openDetails(instanceId) {
     closeModal();
     currentDetail = instanceId;
@@ -1167,6 +1193,7 @@
       else if (name === 'duplicate') { closeModal(); window.setTimeout(function () { openDuplicate(instanceId); }, 0); }
       else if (name === 'export-excel') { closeModal(); exportWorkbook(instanceId); }
       else if (name === 'bot-toggle') toggleBot(instanceId, action.dataset.enabled === 'true');
+      else if (name === 'calls-toggle') toggleCalls(instanceId, action.dataset.disabled === 'true');
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
       else if (name === 'delete') { closeModal(); window.setTimeout(function () { openDelete(instanceId); }, 0); }
       else if (name === 'qr-refresh') {
