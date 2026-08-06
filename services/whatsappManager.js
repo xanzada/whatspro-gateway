@@ -1847,7 +1847,10 @@ async function rejectIncomingCallReliably(client, call) {
     const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
     
     let rejectedByWpp = false;
-    const wppReady = await withTimeout(ensureWppCallApi(client), 3000, 'WPP_CALL_API_TIMEOUT').catch(() => false);
+    const wppReady = await withTimeout(ensureWppCallApi(client), 10000, 'WPP_CALL_API_TIMEOUT').catch(err => {
+        console.warn(`[WHATSAPP CALL] ensureWppCallApi failed:`, err?.message || err);
+        return false;
+    });
     if (wppReady && page) {
         rejectedByWpp = await withTimeout(page.evaluate(async id => {
             try {
@@ -1864,12 +1867,21 @@ async function rejectIncomingCallReliably(client, call) {
     if (rejectedByWpp) return true;
 
     if (page && typeof page.evaluate === 'function' && peerJid && callId) {
+        let mappedPeerJid = peerJid;
+        if (peerJid.endsWith('@lid') && typeof getPhoneFromLid === 'function') {
+            const phone = await getPhoneFromLid(client, [peerJid]);
+            if (phone) {
+                mappedPeerJid = `${phone}@c.us`;
+                console.log(`[WHATSAPP CALL] Mapped LID ${peerJid} -> ${mappedPeerJid} for WWebJS rejectCall`);
+            }
+        }
+        
         const rejectedByClient = await withTimeout(
             page.evaluate(async (serializedPeerJid, id) => {
                 if (typeof window.WWebJS?.rejectCall !== 'function') return false;
                 await window.WWebJS.rejectCall(serializedPeerJid, id);
                 return true;
-            }, peerJid, callId),
+            }, mappedPeerJid, callId),
             5000,
             'WWEBJS_CALL_REJECT_TIMEOUT'
         ).then(result => result === true).catch(error => {
