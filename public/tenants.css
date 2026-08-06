@@ -893,12 +893,12 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
 }
 
 /* ---- calls toggle pill ---- */
-.calls-toggle-btn .toggle-label { flex: 1; text-align: left; }
+.calls-toggle-btn { gap: 8px !important; }
 
-.toggle-pill { flex-shrink:0; display:inline-block; width:34px; height:20px; border-radius:10px; background:var(--border); position:relative; transition:background .25s; margin-left:auto; }
+.toggle-pill { flex-shrink:0; display:inline-block; width:28px; height:16px; border-radius:8px; background:var(--border); position:relative; transition:background .25s; }
 
-.toggle-pill::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:left .25s; }
+.toggle-pill::after { content:''; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:left .2s; }
 
 .toggle-pill.on { background:#22c55e; }
 
-.toggle-pill.on::after { left:16px; }
+.toggle-pill.on::after { left:14px; }

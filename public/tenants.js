@@ -570,8 +570,8 @@
       '<button type="button" data-action="bot-toggle" data-instance="' + attr(tenant.instanceId) + '" data-enabled="' + (tenant.botEnabled === false ? 'true' : 'false') + '">' +
       icon('power') + '<span>' + t(tenant.botEnabled === false ? 'resumeBot' : 'pauseBot') + '</span></button>' +
       '<button type="button" class="calls-toggle-btn" data-action="calls-toggle" data-instance="' + attr(tenant.instanceId) + '" data-disabled="' + (tenant.callsDisabled === false ? 'true' : 'false') + '">' +
-      icon('phone') + '<span class="toggle-label">' + t('calls') + '</span>' +
-      '<span class="toggle-pill ' + (tenant.callsDisabled === false ? 'on' : '') + '"></span></button>';
+      '<span class="toggle-pill ' + (tenant.callsDisabled === false ? 'on' : '') + '"></span>' +
+      '<span>' + t('calls') + '</span></button>';
     html += (sheet ? '<div class="menu-rule"></div>' : '') +
       '<button type="button" data-action="restart" data-instance="' + attr(tenant.instanceId) + '">' + icon('restart') + '<span>' + t('restart') + '</span></button>' +
       '<button type="button" data-action="reconnect" data-instance="' + attr(tenant.instanceId) + '">' + icon('link') + '<span>' + t('reconnect') + '</span></button>' +
