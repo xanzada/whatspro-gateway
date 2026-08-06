@@ -2049,6 +2049,16 @@ async function resolveCallPhone(client, call, knownPhone = '') {
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
+    
+    const admin = dependencies.tenantAdmin || require('./tenantAdmin');
+    const tenantRow = await admin.findRow(instanceId);
+    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? true : Boolean(tenantRow.calls_disabled);
+    
+    if (!callsDisabled) {
+        console.log(`[WHATSAPP CALL] ${instanceId}: calls are allowed by configuration, not rejecting.`);
+        return { rejected: false, replied: false, phone: '', reason: 'calls_allowed' };
+    }
+
     const rejectCall = dependencies.rejectCall || rejectIncomingCallReliably;
     let rejected = false;
     try {

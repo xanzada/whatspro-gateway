@@ -1215,6 +1215,16 @@ app.post('/api/wa/tenants/:instanceId/bot-enabled', requireUiOrApi, async (req, 
   }
 });
 
+app.post('/api/wa/tenants/:instanceId/calls-disabled', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    res.json({ success: true, ...(await tenantAdmin.setCallsDisabled(instanceId, Boolean(req.body?.disabled))) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
 app.post('/api/wa/tenants/:instanceId/connect-link', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });

@@ -9,7 +9,7 @@ const tenantStore = require('./tenantStore');
 // token is how two restaurants end up sharing one. This module owns that split:
 // the panel collects the eight, and everything else is generated here.
 
-const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled'];
+const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled', 'callsDisabled'];
 
 function clean(value, max = 500) {
   return String(value ?? '').replace(/[\r\t]+/g, ' ').trim().slice(0, max);
@@ -117,7 +117,8 @@ function operatorFields(rawInput = {}) {
     work_hours: clean(input.workHours, 120),
     prompt_mode: promptMode,
     active: input.active === undefined ? true : Boolean(input.active),
-    bot_enabled: input.botEnabled === undefined ? true : Boolean(input.botEnabled)
+    bot_enabled: input.botEnabled === undefined ? true : Boolean(input.botEnabled),
+    calls_disabled: input.callsDisabled === undefined ? true : Boolean(input.callsDisabled)
   };
 }
 
@@ -180,7 +181,8 @@ async function updateTenant(instanceId, input, options = {}) {
     ...input,
     instanceId,
     active: input.active === undefined ? existing.active : input.active,
-    botEnabled: input.botEnabled === undefined ? existing.bot_enabled : input.botEnabled
+    botEnabled: input.botEnabled === undefined ? existing.bot_enabled : input.botEnabled,
+    callsDisabled: input.callsDisabled === undefined ? existing.calls_disabled : input.callsDisabled
   });
   const errors = validationErrors(fields);
   if (errors.length) throw badRequest(errors);
@@ -213,7 +215,8 @@ function workbookInput(row = {}) {
     promptMode: row.prompt_mode,
     systemPrompt: row.system_prompt,
     active: row.active,
-    botEnabled: row.bot_enabled
+    botEnabled: row.bot_enabled,
+    callsDisabled: row.calls_disabled
   };
 }
 
@@ -284,6 +287,17 @@ async function setBotEnabled(instanceId, enabled) {
   }
   await tenantStore.updateRow(instanceId, { bot_enabled: Boolean(enabled) });
   return { instanceId, botEnabled: Boolean(enabled) };
+}
+
+async function setCallsDisabled(instanceId, disabled) {
+  const existing = await findRow(instanceId);
+  if (!existing) {
+    const error = new Error('TENANT_NOT_FOUND');
+    error.statusCode = 404;
+    throw error;
+  }
+  await tenantStore.updateRow(instanceId, { calls_disabled: Boolean(disabled) });
+  return { instanceId, callsDisabled: Boolean(disabled) };
 }
 
 async function deleteTenant(instanceId) {
@@ -387,6 +401,7 @@ function presentableTenant(row) {
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
     botEnabled: row.bot_enabled === undefined || row.bot_enabled === null ? true : Boolean(row.bot_enabled),
+    callsDisabled: row.calls_disabled === undefined || row.calls_disabled === null ? true : Boolean(row.calls_disabled),
     createdAt: clean(row.created_at || row.CreatedAt, 64),
     updatedAt: clean(row.updated_at || row.UpdatedAt, 64),
     secrets: {
@@ -410,6 +425,7 @@ module.exports = {
   rotateSecrets,
   setActive,
   setBotEnabled,
+  setCallsDisabled,
   updateTenant,
   slugify,
   __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput }
