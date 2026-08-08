@@ -1854,6 +1854,18 @@ async function ensureWppCallApi(client) {
 }
 
 async function rejectIncomingCallReliably(client, call) {
+    // 1. call.reject() — whatsapp-web.js Call объектінің нативті әдісі (ең сенімді)
+    if (typeof call?.reject === 'function') {
+        try {
+            await withTimeout(call.reject(), 5000, 'WWEB_CALL_REJECT_TIMEOUT');
+            console.log(`[WHATSAPP CALL] call.reject() succeeded`);
+            return true;
+        } catch (err) {
+            console.warn(`[WHATSAPP CALL] call.reject() failed: ${err?.message || err}`);
+        }
+    }
+
+    // 2. WPP bundle fallback
     const page = client?.pupPage;
     const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
     if (!callId || !page) return false;
@@ -1874,11 +1886,14 @@ async function rejectIncomingCallReliably(client, call) {
             }
         }, callId), 4000, 'WPP_CALL_REJECT_TIMEOUT').catch(() => false);
 
-        console.log(`[WHATSAPP CALL] WPP reject attempt for ${callId}: success=${rejectedByWpp}`);
-        return true; 
+        if (rejectedByWpp) {
+            console.log(`[WHATSAPP CALL] WPP reject succeeded for ${callId}`);
+            return true;
+        }
+        console.warn(`[WHATSAPP CALL] WPP reject failed for ${callId}`);
     }
 
-    // WPP қолжетімді емес — native whatsapp-web.js bridge-не түсеміз
+    // 3. WWebJS rejectCall fallback
     const peerJid = serializeWhatsAppJid(call?.from);
     if (peerJid) {
         const rejectedByNative = await withTimeout(page.evaluate(async (jid, id) => {
@@ -2073,7 +2088,7 @@ async function resolveCallPhone(client, call, knownPhone = '') {
     return resolved;
 }
 
-const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймыз. Сұрағыңызды мәтінмен немесе аудиохабарламамен жазыңыз.';
+const CALL_REJECTION_TEXT = 'Сәлеметсіз бе! 👋 Кешіріңіз, қоңырауды қабылдай алмаймыз 🙏 Сізге қалай көмектесе аламыз? Сұрағыңызды осы жерге хабарлама түрінде жазыңыз — жауап береміз! 😊';
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };

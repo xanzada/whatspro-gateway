@@ -258,6 +258,13 @@ function isBotEnabled(record) {
   return Boolean(value);
 }
 
+function isCallsDisabled(record) {
+  const value = record?.calls_disabled;
+  if (value === undefined || value === null || value === '') return false;
+  if (typeof value === 'string') return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
 function evaluateTenant(record, options = {}) {
   const instanceId = text(record, FIELDS[0].columns);
   const active = isActive(record);
@@ -271,6 +278,7 @@ function evaluateTenant(record, options = {}) {
     brand: text(record, FIELDS[8].columns) || instanceId,
     active,
     botEnabled: isBotEnabled(record),
+    callsDisabled: isCallsDisabled(record),
     promptMode: text(record, ['prompt_mode']).toLowerCase() === 'custom' ? 'custom' : 'shared',
     checks: [...checks, ...extras],
     summary: summarize(checks, extras)
