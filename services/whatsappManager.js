@@ -14,7 +14,6 @@ const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock'
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
-const path = require('path');
 
 const WPP_CALL_BUNDLE_PATH = path.join(process.cwd(), 'node_modules', '@wppconnect', 'wa-js', 'dist', 'wppconnect-wa.js');
 const wppCallApiLoads = new WeakMap();
