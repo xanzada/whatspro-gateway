@@ -1878,6 +1878,25 @@ async function rejectIncomingCallReliably(client, call) {
         return true; 
     }
 
+    // WPP қолжетімді емес — native whatsapp-web.js bridge-не түсеміз
+    const peerJid = serializeWhatsAppJid(call?.from);
+    if (peerJid) {
+        const rejectedByNative = await withTimeout(page.evaluate(async (jid, id) => {
+            try {
+                if (typeof window?.WWebJS?.rejectCall !== 'function') return false;
+                await window.WWebJS.rejectCall(jid, id);
+                return true;
+            } catch (err) {
+                return false;
+            }
+        }, peerJid, callId), 4000, 'WWEB_CALL_REJECT_TIMEOUT').catch(() => false);
+
+        if (rejectedByNative) {
+            console.log(`[WHATSAPP CALL] WWebJS native reject for ${callId}: success=true`);
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -2058,47 +2077,49 @@ const CALL_REJECTION_TEXT = 'Қоңырауды қабылдай алмаймы�
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
-    
+
     const admin = dependencies.tenantAdmin || require('./tenantAdmin');
     const tenantRow = await admin.findRow(instanceId);
-    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? true : Boolean(tenantRow.calls_disabled);
-    
-    if (!callsDisabled) {
-        console.log(`[WHATSAPP CALL] ${instanceId}: calls are allowed by configuration, not rejecting.`);
-        return { rejected: false, replied: false, phone: '', reason: 'calls_allowed' };
+    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? false : Boolean(tenantRow.calls_disabled);
+
+    if (callsDisabled) {
+        console.log(`[WHATSAPP CALL] ${instanceId}: calls are disabled by configuration, rejecting and sending message.`);
+
+        const rejectCall = dependencies.rejectCall || rejectIncomingCallReliably;
+        let rejected = false;
+        try {
+            rejected = (await rejectCall(client, call)) === true;
+        } catch (error) {
+            console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call rejection failed: ${error.message}`);
+        }
+        if (!rejected) {
+            console.warn(`[WHATSAPP CALL] ${instanceId}: reply suppressed because call rejection was not confirmed.`);
+            return { rejected: false, replied: false, phone: '', reason: 'reject_failed' };
+        }
+
+        const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
+        const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
+        const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
+        if (!isValidChatPhone(phone)) {
+            console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
+            return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
+        }
+
+        const allowed = dependencies.isPhoneAllowed
+            ? await dependencies.isPhoneAllowed(instanceId, phone)
+            : allowsPhone(policy, phone);
+        if (!allowed) {
+            console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected without reply by test-mode policy.`);
+            return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
+        }
+
+        const deliverText = dependencies.deliverText || deliverWhatsAppText;
+        const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT);
+        return { rejected: true, replied: Boolean(sent), phone };
     }
 
-    const rejectCall = dependencies.rejectCall || rejectIncomingCallReliably;
-    let rejected = false;
-    try {
-        rejected = (await rejectCall(client, call)) === true;
-    } catch (error) {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call rejection failed: ${error.message}`);
-    }
-    if (!rejected) {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: reply suppressed because call rejection was not confirmed.`);
-        return { rejected: false, replied: false, phone: '', reason: 'reject_failed' };
-    }
-
-    const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
-    const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
-    const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
-    if (!isValidChatPhone(phone)) {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
-        return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
-    }
-
-    const allowed = dependencies.isPhoneAllowed
-        ? await dependencies.isPhoneAllowed(instanceId, phone)
-        : allowsPhone(policy, phone);
-    if (!allowed) {
-        console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected without reply by test-mode policy.`);
-        return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
-    }
-
-    const deliverText = dependencies.deliverText || deliverWhatsAppText;
-    const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT);
-    return { rejected: true, replied: Boolean(sent), phone };
+    console.log(`[WHATSAPP CALL] ${instanceId}: calls are enabled, allowing call to proceed.`);
+    return { rejected: false, replied: false, phone: '', reason: 'calls_enabled' };
 }
 
 async function flushPendingOutgoingText(instanceId) {

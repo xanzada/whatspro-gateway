@@ -88,6 +88,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
   const delivered = [];
 
   const allowed = await whatsappTest.handleIncomingCall('prestige', client, call, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     isPhoneAllowed: async () => true,
     deliverText: async (...args) => { delivered.push(args); return { success: true }; }
@@ -101,6 +102,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
 
   const blockedCall = { from: '77022754235@c.us', reject: async () => { calls.push('reject-blocked'); } };
   const blocked = await whatsappTest.handleIncomingCall('prestige', client, blockedCall, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     isPhoneAllowed: async () => false,
     deliverText: async () => { throw new Error('blocked caller must not receive a message'); }
@@ -123,6 +125,7 @@ test('call handling resolves WhatsApp privacy LIDs before applying the test-mode
     from: '123456789012345@lid',
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     isPhoneAllowed: async (_instanceId, phone) => phone === '77476884956',
     deliverText: async (_client, _instanceId, phone, text) => {
@@ -154,6 +157,7 @@ test('call handling verifies an unresolved LID against the tenant developer phon
     from: rawLid,
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
@@ -186,6 +190,7 @@ test('call handling resolves the structured Wid payload emitted by whatsapp-web.
     },
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
@@ -217,6 +222,7 @@ test('call handling discovers a caller JID nested inside the live call payload',
     participants: { active: { contact: { wid: { _serialized: rawLid } } } },
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async (_client, _instanceId, phone) => {
@@ -247,6 +253,7 @@ test('call handling canonicalizes a multi-device LID before phone mapping', asyn
     from: deviceLid,
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: confirmRejected,
     getTestModePolicy: async () => ({ enabled: true, devPhone: '77476884956' }),
     deliverText: async () => ({ success: true })
@@ -265,6 +272,7 @@ test('call reply is sent only after reliable rejection is confirmed', async () =
     from: '77476884956@c.us',
     reject: async () => { throw new Error('legacy reject must not be used'); }
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: async () => {
       sequence.push('reject-start');
       await rejectionGate;
@@ -296,6 +304,7 @@ test('call reply stays silent when reliable rejection cannot be confirmed', asyn
     from: '77476884956@c.us',
     reject: async () => {}
   }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
     rejectCall: async () => false,
     isPhoneAllowed: async () => true,
     deliverText: async () => {
@@ -369,6 +378,7 @@ test('reliable rejection injects the current call API and confirms its result', 
     addScriptTag: async ({ path }) => {
       assert.equal(path, require.resolve('@wppconnect/wa-js'));
       global.window.WPP = {
+        isReady: true,
         call: {
           reject: async id => {
             rejectedIds.push(id);

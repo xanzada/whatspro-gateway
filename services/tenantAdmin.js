@@ -118,7 +118,7 @@ function operatorFields(rawInput = {}) {
     prompt_mode: promptMode,
     active: input.active === undefined ? true : Boolean(input.active),
     bot_enabled: input.botEnabled === undefined ? true : Boolean(input.botEnabled),
-    calls_disabled: input.callsDisabled === undefined ? true : Boolean(input.callsDisabled)
+    calls_disabled: input.callsDisabled === undefined ? false : Boolean(input.callsDisabled)
   };
 }
 
@@ -401,7 +401,7 @@ function presentableTenant(row) {
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
     botEnabled: row.bot_enabled === undefined || row.bot_enabled === null ? true : Boolean(row.bot_enabled),
-    callsDisabled: row.calls_disabled === undefined || row.calls_disabled === null ? true : Boolean(row.calls_disabled),
+    callsDisabled: row.calls_disabled === undefined || row.calls_disabled === null ? false : Boolean(row.calls_disabled),
     createdAt: clean(row.created_at || row.CreatedAt, 64),
     updatedAt: clean(row.updated_at || row.UpdatedAt, 64),
     secrets: {
