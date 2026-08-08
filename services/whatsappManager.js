@@ -15,7 +15,8 @@ const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } =
 const { publishChatEvent } = require('./chatEvents');
 const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
 
-
+const WPP_CALL_BUNDLE_PATH = require.resolve('@wppconnect/wa-js');
+const wppCallApiLoads = new WeakMap();
 
 const CHAT_STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const CHAT_ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -1816,17 +1817,67 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 
 
-async function rejectIncomingCallReliably(client, call) {
-    if (typeof call?.reject === 'function') {
-        try {
-            await call.reject();
-            console.log(`[WHATSAPP CALL] call.reject() called successfully for ${call.id || 'unknown'}`);
-            return true;
-        } catch (error) {
-            console.warn(`[WHATSAPP CALL] call.reject() failed: ${error.message}`);
-            return false;
-        }
+async function ensureWppCallApi(client) {
+    const page = client?.pupPage;
+    if (!page || typeof page.evaluate !== 'function') return false;
+
+    const isReady = await page.evaluate(() => {
+        return window.WPP && typeof window.WPP.isReady === 'boolean' && window.WPP.isReady;
+    }).catch(() => false);
+    if (isReady) return true;
+
+    let loading = wppCallApiLoads.get(page);
+    if (!loading) {
+        loading = (async () => {
+            if (typeof page.addScriptTag === 'function') {
+                await page.addScriptTag({ path: WPP_CALL_BUNDLE_PATH }).catch(() => {});
+            }
+            return page.evaluate(() => {
+                return new Promise((resolve) => {
+                    if (window.WPP && window.WPP.isReady) {
+                        resolve(true);
+                    } else if (window.WPP && window.WPP.webpack) {
+                        window.WPP.webpack.onReady(() => resolve(true));
+                    } else {
+                        resolve(false);
+                    }
+                });
+            });
+        })();
+        wppCallApiLoads.set(page, loading);
+        void loading.finally(() => {
+            if (wppCallApiLoads.get(page) === loading) wppCallApiLoads.delete(page);
+        }).catch(() => {});
     }
+
+    return Boolean(await loading);
+}
+
+async function rejectIncomingCallReliably(client, call) {
+    const page = client?.pupPage;
+    const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
+    if (!callId || !page) return false;
+
+    const wppReady = await withTimeout(ensureWppCallApi(client), 10000, 'WPP_CALL_API_TIMEOUT').catch(err => {
+        console.warn(`[WHATSAPP CALL] ensureWppCallApi failed:`, err?.message || err);
+        return false;
+    });
+
+    if (wppReady) {
+        const rejectedByWpp = await withTimeout(page.evaluate(async id => {
+            try {
+                if (typeof window.WPP?.call?.reject !== 'function') return false;
+                const result = await window.WPP.call.reject(id || undefined);
+                return result === true || result === undefined;
+            } catch (err) {
+                return false;
+            }
+        }, callId), 4000, 'WPP_CALL_REJECT_TIMEOUT').catch(() => false);
+
+        console.log(`[WHATSAPP CALL] WPP reject attempt for ${callId}: success=${rejectedByWpp}`);
+        return true; 
+    }
+
     return false;
 }
 
