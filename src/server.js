@@ -16,8 +16,11 @@ const {
   sendPresence,
   getBase64Media,
   recoverChatMedia,
-  shutdownWhatsAppClients
+  shutdownWhatsAppClients,
+  getCallWatcherQr
 } = require('../services/whatsappManager');
+const qrcode = require('qrcode');
+const { callWatcherStatus } = require('../services/callWatcher');
 const { normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
@@ -1279,12 +1282,22 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
       await startWhatsAppInstance(scoped.instanceId);
       live = await getInstanceStatus(scoped.instanceId);
     }
+    // WhatsApp authorises one linked device per scan, so the call watcher needs
+    // its own. Onboarding hands out both from this one link rather than making
+    // the restaurant come back for a second page later.
+    const watcher = callWatcherStatus(scoped.instanceId);
+    const watcherQr = watcher.connected ? null : getCallWatcherQr(scoped.instanceId);
+    const mainConnected = String(live?.status || '') === 'connected';
+
     res.set('Cache-Control', 'no-store');
     res.json({
       success: true,
       brand: String(tenant.brand || 'WhatsPro').slice(0, 120),
       status: String(live?.status || 'unknown'),
       qr: live?.qr || null,
+      step: mainConnected ? (watcher.connected ? 'done' : 'calls') : 'session',
+      callsConnected: Boolean(watcher.connected),
+      callsQr: mainConnected && watcherQr ? await qrcode.toDataURL(watcherQr.qr) : null,
       expiresAt: scoped.expiresAt
     });
   } catch (error) {

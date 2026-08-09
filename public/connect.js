@@ -12,6 +12,10 @@
       description: 'WhatsApp → Байланыстырылған құрылғылар → Құрылғыны байланыстыру бөлімін ашып, QR кодты сканерлеңіз.',
       preparing: 'QR дайындалуда…', starting: 'Сессия іске қосылуда', wait: 'Бұл бетті жаппай тұрыңыз.',
       ready: 'QR дайын', scan: 'Кодты WhatsApp арқылы сканерлеңіз.', connected: 'WhatsApp сәтті қосылды',
+      step1: '1-қадам: хабарламалар', step2: '2-қадам: қоңыраулар',
+      callsTitle: 'Енді екінші кодты сканерлеңіз',
+      callsCopy: 'Қоңырауларды қабылдау үшін WhatsApp тағы бір байланысқан құрылғыны талап етеді. Сол телефонмен, сол жерден сканерлеңіз.',
+      callsWait: 'Қоңырау кодын дайындап тұрмыз…',
       connectedCopy: 'Сессия сақталды. Бұл бетті жабуға болады.', invalid: 'Сілтеме жарамсыз немесе мерзімі аяқталған',
       invalidCopy: 'Жаңа қосылу сілтемесін әкімшіден сұраңыз.', retry: 'Қайта тексеру',
       security: 'Сілтеме бір нысанға ғана арналған және автоматты түрде жарамсыз болады.'
@@ -21,6 +25,10 @@
       description: 'Откройте WhatsApp → Связанные устройства → Привязка устройства и отсканируйте QR-код.',
       preparing: 'QR подготавливается…', starting: 'Сессия запускается', wait: 'Не закрывайте эту страницу.',
       ready: 'QR готов', scan: 'Отсканируйте код через WhatsApp.', connected: 'WhatsApp успешно подключён',
+      step1: 'Шаг 1: сообщения', step2: 'Шаг 2: звонки',
+      callsTitle: 'Теперь отсканируйте второй код',
+      callsCopy: 'Для приёма звонков WhatsApp требует ещё одно связанное устройство. Сканируйте тем же телефоном, не уходя со страницы.',
+      callsWait: 'Готовим код для звонков…',
       connectedCopy: 'Сессия сохранена. Эту страницу можно закрыть.', invalid: 'Ссылка недействительна или истекла',
       invalidCopy: 'Попросите у администратора новую ссылку подключения.', retry: 'Проверить снова',
       security: 'Ссылка предназначена только для одной точки и автоматически станет недействительной.'
@@ -65,10 +73,34 @@
       }
       $('brand-name').textContent = data.brand || 'WhatsApp';
       $('retry-button').hidden = true;
-      if (data.status === 'connected') {
+      if (data.status === 'connected' && data.callsConnected) {
         stopped = true;
         $('qr-frame').innerHTML = '<span aria-hidden="true" style="font-size:56px;color:#159c7c">✓</span>';
         setStatus('connected', t('connected'), t('connectedCopy'));
+        $('step-calls').hidden = true;
+        $('step-session').hidden = true;
+        return;
+      }
+      // Session is linked; the calls device is the second scan.
+      if (data.status === 'connected' && data.step === 'calls') {
+        $('step-session').textContent = t('step1') + ' ✓';
+        $('step-session').hidden = false;
+        $('step-calls').textContent = t('step2');
+        $('step-calls').hidden = false;
+        $('step-calls-label').textContent = t('callsTitle');
+        $('step-calls-copy').textContent = t('callsCopy');
+        if (data.callsQr) {
+          var callsImage = new Image();
+          callsImage.alt = 'WhatsApp calls QR';
+          callsImage.src = data.callsQr;
+          $('qr-frame').replaceChildren(callsImage);
+          setStatus('', t('ready'), t('scan'));
+        } else {
+          $('qr-frame').innerHTML = '<span id="qr-placeholder"></span>';
+          $('qr-placeholder').textContent = t('callsWait');
+          setStatus('', t('callsWait'), '');
+        }
+        timer = window.setTimeout(poll, 1900);
         return;
       }
       if (data.qr) {
