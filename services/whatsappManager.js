@@ -1888,38 +1888,42 @@ async function ensureWppCallApi(client) {
             });
             if (!injected) return false;
 
-            // Reports what actually landed on the page. Injection can "succeed"
-            // and still leave nothing behind — a CSP-refused script and a
-            // bundle that failed to hook WhatsApp's webpack look identical from
-            // Node otherwise.
-            const probe = await page.evaluate(() => ({
-                wpp: typeof window.WPP,
-                webpack: Boolean(window.WPP && window.WPP.webpack),
-                isReady: Boolean(window.WPP && window.WPP.isReady),
-                waRequire: typeof window.require,
-                call: Boolean(window.WPP && window.WPP.call)
-            })).catch(err => ({ probeError: String(err?.message || err) }));
-            console.log(`[WHATSAPP CALL] WPP probe: ${JSON.stringify(probe)}`);
-
-            return page.evaluate(() => new Promise(resolve => {
+            // Wait until the bundle has finished hooking the page. wa-js drives
+            // WhatsApp through one of two module systems and reports which in
+            // `loader.loaderType`: the classic 'webpack' one, or the 'meta'
+            // loader that WhatsApp Web moved to. The old code only waited on
+            // `WPP.webpack.onReady`, which does not exist under the meta loader
+            // — so it gave up instantly and every rejection fell through to the
+            // unverified path. `loader.onReady` is the module-system-agnostic
+            // callback, and the isReady poll covers a bundle that became ready
+            // between injection and this call.
+            const ready = await page.evaluate(() => new Promise(resolve => {
+                const started = Date.now();
+                let settled = false;
                 const finish = async () => {
+                    if (settled) return;
+                    settled = true;
                     try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* best effort */ }
                     resolve(true);
                 };
-                if (!window.WPP) return void resolve(false);
-                if (window.WPP.isReady) return void finish();
-                if (typeof window.WPP.webpack?.onReady === 'function') {
-                    window.WPP.webpack.onReady(finish);
-                    // onReady never fires if the page is mid-navigation, so the
-                    // wait is bounded and the caller falls back instead of hanging.
-                    setTimeout(() => resolve(Boolean(window.WPP?.isReady)), 8000);
-                    return;
-                }
-                resolve(false);
+                const poll = () => {
+                    if (settled) return;
+                    if (window.WPP?.isReady) return void finish();
+                    if (Date.now() - started > 20000) return resolve(false);
+                    setTimeout(poll, 250);
+                };
+                if (typeof window.WPP?.loader?.onReady === 'function') window.WPP.loader.onReady(finish);
+                else if (typeof window.WPP?.webpack?.onReady === 'function') window.WPP.webpack.onReady(finish);
+                poll();
             })).catch(err => {
                 console.warn(`[WHATSAPP CALL] WPP readiness wait failed: ${err?.message || err}`);
                 return false;
             });
+
+            const loaderType = await page.evaluate(() => String(window.WPP?.loader?.loaderType || 'unknown')).catch(() => 'unknown');
+            if (ready) console.log(`[WHATSAPP CALL] WPP call API ready (loader=${loaderType})`);
+            else console.warn(`[WHATSAPP CALL] WPP never became ready (loader=${loaderType}), falling back to whatsapp-web.js`);
+            return ready;
         })();
         wppCallApiLoads.set(page, loading);
         void loading.finally(() => {
@@ -1950,8 +1954,12 @@ async function rejectIncomingCallReliably(client, call) {
 
     // 1. WPP — the only path that confirms the server took the rejection.
     if (page) {
-        const wppReady = await withTimeout(ensureWppCallApi(client), 15000, 'WPP_CALL_API_TIMEOUT').catch(err => {
-            console.warn(`[WHATSAPP CALL] ensureWppCallApi failed: ${err?.message || err}`);
+        // Three seconds, not fifteen. `ready` already primed this, so a hit
+        // here is the cached promise resolving instantly. Waiting out a cold
+        // load while the caller is ringing just means rejecting a call that
+        // has already stopped — the fallback is the better use of that time.
+        const wppReady = await withTimeout(ensureWppCallApi(client), 3000, 'WPP_CALL_API_TIMEOUT').catch(err => {
+            console.warn(`[WHATSAPP CALL] WPP not ready in time (${err?.message || err}), using fallback`);
             return false;
         });
 
