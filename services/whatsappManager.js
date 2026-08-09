@@ -1888,6 +1888,19 @@ async function ensureWppCallApi(client) {
             });
             if (!injected) return false;
 
+            // Reports what actually landed on the page. Injection can "succeed"
+            // and still leave nothing behind — a CSP-refused script and a
+            // bundle that failed to hook WhatsApp's webpack look identical from
+            // Node otherwise.
+            const probe = await page.evaluate(() => ({
+                wpp: typeof window.WPP,
+                webpack: Boolean(window.WPP && window.WPP.webpack),
+                isReady: Boolean(window.WPP && window.WPP.isReady),
+                waRequire: typeof window.require,
+                call: Boolean(window.WPP && window.WPP.call)
+            })).catch(err => ({ probeError: String(err?.message || err) }));
+            console.log(`[WHATSAPP CALL] WPP probe: ${JSON.stringify(probe)}`);
+
             return page.evaluate(() => new Promise(resolve => {
                 const finish = async () => {
                     try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* best effort */ }
