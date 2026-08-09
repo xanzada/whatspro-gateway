@@ -1887,7 +1887,14 @@ function dispatchIncomingCall(instanceId, client, call, source) {
         return Promise.resolve();
     }
     if (!claimCall(instanceId, callId, source)) return Promise.resolve();
-    return handleIncomingCall(instanceId, client, call).catch(error => {
+    // A call-log entry arrives after the call has already ended, so there is
+    // nothing left to reject — attempting it would just log a failure. The
+    // greeting is still owed to the caller, and handleIncomingCall is left
+    // otherwise untouched.
+    const options = source === 'call_log'
+        ? { rejectCall: async () => false }
+        : undefined;
+    return handleIncomingCall(instanceId, client, call, options).catch(error => {
         console.error(`[WHATSAPP CALL] ${instanceId} (source=${source}):`, error.message);
     });
 }
@@ -1929,7 +1936,7 @@ async function watchWppIncomingCalls(instanceId, client) {
                 console.log(`[WHATSAPP CALL SPY] ${instanceId}: page event -> ${payload.spy}`);
                 return;
             }
-            const source = payload?.via === 'callstore' ? 'callstore' : 'wa-js';
+            const source = payload?.via === 'callstore' ? 'callstore' : (payload?.via === 'call_log' ? 'call_log' : 'wa-js');
             console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${source}) ->`, JSON.stringify(payload));
             void dispatchIncomingCall(instanceId, client, payload, source);
         });
@@ -1985,6 +1992,34 @@ async function watchWppIncomingCalls(instanceId, client) {
                 window.__wpproOwnCallHook = true;
             }
         } catch (_) { /* the store is optional; the events above still stand */ }
+
+        // Fourth source: the call-log entry. On multi-device WhatsApp does not
+        // route a ring to a linked device at all — it rings the phone and sends
+        // the web session only the missed-call log message. That is why the three
+        // sources above stay silent while `chat.new_message` fires on every call.
+        // This cannot reject the call (the server never offered it here), but it
+        // is the only signal a linked device gets, so it still greets the caller.
+        try {
+            if (!window.__wpproCallLogHook) {
+                window.WPP.on('chat.new_message', msg => {
+                    try {
+                        const type = String(msg?.type || '');
+                        const subtype = String(msg?.subtype || '');
+                        const isCallLog = type === 'call_log' || /call/i.test(type) || /call|voice|video/i.test(subtype);
+                        if (!isCallLog || msg?.id?.fromMe) return;
+                        window[binding]({
+                            id: msg?.callId || msg?.id?._serialized || msg?.id?.id || null,
+                            from: msg?.from?._serialized || msg?.from || msg?.author?._serialized || null,
+                            isVideo: /video/i.test(subtype) || /video/i.test(type),
+                            isGroup: Boolean(msg?.isGroupMsg),
+                            offerTime: msg?.t ?? null,
+                            via: 'call_log',
+                        });
+                    } catch (_) { /* never break the page's message handling */ }
+                });
+                window.__wpproCallLogHook = true;
+            }
+        } catch (_) { /* optional source; the three above still stand */ }
 
         // The spy: every wa-js event, so a ring that reaches the page is visible
         // in the log even when no call listener recognises it.
