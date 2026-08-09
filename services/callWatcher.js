@@ -120,7 +120,11 @@ async function startCallWatcher(instanceId, options = {}) {
 
         sock.ev.on('call', events => {
             for (const event of [].concat(events || [])) {
-                logger.log(`[CALL WATCHER RAW] ${instanceId} ->`, JSON.stringify(event));
+                // A ringing call emits a status update several times a second, so
+                // only the two states that change what we do are worth a line.
+                if (event?.status === 'offer' || event?.status === 'terminate') {
+                    logger.log(`[CALL WATCHER] ${instanceId}: call ${event.status} from ${event.from || event.chatId || 'unknown'}`);
+                }
                 if (!isIncomingOffer(event)) continue;
                 void onIncomingCall(event, sock);
             }

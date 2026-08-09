@@ -1970,13 +1970,6 @@ async function watchWppIncomingCalls(instanceId, client) {
     const BINDING = '__wpproIncomingCall';
     try {
         await page.exposeFunction(BINDING, payload => {
-            // Spy frames report event names only; they are diagnostics, not calls,
-            // and must never reach the rejection ladder.
-            if (payload && payload.spy) {
-                const shape = payload.shape ? ` shape=${JSON.stringify(payload.shape)}` : '';
-                console.log(`[WHATSAPP CALL SPY] ${instanceId}: page event -> ${payload.spy}${shape}`);
-                return;
-            }
             const source = payload?.via === 'callstore' ? 'callstore' : (payload?.via === 'call_log' ? 'call_log' : 'wa-js');
             console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${source}) ->`, JSON.stringify(payload));
             void dispatchIncomingCall(instanceId, client, payload, source);
@@ -2062,40 +2055,10 @@ async function watchWppIncomingCalls(instanceId, client) {
             }
         } catch (_) { /* optional source; the three above still stand */ }
 
-        // The spy: every wa-js event, so a ring that reaches the page is visible
-        // in the log even when no call listener recognises it.
-        try {
-            if (window.WPP?.onAny && !window.__wpproSpy) {
-                window.__wpproSpyCount = 0;
-                window.WPP.onAny(function (name) {
-                    // Every event, not just call-shaped ones. The question this
-                    // answers is whether a ring reaches the page at all, and
-                    // filtering by name assumes the answer. Capped so a busy
-                    // session cannot flood the log.
-                    if (typeof name !== 'string') return;
-                    const isCall = /call/i.test(name);
-                    if (!isCall && window.__wpproSpyCount >= 150) return;
-                    window.__wpproSpyCount += 1;
-                    // For messages, the shape decides which field marks a call.
-                    // Guessing it wrong is what let the last round pass silently,
-                    // so log the shape instead of assuming it.
-                    let shape = null;
-                    try {
-                        const msg = arguments[1];
-                        if (name === 'chat.new_message' && msg) {
-                            shape = {
-                                type: msg.type ?? null,
-                                subtype: msg.subtype ?? null,
-                                callId: msg.callId ?? null,
-                                keys: Object.keys(msg).slice(0, 40),
-                            };
-                        }
-                    } catch (_) {}
-                    try { window[binding]({ spy: name, shape }); } catch (_) {}
-                });
-                window.__wpproSpy = true;
-            }
-        } catch (_) {}
+        // A spy on every wa-js event used to sit here. It answered its question —
+        // WhatsApp does not route call stanzas to the web page at all, which is
+        // why the call watcher reads them from its own socket instead — and was
+        // costing a log line per page event, so it is gone.
 
         return true;
     }, BINDING);
