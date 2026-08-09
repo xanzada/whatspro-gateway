@@ -1840,6 +1840,21 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
  * `startWhatsAppInstance` primes it on `ready` so the first real call does not
  * pay the ~2s bundle load while the phone is ringing.
  */
+// Read once and kept in memory: the bundle is ~500 KB and every session that
+// starts would otherwise re-read it from disk.
+let wppBundleSource;
+function readWppCallBundle() {
+    if (wppBundleSource === undefined) {
+        try {
+            wppBundleSource = fs.readFileSync(WPP_CALL_BUNDLE_PATH, 'utf8');
+        } catch (error) {
+            wppBundleSource = '';
+            console.error(`[WHATSAPP CALL] WPP bundle unreadable at ${WPP_CALL_BUNDLE_PATH}: ${error.message}`);
+        }
+    }
+    return wppBundleSource;
+}
+
 async function ensureWppCallApi(client) {
     const page = client?.pupPage;
     if (!page || typeof page.evaluate !== 'function') return false;
@@ -1857,20 +1872,41 @@ async function ensureWppCallApi(client) {
     let loading = wppCallApiLoads.get(page);
     if (!loading) {
         loading = (async () => {
-            if (typeof page.addScriptTag === 'function') {
-                await page.addScriptTag({ path: WPP_CALL_BUNDLE_PATH }).catch(err => {
-                    console.warn(`[WHATSAPP CALL] WPP bundle injection failed: ${err?.message || err}`);
-                });
-            }
+            const source = readWppCallBundle();
+            if (!source) return false;
+
+            // Injected by evaluating the source rather than via addScriptTag.
+            // A <script> tag is subject to the page's Content-Security-Policy,
+            // and web.whatsapp.com sends a script-src that refuses it — the
+            // tag lands, the browser declines to run it, and Puppeteer reports
+            // no error at all. That is why this used to report "call API
+            // unavailable" with nothing else in the log. Evaluating goes
+            // through CDP Runtime.evaluate, which CSP does not apply to.
+            const injected = await page.evaluate(source).then(() => true).catch(err => {
+                console.warn(`[WHATSAPP CALL] WPP bundle evaluation failed: ${err?.message || err}`);
+                return false;
+            });
+            if (!injected) return false;
+
             return page.evaluate(() => new Promise(resolve => {
-                const enableInterface = async () => {
+                const finish = async () => {
                     try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* best effort */ }
                     resolve(true);
                 };
-                if (window.WPP?.isReady) return void enableInterface();
-                if (window.WPP?.webpack?.onReady) return void window.WPP.webpack.onReady(enableInterface);
+                if (!window.WPP) return void resolve(false);
+                if (window.WPP.isReady) return void finish();
+                if (typeof window.WPP.webpack?.onReady === 'function') {
+                    window.WPP.webpack.onReady(finish);
+                    // onReady never fires if the page is mid-navigation, so the
+                    // wait is bounded and the caller falls back instead of hanging.
+                    setTimeout(() => resolve(Boolean(window.WPP?.isReady)), 8000);
+                    return;
+                }
                 resolve(false);
-            }));
+            })).catch(err => {
+                console.warn(`[WHATSAPP CALL] WPP readiness wait failed: ${err?.message || err}`);
+                return false;
+            });
         })();
         wppCallApiLoads.set(page, loading);
         void loading.finally(() => {

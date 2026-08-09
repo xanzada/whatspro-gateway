@@ -12,6 +12,21 @@ const { evaluateAll } = require('../services/tenantReadiness');
 
 const tenantWith = calls_disabled => ({ findRow: async () => ({ instance_id: 'prestige', calls_disabled }) });
 
+// The bundle is injected by evaluating its source, not via addScriptTag, so a
+// fake page has to answer a string the way a browser would: run it, and let it
+// define window.WPP.
+function fakeCallPage(wppCall) {
+  return {
+    evaluate: async (fnOrSource, ...args) => {
+      if (typeof fnOrSource === 'string') {
+        global.window.WPP = { isReady: true, call: wppCall };
+        return undefined;
+      }
+      return fnOrSource(...args);
+    }
+  };
+}
+
 test('a disabled tenant rejects the call and greets the caller', async () => {
   const delivered = [];
   const result = await whatsappTest.handleIncomingCall('prestige', {}, {
@@ -138,23 +153,16 @@ test('outgoing calls are never touched', async () => {
 
 test('rejection prefers WPP and only falls back when it cannot confirm', async () => {
   const order = [];
-  const page = {
-    evaluate: async (fn, ...args) => fn(...args),
-    addScriptTag: async () => {
-      global.window.WPP = {
-        isReady: true,
-        call: {
-          enableCallInterface: async () => { order.push('enable-interface'); },
-          reject: async id => { order.push(`wpp-reject:${id}`); return true; }
-        }
-      };
-    }
-  };
   const previousWindow = global.window;
   global.window = {};
 
   try {
-    const rejected = await whatsappTest.rejectIncomingCallReliably({ pupPage: page }, {
+    const rejected = await whatsappTest.rejectIncomingCallReliably({
+      pupPage: fakeCallPage({
+        enableCallInterface: async () => { order.push('enable-interface'); },
+        reject: async id => { order.push(`wpp-reject:${id}`); return true; }
+      })
+    }, {
       id: 'call-123',
       reject: async () => { order.push('wweb-reject'); }
     });
@@ -170,23 +178,16 @@ test('rejection prefers WPP and only falls back when it cannot confirm', async (
 
 test('a WPP rejection that reports failure falls through to whatsapp-web.js', async () => {
   const order = [];
-  const page = {
-    evaluate: async (fn, ...args) => fn(...args),
-    addScriptTag: async () => {
-      global.window.WPP = {
-        isReady: true,
-        call: {
-          enableCallInterface: async () => {},
-          reject: async () => { order.push('wpp-reject'); return false; }
-        }
-      };
-    }
-  };
   const previousWindow = global.window;
   global.window = {};
 
   try {
-    const rejected = await whatsappTest.rejectIncomingCallReliably({ pupPage: page }, {
+    const rejected = await whatsappTest.rejectIncomingCallReliably({
+      pupPage: fakeCallPage({
+        enableCallInterface: async () => {},
+        reject: async () => { order.push('wpp-reject'); return false; }
+      })
+    }, {
       id: 'call-123',
       reject: async () => { order.push('wweb-reject'); }
     });
@@ -201,23 +202,16 @@ test('a WPP rejection that reports failure falls through to whatsapp-web.js', as
 
 test('a call with no id still rejects whichever call is ringing', async () => {
   const rejectedIds = [];
-  const page = {
-    evaluate: async (fn, ...args) => fn(...args),
-    addScriptTag: async () => {
-      global.window.WPP = {
-        isReady: true,
-        call: {
-          enableCallInterface: async () => {},
-          reject: async id => { rejectedIds.push(id); return true; }
-        }
-      };
-    }
-  };
   const previousWindow = global.window;
   global.window = {};
 
   try {
-    const rejected = await whatsappTest.rejectIncomingCallReliably({ pupPage: page }, { from: '77476884956@c.us' });
+    const rejected = await whatsappTest.rejectIncomingCallReliably({
+      pupPage: fakeCallPage({
+        enableCallInterface: async () => {},
+        reject: async id => { rejectedIds.push(id); return true; }
+      })
+    }, { from: '77476884956@c.us' });
     assert.equal(rejected, true);
     assert.deepEqual(rejectedIds, [undefined]);
   } finally {

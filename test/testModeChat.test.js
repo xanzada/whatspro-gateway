@@ -333,8 +333,10 @@ test('reliable rejection serializes a structured caller JID for the whatsapp-web
   try {
     const result = await whatsappTest.rejectIncomingCallReliably({
       pupPage: {
-        evaluate: async (fn, ...args) => fn(...args),
-        addScriptTag: async () => { throw new Error('WPP fallback must not load'); }
+        evaluate: async (fnOrSource, ...args) => {
+          if (typeof fnOrSource === 'string') throw new Error('WPP fallback must not load');
+          return fnOrSource(...args);
+        }
       }
     }, {
       id: 'call-native-123',
@@ -377,19 +379,24 @@ test('reliable rejection injects the current call API and confirms its result', 
   const previousWindow = global.window;
   const rejectedIds = [];
   global.window = {};
+  // The bundle arrives as source to evaluate, since a <script> tag would be
+  // refused by the page's CSP.
   const page = {
-    evaluate: async (fn, ...args) => fn(...args),
-    addScriptTag: async ({ path }) => {
-      assert.equal(path, require.resolve('@wppconnect/wa-js'));
-      global.window.WPP = {
-        isReady: true,
-        call: {
-          reject: async id => {
-            rejectedIds.push(id);
-            return true;
+    evaluate: async (fnOrSource, ...args) => {
+      if (typeof fnOrSource === 'string') {
+        assert.match(fnOrSource, /WPP/);
+        global.window.WPP = {
+          isReady: true,
+          call: {
+            reject: async id => {
+              rejectedIds.push(id);
+              return true;
+            }
           }
-        }
-      };
+        };
+        return undefined;
+      }
+      return fnOrSource(...args);
     }
   };
 
