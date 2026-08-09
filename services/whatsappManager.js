@@ -1913,8 +1913,15 @@ async function watchWppIncomingCalls(instanceId, client) {
     const BINDING = '__wpproIncomingCall';
     try {
         await page.exposeFunction(BINDING, payload => {
-            console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=wa-js) ->`, JSON.stringify(payload));
-            void dispatchIncomingCall(instanceId, client, payload, 'wa-js');
+            // Spy frames report event names only; they are diagnostics, not calls,
+            // and must never reach the rejection ladder.
+            if (payload && payload.spy) {
+                console.log(`[WHATSAPP CALL SPY] ${instanceId}: page event -> ${payload.spy}`);
+                return;
+            }
+            const source = payload?.via === 'callstore' ? 'callstore' : 'wa-js';
+            console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${source}) ->`, JSON.stringify(payload));
+            void dispatchIncomingCall(instanceId, client, payload, source);
         });
     } catch (error) {
         // Already exposed from an earlier load of this same page: harmless.
@@ -1939,6 +1946,49 @@ async function watchWppIncomingCalls(instanceId, client) {
             } catch (_) { /* the page must never break on our listener */ }
         });
         window.__wpproCallHooked = true;
+
+        // Third source, owned by us. wa-js publishes `call.incoming_call` only
+        // from its own wrapper around CallStore.processIncomingCall, installed at
+        // injection time; if that wrapper was never installed, wrapping the store
+        // ourselves here still sees the call. Chaining preserves whatever wrapper
+        // is already in place, so nothing that works today stops working.
+        try {
+            const store = window.WPP?.whatsapp?.CallStore;
+            if (store && typeof store.processIncomingCall === 'function' && !window.__wpproOwnCallHook) {
+                const original = store.processIncomingCall.bind(store);
+                store.processIncomingCall = function (...args) {
+                    const call = original(...args);
+                    try {
+                        if (call) {
+                            window[binding]({
+                                id: call.id,
+                                from: call.peerJid?._serialized || call.peerJid || null,
+                                isVideo: Boolean(call.isVideo),
+                                isGroup: Boolean(call.isGroup),
+                                offerTime: call.offerTime ?? null,
+                                via: 'callstore',
+                            });
+                        }
+                    } catch (_) { /* never break WhatsApp's own call handling */ }
+                    return call;
+                };
+                window.__wpproOwnCallHook = true;
+            }
+        } catch (_) { /* the store is optional; the events above still stand */ }
+
+        // The spy: every wa-js event, so a ring that reaches the page is visible
+        // in the log even when no call listener recognises it.
+        try {
+            if (window.WPP?.onAny && !window.__wpproSpy) {
+                window.WPP.onAny(name => {
+                    if (typeof name === 'string' && /call/i.test(name)) {
+                        try { window[binding]({ spy: name }); } catch (_) {}
+                    }
+                });
+                window.__wpproSpy = true;
+            }
+        } catch (_) {}
+
         return true;
     }, BINDING);
 
@@ -1978,6 +2028,13 @@ async function reportCallHookHealth(instanceId, client) {
             // event can never fire, whatever else looks healthy.
             wwebjsCollection: Boolean(collection),
             wwebjsPatched: Boolean(collection && collection.set && collection.set.toString().includes('onAddCall')),
+            // wa-js reports incoming calls by wrapping CallStore.processIncomingCall.
+            // If that store is missing, its event is as dead as the patch above,
+            // and the listener count tells us whether anyone is actually subscribed.
+            callStore: typeof window.WPP?.whatsapp?.CallStore,
+            processIncomingCall: typeof window.WPP?.whatsapp?.CallStore?.processIncomingCall,
+            incomingListeners: Number(window.WPP?.ev?.listenerCount?.('call.incoming_call') ?? -1),
+            ownHook: Boolean(window.__wpproOwnCallHook),
         };
     }).catch(err => ({ error: err?.message || String(err) }));
 
