@@ -98,7 +98,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0][1], 'prestige');
   assert.equal(delivered[0][2], '77769156184');
-  assert.match(delivered[0][3], /мәтінмен немесе аудиохабарламамен/i);
+  assert.match(delivered[0][3], /хабарлама түрінде жазыңыз/i);
 
   const blockedCall = { from: '77022754235@c.us', reject: async () => { calls.push('reject-blocked'); } };
   const blocked = await whatsappTest.handleIncomingCall('prestige', client, blockedCall, {
@@ -298,7 +298,11 @@ test('call reply is sent only after reliable rejection is confirmed', async () =
   assert.deepEqual(delivered, ['77476884956']);
 });
 
-test('call reply stays silent when reliable rejection cannot be confirmed', async () => {
+// An unconfirmed rejection used to suppress the reply. It no longer does: a
+// tenant with calls disabled never answers the phone, so the greeting is the
+// right message whether or not the reject stanza was acknowledged, and
+// suppressing it left callers with a ringing phone and no explanation.
+test('an unconfirmed rejection still greets the caller', async () => {
   const delivered = [];
   const result = await whatsappTest.handleIncomingCall('prestige', {}, {
     from: '77476884956@c.us',
@@ -308,13 +312,13 @@ test('call reply stays silent when reliable rejection cannot be confirmed', asyn
     rejectCall: async () => false,
     isPhoneAllowed: async () => true,
     deliverText: async () => {
-      delivered.push('unexpected');
+      delivered.push('greeting');
       return { success: true };
     }
   });
 
-  assert.deepEqual(result, { rejected: false, replied: false, phone: '', reason: 'reject_failed' });
-  assert.deepEqual(delivered, []);
+  assert.deepEqual(result, { rejected: false, replied: true, phone: '77476884956' });
+  assert.deepEqual(delivered, ['greeting']);
 });
 
 test('reliable rejection serializes a structured caller JID for the whatsapp-web.js bridge', async () => {

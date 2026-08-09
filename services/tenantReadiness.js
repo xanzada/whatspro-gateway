@@ -260,8 +260,11 @@ function isBotEnabled(record) {
 
 function isCallsDisabled(record) {
   const value = record?.calls_disabled;
-  if (value === undefined || value === null || value === '') return false;
-  if (typeof value === 'string') return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  // Defaults to disabled, matching handleIncomingCall. These two used to
+  // disagree, so a row with no value showed the panel toggle as "calls on"
+  // while the gateway was rejecting every call it received.
+  if (value === undefined || value === null || value === '') return true;
+  if (typeof value === 'string') return !['0', 'false', 'no'].includes(value.trim().toLowerCase());
   return Boolean(value);
 }
 

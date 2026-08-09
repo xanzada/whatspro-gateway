@@ -1362,8 +1362,16 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         initializingClients.delete(instanceId);
         
         // 🚀 ЕҢ МАҢЫЗДЫ ӨЗГЕРІС: Инстансты тек 100% ҚОСЫЛҒАНДА ғана жадыға жазамыз!
-        clients.set(instanceId, client); 
+        clients.set(instanceId, client);
         scheduleFlush(instanceId, 500);
+
+        // The call API is primed here rather than on the first call: injecting
+        // the bundle takes a couple of seconds, and a caller only rings for
+        // about fifteen. Paying that cost while the phone is ringing is how a
+        // rejection arrives too late to stop it.
+        void ensureWppCallApi(client)
+            .then(ready => console.log(`[WHATSAPP CALL] ${instanceId}: call API ${ready ? 'ready' : 'unavailable'}`))
+            .catch(err => console.warn(`[WHATSAPP CALL] ${instanceId}: call API preload failed: ${err?.message || err}`));
     });
 
     // 4. БАЙЛАНЫС ҮЗІЛГЕНДЕ
@@ -1817,32 +1825,52 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
 
 
 
+/**
+ * Loads the WPP bundle into the WhatsApp Web page and turns on its call
+ * interface.
+ *
+ * `enableCallInterface()` matters as much as the bundle itself: WhatsApp Web
+ * treats itself as a companion device that does not handle calls, so an
+ * incoming call arrives with `canHandleLocally: false` and a reject stanza for
+ * it is dropped. Enabling the interface is what makes the page a participant
+ * the server will accept a rejection from.
+ *
+ * The result is cached per page. A page that already answered `isReady` skips
+ * the injection entirely, so this is cheap to call on every incoming call, and
+ * `startWhatsAppInstance` primes it on `ready` so the first real call does not
+ * pay the ~2s bundle load while the phone is ringing.
+ */
 async function ensureWppCallApi(client) {
     const page = client?.pupPage;
     if (!page || typeof page.evaluate !== 'function') return false;
 
-    const isReady = await page.evaluate(() => {
-        return window.WPP && typeof window.WPP.isReady === 'boolean' && window.WPP.isReady;
-    }).catch(() => false);
-    if (isReady) return true;
+    const alreadyReady = await page.evaluate(() => Boolean(window.WPP?.isReady)).catch(() => false);
+    if (alreadyReady) {
+        // The interface flag does not survive a page navigation, so it is
+        // re-asserted rather than assumed. It is idempotent.
+        await page.evaluate(async () => {
+            try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* already on */ }
+        }).catch(() => {});
+        return true;
+    }
 
     let loading = wppCallApiLoads.get(page);
     if (!loading) {
         loading = (async () => {
             if (typeof page.addScriptTag === 'function') {
-                await page.addScriptTag({ path: WPP_CALL_BUNDLE_PATH }).catch(() => {});
-            }
-            return page.evaluate(() => {
-                return new Promise((resolve) => {
-                    if (window.WPP && window.WPP.isReady) {
-                        resolve(true);
-                    } else if (window.WPP && window.WPP.webpack) {
-                        window.WPP.webpack.onReady(() => resolve(true));
-                    } else {
-                        resolve(false);
-                    }
+                await page.addScriptTag({ path: WPP_CALL_BUNDLE_PATH }).catch(err => {
+                    console.warn(`[WHATSAPP CALL] WPP bundle injection failed: ${err?.message || err}`);
                 });
-            });
+            }
+            return page.evaluate(() => new Promise(resolve => {
+                const enableInterface = async () => {
+                    try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* best effort */ }
+                    resolve(true);
+                };
+                if (window.WPP?.isReady) return void enableInterface();
+                if (window.WPP?.webpack?.onReady) return void window.WPP.webpack.onReady(enableInterface);
+                resolve(false);
+            }));
         })();
         wppCallApiLoads.set(page, loading);
         void loading.finally(() => {
@@ -1853,49 +1881,69 @@ async function ensureWppCallApi(client) {
     return Boolean(await loading);
 }
 
+/**
+ * Call rejection, ordered by how much the transport actually verifies.
+ *
+ * WPP goes first. Its reject() establishes the E2E session for the caller
+ * before sending (`ensureE2ESessions`), checks the call is really in
+ * INCOMING_RING, and sends through the live `sendSmaxStanza` path — so a
+ * `true` from it means WhatsApp accepted the stanza.
+ *
+ * whatsapp-web.js `call.reject()` is the fallback, not the primary. It casts
+ * the stanza through the deprecated `deprecatedCastStanza` API, skips the E2E
+ * handshake, and resolves `undefined` no matter what the server did. Calling
+ * it first is how this used to report "succeeded" on calls that kept ringing:
+ * it can never fail, so WPP was never reached.
+ */
 async function rejectIncomingCallReliably(client, call) {
-    // 1. call.reject() — whatsapp-web.js Call объектінің нативті әдісі (ең сенімді)
+    const page = client?.pupPage;
+    const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
+
+    // 1. WPP — the only path that confirms the server took the rejection.
+    if (page) {
+        const wppReady = await withTimeout(ensureWppCallApi(client), 15000, 'WPP_CALL_API_TIMEOUT').catch(err => {
+            console.warn(`[WHATSAPP CALL] ensureWppCallApi failed: ${err?.message || err}`);
+            return false;
+        });
+
+        if (wppReady) {
+            const outcome = await withTimeout(page.evaluate(async id => {
+                if (typeof window.WPP?.call?.reject !== 'function') return { ok: false, error: 'WPP_REJECT_MISSING' };
+                try {
+                    // An empty id makes WPP reject whichever call is ringing,
+                    // which is what we want when the id did not survive the
+                    // trip from whatsapp-web.js.
+                    const result = await window.WPP.call.reject(id || undefined);
+                    return { ok: result !== false };
+                } catch (err) {
+                    return { ok: false, error: String(err?.code || err?.message || err) };
+                }
+            }, callId), 8000, 'WPP_CALL_REJECT_TIMEOUT').catch(err => ({ ok: false, error: String(err?.message || err) }));
+
+            if (outcome?.ok) {
+                console.log(`[WHATSAPP CALL] WPP reject confirmed for ${callId || '<ringing>'}`);
+                return true;
+            }
+            console.warn(`[WHATSAPP CALL] WPP reject failed for ${callId || '<ringing>'}: ${outcome?.error || 'unknown'}`);
+        } else {
+            console.warn('[WHATSAPP CALL] WPP call API unavailable, falling back to whatsapp-web.js');
+        }
+    }
+
+    // 2. whatsapp-web.js native reject — unverified, but better than ringing.
     if (typeof call?.reject === 'function') {
         try {
             await withTimeout(call.reject(), 5000, 'WWEB_CALL_REJECT_TIMEOUT');
-            console.log(`[WHATSAPP CALL] call.reject() succeeded`);
+            console.log(`[WHATSAPP CALL] whatsapp-web.js reject sent for ${callId || '<unknown>'} (unverified)`);
             return true;
         } catch (err) {
-            console.warn(`[WHATSAPP CALL] call.reject() failed: ${err?.message || err}`);
+            console.warn(`[WHATSAPP CALL] whatsapp-web.js reject failed: ${err?.message || err}`);
         }
     }
 
-    // 2. WPP bundle fallback
-    const page = client?.pupPage;
-    const callId = String(call?.id?._serialized || call?.id?.id || call?.id || '').trim();
-    if (!callId || !page) return false;
-
-    const wppReady = await withTimeout(ensureWppCallApi(client), 10000, 'WPP_CALL_API_TIMEOUT').catch(err => {
-        console.warn(`[WHATSAPP CALL] ensureWppCallApi failed:`, err?.message || err);
-        return false;
-    });
-
-    if (wppReady) {
-        const rejectedByWpp = await withTimeout(page.evaluate(async id => {
-            try {
-                if (typeof window.WPP?.call?.reject !== 'function') return false;
-                const result = await window.WPP.call.reject(id || undefined);
-                return result === true || result === undefined;
-            } catch (err) {
-                return false;
-            }
-        }, callId), 4000, 'WPP_CALL_REJECT_TIMEOUT').catch(() => false);
-
-        if (rejectedByWpp) {
-            console.log(`[WHATSAPP CALL] WPP reject succeeded for ${callId}`);
-            return true;
-        }
-        console.warn(`[WHATSAPP CALL] WPP reject failed for ${callId}`);
-    }
-
-    // 3. WWebJS rejectCall fallback
+    // 3. Raw WWebJS bridge, for calls that arrived without a Call wrapper.
     const peerJid = serializeWhatsAppJid(call?.from);
-    if (peerJid) {
+    if (page && peerJid && callId) {
         const rejectedByNative = await withTimeout(page.evaluate(async (jid, id) => {
             try {
                 if (typeof window?.WWebJS?.rejectCall !== 'function') return false;
@@ -1904,10 +1952,10 @@ async function rejectIncomingCallReliably(client, call) {
             } catch (err) {
                 return false;
             }
-        }, peerJid, callId), 4000, 'WWEB_CALL_REJECT_TIMEOUT').catch(() => false);
+        }, peerJid, callId), 5000, 'WWEB_BRIDGE_REJECT_TIMEOUT').catch(() => false);
 
         if (rejectedByNative) {
-            console.log(`[WHATSAPP CALL] WWebJS native reject for ${callId}: success=true`);
+            console.log(`[WHATSAPP CALL] WWebJS bridge reject sent for ${callId} (unverified)`);
             return true;
         }
     }
@@ -2094,8 +2142,11 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
     if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
 
     const admin = dependencies.tenantAdmin || require('./tenantAdmin');
-    const tenantRow = await admin.findRow(instanceId);
-    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? false : Boolean(tenantRow.calls_disabled);
+    const tenantRow = await admin.findRow(instanceId).catch(() => null);
+    // Rejecting is the default. A tenant with no row yet, or a row written
+    // before this column existed, is a tenant nobody has staffed for phone
+    // calls — letting those ring through is the worse failure.
+    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? true : Boolean(tenantRow.calls_disabled);
 
     if (callsDisabled) {
         console.log(`[WHATSAPP CALL] ${instanceId}: calls are disabled by configuration, rejecting and sending message.`);
@@ -2105,32 +2156,40 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
         try {
             rejected = (await rejectCall(client, call)) === true;
         } catch (error) {
-            console.warn(`[WHATSAPP CALL] ${instanceId}: reliable call rejection failed: ${error.message}`);
+            console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection threw: ${error.message}`);
         }
+        // The reply is not gated on the rejection succeeding. This tenant does
+        // not answer calls at all, so the greeting is correct either way, and
+        // an unconfirmed reject is exactly the case where the caller is left
+        // with nothing to go on. Only the log distinguishes the two.
         if (!rejected) {
-            console.warn(`[WHATSAPP CALL] ${instanceId}: reply suppressed because call rejection was not confirmed.`);
-            return { rejected: false, replied: false, phone: '', reason: 'reject_failed' };
+            console.warn(`[WHATSAPP CALL] ${instanceId}: rejection unconfirmed, replying anyway so the caller is not left silent.`);
         }
 
         const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
         const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
         const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
         if (!isValidChatPhone(phone)) {
-            console.warn(`[WHATSAPP CALL] ${instanceId}: rejected call but caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
-            return { rejected: true, replied: false, phone: '', reason: 'bad_phone' };
+            console.warn(`[WHATSAPP CALL] ${instanceId}: caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
+            return { rejected, replied: false, phone: '', reason: 'bad_phone' };
         }
 
         const allowed = dependencies.isPhoneAllowed
             ? await dependencies.isPhoneAllowed(instanceId, phone)
             : allowsPhone(policy, phone);
         if (!allowed) {
-            console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected without reply by test-mode policy.`);
-            return { rejected: true, replied: false, phone, reason: 'test_mode_blocked' };
+            console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: no reply, blocked by test-mode policy.`);
+            return { rejected, replied: false, phone, reason: 'test_mode_blocked' };
         }
 
         const deliverText = dependencies.deliverText || deliverWhatsAppText;
-        const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT);
-        return { rejected: true, replied: Boolean(sent), phone };
+        const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT)
+            .catch(error => {
+                console.error(`[WHATSAPP CALL] ${instanceId} -> ${phone}: greeting delivery failed: ${error.message}`);
+                return null;
+            });
+        console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected=${rejected} replied=${Boolean(sent)}`);
+        return { rejected, replied: Boolean(sent), phone };
     }
 
     console.log(`[WHATSAPP CALL] ${instanceId}: calls are enabled, allowing call to proceed.`);
