@@ -1628,6 +1628,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         void dispatchIncomingCall(instanceId, client, call, 'wwebjs');
     });
 
+    // The Baileys watcher is the only source that sees a call while it is still
+    // ringing, because the offer is a socket stanza and never a page event.
+    // It rejects over its own socket and hands the call to the same dispatcher,
+    // so the greeting and the tenant rules stay exactly where they were.
+    void startCallWatcherFor(instanceId, client);
+
 client.initialize().catch(async err => {
         console.error(`❌ [WHATSAPP] ${instanceId} ИНИЦИАЛИЗАЦИЯ ҚАТЕСІ:`, err.message);
         clearTimeout(watchdog);
@@ -1870,7 +1876,7 @@ function claimCall(instanceId, callId, source) {
     return true;
 }
 
-function dispatchIncomingCall(instanceId, client, call, source) {
+function dispatchIncomingCall(instanceId, client, call, source, overrides) {
     const callId = call?.id === undefined || call?.id === null ? '' : String(call.id);
     // Outgoing calls are filtered downstream too, but claiming one here would
     // make the real incoming call that follows look like a duplicate.
@@ -1883,12 +1889,40 @@ function dispatchIncomingCall(instanceId, client, call, source) {
     // nothing left to reject — attempting it would just log a failure. The
     // greeting is still owed to the caller, and handleIncomingCall is left
     // otherwise untouched.
-    const options = source === 'call_log'
-        ? { rejectCall: async () => false }
-        : undefined;
+    const options = overrides
+        || (source === 'call_log' ? { rejectCall: async () => false } : undefined);
     return handleIncomingCall(instanceId, client, call, options).catch(error => {
         console.error(`[WHATSAPP CALL] ${instanceId} (source=${source}):`, error.message);
     });
+}
+
+const callWatcherQrs = new Map();
+
+function callWatcherAuthDir(instanceId) {
+    return path.join(AUTH_DATA_PATH, `call-watcher-${instanceId}`);
+}
+
+async function startCallWatcherFor(instanceId, client) {
+    const watcher = require('./callWatcher');
+    try {
+        await watcher.startCallWatcher(instanceId, {
+            authDir: callWatcherAuthDir(instanceId),
+            onQr: qr => {
+                callWatcherQrs.set(instanceId, { qr, at: Date.now() });
+                console.log(`[CALL WATCHER] ${instanceId}: scan this QR to let the bot see calls (WhatsApp > Linked devices)`);
+                try { require('qrcode-terminal').generate(qr, { small: true }); } catch (_) {}
+            },
+            onIncomingCall: (call, sock) => dispatchIncomingCall(
+                instanceId,
+                client,
+                { id: call.id, from: call.from || call.chatId, fromMe: false },
+                'baileys',
+                { rejectCall: async () => watcher.rejectViaSocket(sock, call) }
+            )
+        });
+    } catch (error) {
+        console.error(`[CALL WATCHER] ${instanceId}: failed to start: ${error?.message || error}`);
+    }
 }
 
 // Read once and kept in memory: the bundle is ~500 KB and every session that
@@ -2831,6 +2865,7 @@ module.exports = {
         handleIncomingCall,
         dispatchIncomingCall,
         seenCallIds,
+        callWatcherQrs,
         resolveCallPhone,
         queueOutgoingText,
         clearRestartTimer,
