@@ -1265,14 +1265,6 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 '--disable-crashpad',
                 '--disable-breakpad',
                 '--disable-features=Translate,BackForwardCache',
-                // WhatsApp Web decides during the handshake whether this device
-                // can take a call, and it asks the browser for an audio input to
-                // do it. Headless Chromium has no microphone, so it answered no
-                // and the server never routed calls here at all: the page saw
-                // the missed-call chat entry and no call.incoming_call event.
-                // These make Chromium report a silent fake microphone.
-                '--use-fake-device-for-media-stream',
-                '--use-fake-ui-for-media-stream',
                 '--allow-file-access-from-files',
                 '--autoplay-policy=no-user-gesture-required'
             ]
@@ -2059,13 +2051,6 @@ async function watchWppIncomingCalls(instanceId, client) {
 
         return true;
     }, BINDING);
-
-    // The fake microphone still goes through a permission prompt, and a headless
-    // page has nobody to answer it. Granting it up front is what lets WhatsApp
-    // Web advertise itself as able to take a call.
-    await page.browserContext()
-        .overridePermissions('https://web.whatsapp.com', ['microphone', 'notifications'])
-        .catch(err => console.warn(`[WHATSAPP CALL] ${instanceId}: microphone permission grant failed: ${err?.message || err}`));
 
     const hooked = await subscribe().catch(err => {
         console.warn(`[WHATSAPP CALL] ${instanceId}: wa-js call subscribe failed: ${err?.message || err}`);
