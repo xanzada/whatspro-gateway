@@ -1898,6 +1898,20 @@ function dispatchIncomingCall(instanceId, client, call, source, overrides) {
 
 const callWatcherQrs = new Map();
 
+// The QR rotates roughly every 20s until it is scanned, so the newest one
+// replaces the last. Reading it does not clear it: a scan is confirmed by the
+// socket opening, not by an admin loading the page once.
+function getCallWatcherQr(instanceId) {
+    const entry = callWatcherQrs.get(instanceId);
+    if (!entry) return null;
+    const watcher = require('./callWatcher');
+    if (watcher.callWatcherStatus(instanceId).connected) {
+        callWatcherQrs.delete(instanceId);
+        return null;
+    }
+    return { qr: entry.qr, at: entry.at };
+}
+
 function callWatcherAuthDir(instanceId) {
     return path.join(AUTH_DATA_PATH, `call-watcher-${instanceId}`);
 }
@@ -2866,6 +2880,7 @@ module.exports = {
         dispatchIncomingCall,
         seenCallIds,
         callWatcherQrs,
+        getCallWatcherQr,
         resolveCallPhone,
         queueOutgoingText,
         clearRestartTimer,

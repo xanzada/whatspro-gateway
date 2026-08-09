@@ -1215,6 +1215,27 @@ app.post('/api/wa/tenants/:instanceId/bot-enabled', requireUiOrApi, async (req, 
   }
 });
 
+// Seeing calls needs a second linked device on the same number, scanned once
+// per restaurant. Until it is scanned this returns the live QR; after it is,
+// null with connected:true.
+app.get('/api/wa/tenants/:instanceId/call-watcher', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    const status = require('../services/callWatcher').callWatcherStatus(instanceId);
+    const pending = require('../services/whatsappManager').getCallWatcherQr(instanceId);
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      connected: Boolean(status.connected),
+      watching: Boolean(status.watching),
+      qr: pending ? await require('qrcode').toDataURL(pending.qr) : null
+    });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
 app.post('/api/wa/tenants/:instanceId/calls-disabled', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
