@@ -2825,6 +2825,7 @@ async function getBase64Media(instanceId, keyObj) {
     }
 }
 module.exports = {
+    getCallWatcherQr,
     startWhatsAppInstance,
     startSessionSupervisor,
     stopSessionSupervisor,
