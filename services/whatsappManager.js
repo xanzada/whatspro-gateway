@@ -920,6 +920,17 @@ function removeSessionFolder(instanceId, reason = 'manual') {
     console.log(`[WHATSAPP] ${instanceId} session folder cleared (${reason}).`);
 }
 
+// Wiping the session while the watcher keeps its own credentials would leave the
+// tenant half-linked: a fresh QR for one device, a stale socket for the other.
+function removeCallWatcherAuth(instanceId, reason = 'manual') {
+    try { require('./callWatcher').stopCallWatcher(instanceId); } catch (_) {}
+    callWatcherQrs.delete(instanceId);
+    const dir = callWatcherAuthDir(instanceId);
+    if (!fs.existsSync(dir)) return;
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`[CALL WATCHER] ${instanceId} credentials cleared (${reason}).`);
+}
+
 async function resetInvalidSession(instanceId, client, reason = 'auth_invalid', startFreshQr = true) {
     if (authResetting.has(instanceId)) {
         setInstanceState(instanceId, 'qr_required', { reason, hasStoredSession: false });
@@ -1397,6 +1408,10 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         if (reasonText.includes('LOGOUT') || reasonText.includes('UNPAIRED')) {
             console.log(`❌ [WHATSAPP] ${instanceId} ТЕЛЕФОННАН ШЫҒЫП КЕТТІ (LOGOUT).`);
             removeSessionFolder(instanceId, 'logout_by_user');
+            // Unlinking one device from the phone usually means the tenant
+            // cleared linked devices altogether, so the watcher's credentials
+            // are dead too and the next scan has to re-pair both.
+            removeCallWatcherAuth(instanceId, 'logout_by_user');
             setInstanceState(instanceId, 'qr_required', { reason: 'Телефоннан шығып кеттіңіз. Жаңа QR күтіңіз.', hasStoredSession: false });
             const recovery = buildReconnectPlan(reasonText, {
                 attempts: getRestartAttempts(instanceId),
@@ -1673,6 +1688,12 @@ async function stopWhatsAppInstance(instanceId) {
     qrCodes.delete(instanceId);
     setInstanceState(instanceId, 'stopped');
 
+    // The call watcher is a second socket on the same number, so stopping the
+    // tenant has to stop it too. Left running it would keep answering calls for
+    // a tenant the platform considers off.
+    callWatcherQrs.delete(instanceId);
+    try { require('./callWatcher').stopCallWatcher(instanceId); } catch (_) {}
+
     const initializingClient = initializingClients.get(instanceId);
     if (initializingClient) {
         try {
@@ -1701,6 +1722,7 @@ async function stopWhatsAppInstance(instanceId) {
     // 🚀 ЕҢ БАСТЫСЫ: ПАПКАДАҒЫ КЭШ ФАЙЛДАРДЫ ТАМЫРЫМЕН ЖОЮ!
     try {
         removeSessionFolder(instanceId, 'stopped_by_admin');
+        removeCallWatcherAuth(instanceId, 'stopped_by_admin');
         console.log(`🗑️ [WHATSAPP] ${instanceId} сессиясы админнің бұйрығымен ТҮБЕГЕЙЛІ ӨШІРІЛДІ!`);
     } catch (err) {
         console.error(`❌ [WHATSAPP] ${instanceId} папканы өшіру қатесі:`, err.message);

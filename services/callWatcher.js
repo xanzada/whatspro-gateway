@@ -23,9 +23,11 @@ const fs = require('fs');
 const path = require('path');
 
 let baileysPromise;
+// A seam so tests can hand in a fake Baileys instead of the real one.
+let baileysLoader = () => import('@whiskeysockets/baileys');
 function loadBaileys() {
     if (!baileysPromise) {
-        baileysPromise = import('@whiskeysockets/baileys').catch(err => {
+        baileysPromise = baileysLoader().catch(err => {
             baileysPromise = null;
             throw err;
         });
@@ -37,6 +39,10 @@ const watchers = new Map();
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 60000;
+const WATCHDOG_MS = 30000;
+
+// Date.now is injected as a seam so tests can hold it still.
+let nowMs = () => Date.now();
 
 function reconnectDelay(attempt) {
     return Math.min(RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1), RECONNECT_MAX_MS);
@@ -59,7 +65,7 @@ async function startCallWatcher(instanceId, options = {}) {
     const onQr = options.onQr;
     const logger = options.logger || console;
 
-    const state = { instanceId, sock: null, stopped: false, attempt: 0, connected: false };
+    const state = { instanceId, sock: null, stopped: false, attempt: 0, connected: false, generation: 0, timer: null, watchdog: null };
     watchers.set(instanceId, state);
 
     fs.mkdirSync(authDir, { recursive: true });
@@ -68,8 +74,40 @@ async function startCallWatcher(instanceId, options = {}) {
     const makeWASocket = baileys.default || baileys.makeWASocket;
     const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = baileys;
 
+    // Every way this watcher could die for good came from a reconnect chain that
+    // was allowed to end: a connect() that threw took its own retry down with
+    // it, and a logout parked the socket forever. So reconnecting goes through
+    // one place that always re-arms, and a watchdog re-arms it even when that
+    // place is never reached.
+    function scheduleReconnect(reason, delayOverride) {
+        if (state.stopped || state.timer) return;
+        state.attempt += 1;
+        const delay = delayOverride === undefined ? reconnectDelay(state.attempt) : delayOverride;
+        logger.warn(`[CALL WATCHER] ${instanceId}: ${reason}, reconnecting in ${delay}ms`);
+        state.timer = setTimeout(() => {
+            state.timer = null;
+            void connect().catch(err => {
+                logger.error(`[CALL WATCHER] ${instanceId}: reconnect failed: ${err?.message || err}`);
+                scheduleReconnect('reconnect threw');
+            });
+        }, delay);
+    }
+
+    // A closed socket keeps its listeners, and a stale one still firing would
+    // hand the same call to the rejection ladder twice.
+    function teardown(sock) {
+        try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
+        try { sock?.end?.(undefined); } catch (_) {}
+    }
+
     const connect = async () => {
         if (state.stopped) return;
+        const generation = (state.generation += 1);
+        const isCurrent = () => !state.stopped && state.generation === generation;
+
+        teardown(state.sock);
+        state.sock = null;
+        state.connected = false;
 
         const { state: authState, saveCreds } = await useMultiFileAuthState(authDir);
         const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
@@ -91,6 +129,7 @@ async function startCallWatcher(instanceId, options = {}) {
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', update => {
+            if (!isCurrent()) return;
             const { connection, lastDisconnect, qr } = update;
 
             if (qr && typeof onQr === 'function') onQr(qr);
@@ -98,6 +137,7 @@ async function startCallWatcher(instanceId, options = {}) {
             if (connection === 'open') {
                 state.attempt = 0;
                 state.connected = true;
+                state.lastSeen = nowMs();
                 logger.log(`[CALL WATCHER] ${instanceId}: socket open, watching for call offers`);
                 return;
             }
@@ -106,19 +146,24 @@ async function startCallWatcher(instanceId, options = {}) {
                 state.connected = false;
                 const code = lastDisconnect?.error?.output?.statusCode;
                 if (state.stopped) return;
+                // Only the phone unlinking the device is terminal. Everything
+                // else — 408, 428, 440, a restart, a network blip — is WhatsApp
+                // asking us to come back, so it must not look like a logout.
                 if (code === DisconnectReason?.loggedOut) {
-                    logger.warn(`[CALL WATCHER] ${instanceId}: logged out, needs a fresh QR scan`);
+                    state.loggedOut = true;
+                    logger.warn(`[CALL WATCHER] ${instanceId}: unlinked from the phone, needs a fresh QR scan`);
+                    if (typeof options.onLoggedOut === 'function') {
+                        try { options.onLoggedOut(instanceId); } catch (_) {}
+                    }
                     return;
                 }
-                state.attempt += 1;
-                const delay = reconnectDelay(state.attempt);
-                logger.warn(`[CALL WATCHER] ${instanceId}: socket closed (${code || 'unknown'}), reconnecting in ${delay}ms`);
-                state.timer = setTimeout(() => void connect().catch(err =>
-                    logger.error(`[CALL WATCHER] ${instanceId}: reconnect failed: ${err?.message || err}`)), delay);
+                scheduleReconnect(`socket closed (${code || 'unknown'})`);
             }
         });
 
         sock.ev.on('call', events => {
+            if (!isCurrent()) return;
+            state.lastSeen = nowMs();
             for (const event of [].concat(events || [])) {
                 // A ringing call emits a status update several times a second, so
                 // only the two states that change what we do are worth a line.
@@ -133,7 +178,20 @@ async function startCallWatcher(instanceId, options = {}) {
         return sock;
     };
 
-    await connect();
+    // The last line of defence. Whatever leaves the watcher down without a
+    // pending retry — a throw somewhere that never armed one, a close event that
+    // never arrived — is picked up within a cycle. It is what makes "down for
+    // good" a state this watcher cannot sit in.
+    state.watchdog = setInterval(() => {
+        if (state.stopped || state.loggedOut || state.connected || state.timer) return;
+        scheduleReconnect('watchdog found the socket down');
+    }, WATCHDOG_MS);
+    if (typeof state.watchdog?.unref === 'function') state.watchdog.unref();
+
+    await connect().catch(err => {
+        logger.error(`[CALL WATCHER] ${instanceId}: first connect failed: ${err?.message || err}`);
+        scheduleReconnect('first connect failed');
+    });
     return state;
 }
 
@@ -153,6 +211,9 @@ function stopCallWatcher(instanceId) {
     if (!state) return false;
     state.stopped = true;
     if (state.timer) clearTimeout(state.timer);
+    if (state.watchdog) clearInterval(state.watchdog);
+    try { state.sock?.ev?.removeAllListeners?.(); } catch (_) {}
+    try { state.sock?.sendPresenceUpdate?.('unavailable'); } catch (_) {}
     try { state.sock?.end?.(undefined); } catch (_) {}
     watchers.delete(instanceId);
     return true;
@@ -160,7 +221,15 @@ function stopCallWatcher(instanceId) {
 
 function callWatcherStatus(instanceId) {
     const state = watchers.get(instanceId);
-    return { watching: Boolean(state), connected: Boolean(state?.connected) };
+    return {
+        watching: Boolean(state),
+        connected: Boolean(state?.connected),
+        // Only true when the phone unlinked the device. It is the one state a
+        // rescan can fix, and the only one the panel should ask about.
+        loggedOut: Boolean(state?.loggedOut),
+        reconnecting: Boolean(state?.timer),
+        attempts: Number(state?.attempt || 0)
+    };
 }
 
 module.exports = {
@@ -168,5 +237,14 @@ module.exports = {
     stopCallWatcher,
     callWatcherStatus,
     rejectViaSocket,
-    __test: { isIncomingOffer, reconnectDelay }
+    __test: {
+        isIncomingOffer,
+        reconnectDelay,
+        _setNowForTest: fn => { nowMs = fn; },
+        _setBaileysForTest: loader => {
+            baileysPromise = null;
+            baileysLoader = loader || (() => import('@whiskeysockets/baileys'));
+        },
+        _getWatchersForTest: () => watchers
+    }
 };

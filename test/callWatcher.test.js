@@ -53,3 +53,201 @@ test('reconnect backs off and stays bounded', () => {
   // A tenant whose phone stays off must not spin at full speed forever.
   assert.equal(reconnectDelay(50), 60000);
 });
+
+// The lifecycle below is the actual promise made to a restaurant: once scanned,
+// the watcher stays up on its own. These drive the real startCallWatcher with a
+// fake Baileys, so a regression in the reconnect chain fails here.
+
+const os = require('os');
+const fs = require('fs');
+const pathMod = require('path');
+const { startCallWatcher, stopCallWatcher, callWatcherStatus } = require('../services/callWatcher');
+
+function fakeBaileys(onSocket) {
+  const sockets = [];
+  const loader = async () => ({
+    default: () => {
+      const listeners = new Map();
+      const sock = {
+        ev: {
+          on: (name, fn) => { listeners.set(name, [...(listeners.get(name) || []), fn]); },
+          removeAllListeners: () => listeners.clear()
+        },
+        end: () => {},
+        rejectCall: async () => {},
+        emit: (name, payload) => { for (const fn of listeners.get(name) || []) fn(payload); }
+      };
+      sockets.push(sock);
+      if (onSocket) onSocket(sock);
+      return sock;
+    },
+    useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => {} }),
+    fetchLatestBaileysVersion: async () => ({ version: [2, 3, 4] }),
+    DisconnectReason: { loggedOut: 401 },
+    Browsers: { ubuntu: () => ['Ubuntu', 'Chrome', '120'] }
+  });
+  return { loader, sockets };
+}
+
+const quietLogger = { log: () => {}, warn: () => {}, error: () => {} };
+
+function tmpAuthDir(name) {
+  return fs.mkdtempSync(pathMod.join(os.tmpdir(), `cw-${name}-`));
+}
+
+async function withWatcher(instanceId, fake, run, options = {}) {
+  __test._setBaileysForTest(fake.loader);
+  const authDir = tmpAuthDir(instanceId);
+  try {
+    await startCallWatcher(instanceId, { authDir, logger: quietLogger, ...options });
+    await run();
+  } finally {
+    stopCallWatcher(instanceId);
+    __test._setBaileysForTest(null);
+    fs.rmSync(authDir, { recursive: true, force: true });
+  }
+}
+
+test('a dropped socket reconnects itself without any human action', async () => {
+  const fake = fakeBaileys();
+
+  await withWatcher('reconnects', fake, async () => {
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    assert.equal(callWatcherStatus('reconnects').connected, true);
+
+    // 428 is what WhatsApp sends on an ordinary network blip.
+    fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 428 } } }
+    });
+
+    assert.equal(callWatcherStatus('reconnects').connected, false);
+    assert.equal(callWatcherStatus('reconnects').reconnecting, true, 'a retry must be armed');
+
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    assert.equal(fake.sockets.length, 2, 'the watcher must have opened a fresh socket');
+
+    fake.sockets[1].emit('connection.update', { connection: 'open' });
+    const status = callWatcherStatus('reconnects');
+    assert.equal(status.connected, true);
+    assert.equal(status.attempts, 0, 'a successful reconnect resets the backoff');
+    assert.equal(status.loggedOut, false, 'a blip must never look like an unlink');
+  });
+});
+
+test('only the phone unlinking the device stops the watcher', async () => {
+  const fake = fakeBaileys();
+  const unlinked = [];
+
+  await withWatcher('unlinked', fake, async () => {
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 401 } } }
+    });
+
+    const status = callWatcherStatus('unlinked');
+    assert.equal(status.loggedOut, true);
+    assert.equal(status.reconnecting, false, 'an unlink must not retry forever');
+    assert.deepEqual(unlinked, ['unlinked'], 'the platform is told a rescan is needed');
+
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    assert.equal(fake.sockets.length, 1, 'no socket is reopened after an unlink');
+  }, { onLoggedOut: id => unlinked.push(id) });
+});
+
+test('a call offer reaches the handler with the socket that saw it', async () => {
+  const fake = fakeBaileys();
+  const seen = [];
+
+  await withWatcher('offers', fake, async () => {
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    fake.sockets[0].emit('call', [{ id: 'C1', from: '77476884956@s.whatsapp.net', status: 'offer' }]);
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].call.id, 'C1');
+    assert.equal(seen[0].sock, fake.sockets[0], 'rejection must go over the same socket');
+  }, { onIncomingCall: (call, sock) => { seen.push({ call, sock }); } });
+});
+
+test('a stale socket that keeps firing is ignored after a reconnect', async () => {
+  const fake = fakeBaileys();
+  const seen = [];
+
+  await withWatcher('stale', fake, async () => {
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 440 } } }
+    });
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    assert.equal(fake.sockets.length, 2);
+
+    // The old socket is a previous generation; a late event on it would
+    // otherwise hand the same call to the rejection ladder twice.
+    fake.sockets[0].emit('call', [{ id: 'OLD', from: '7747@s.whatsapp.net', status: 'offer' }]);
+    fake.sockets[1].emit('call', [{ id: 'NEW', from: '7747@s.whatsapp.net', status: 'offer' }]);
+
+    assert.deepEqual(seen.map(c => c.id), ['NEW']);
+  }, { onIncomingCall: call => { seen.push(call); } });
+});
+
+test('a connect that throws still leaves a retry armed', async () => {
+  let attempts = 0;
+  const fake = fakeBaileys();
+  const failingLoader = async () => {
+    const real = await fake.loader();
+    return {
+      ...real,
+      default: (...args) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('socket construction failed');
+        return real.default(...args);
+      }
+    };
+  };
+
+  __test._setBaileysForTest(failingLoader);
+  const authDir = tmpAuthDir('throws');
+  try {
+    await startCallWatcher('throws', { authDir, logger: quietLogger });
+    // The first connect blew up. Before, that took the retry chain down with
+    // it and the tenant stayed dark until a redeploy.
+    assert.equal(callWatcherStatus('throws').reconnecting, true);
+
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    assert.equal(attempts, 2, 'the watcher retried on its own');
+    assert.equal(callWatcherStatus('throws').watching, true);
+  } finally {
+    stopCallWatcher('throws');
+    __test._setBaileysForTest(null);
+    fs.rmSync(authDir, { recursive: true, force: true });
+  }
+});
+
+test('stopping the watcher really stops it, timers and all', async () => {
+  const fake = fakeBaileys();
+  __test._setBaileysForTest(fake.loader);
+  const authDir = tmpAuthDir('stops');
+
+  try {
+    await startCallWatcher('stops', { authDir, logger: quietLogger });
+    fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 428 } } }
+    });
+    assert.equal(callWatcherStatus('stops').reconnecting, true);
+
+    assert.equal(stopCallWatcher('stops'), true);
+    assert.deepEqual(callWatcherStatus('stops'), {
+      watching: false, connected: false, loggedOut: false, reconnecting: false, attempts: 0
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    assert.equal(fake.sockets.length, 1, 'a stopped watcher must not reopen a socket');
+    assert.equal(__test._getWatchersForTest().has('stops'), false);
+  } finally {
+    __test._setBaileysForTest(null);
+    fs.rmSync(authDir, { recursive: true, force: true });
+  }
+});
