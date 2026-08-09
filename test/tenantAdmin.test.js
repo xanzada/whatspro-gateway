@@ -40,17 +40,17 @@ test('an id derived from a name is always a legal instance id', () => {
 });
 
 test('the platform fills in what nobody should have to type', () => {
-  withEnv({ WHATSPRO_TENANT_DOMAIN_SUFFIX: 'bekaba.com', WHATSPRO_DEFAULT_WORK_HOURS: '10:00 - 22:00' }, () => {
+  withEnv({ WHATSPRO_TENANT_DOMAIN_SUFFIX: 'alemi.kz', WHATSPRO_DEFAULT_WORK_HOURS: '10:00 - 22:00' }, () => {
     const filled = admin.applyDefaults({ brand: 'Crazy суши', whatsappPhone: '+7 701 555 01 01' });
     assert.equal(filled.instanceId, 'crazy-sushi');
-    assert.equal(filled.domain, 'https://crazy-sushi.bekaba.com');
+    assert.equal(filled.domain, 'https://crazy-sushi.alemi.kz');
     assert.equal(filled.workHours, '10:00 - 22:00');
     assert.equal(filled.adminPhone, '+77015550101', 'the owner is on the restaurant number until told otherwise');
   });
 });
 
 test('anything typed by hand wins over the derived value', () => {
-  withEnv({ WHATSPRO_TENANT_DOMAIN_SUFFIX: 'bekaba.com' }, () => {
+  withEnv({ WHATSPRO_TENANT_DOMAIN_SUFFIX: 'alemi.kz' }, () => {
     const filled = admin.applyDefaults({
       brand: 'Crazy суши',
       instanceId: 'prestige',
@@ -96,13 +96,13 @@ test('every generated secret is unique and long enough to be one', () => {
 });
 
 test('a restaurant gets its own set of secrets, never a copy of anyone else\'s', () => {
-  const first = admin.platformFields('https://whatspro.bekaba.com');
-  const second = admin.platformFields('https://whatspro.bekaba.com');
+  const first = admin.platformFields('https://whatspro.alemi.kz');
+  const second = admin.platformFields('https://whatspro.alemi.kz');
   for (const key of ['whatspro_api_token', 'webhook_secret', 'kanban_secret', 'crm_secret_token']) {
     assert.notEqual(first[key], second[key], `${key} must differ between two restaurants`);
   }
-  assert.equal(first.whatspro_send_url, 'https://whatspro.bekaba.com/api/send');
-  assert.equal(first.whatspro_presence_url, 'https://whatspro.bekaba.com/api/presence');
+  assert.equal(first.whatspro_send_url, 'https://whatspro.alemi.kz/api/send');
+  assert.equal(first.whatspro_presence_url, 'https://whatspro.alemi.kz/api/presence');
 });
 
 test('cloning copies business settings but derives an isolated host, session and secrets', async t => {
@@ -116,7 +116,7 @@ test('cloning copies business settings but derives an isolated host, session and
         instance_id: 'source',
         brand: 'Source',
         whatsapp_phone: '+77015550101',
-        domain: 'https://source.bekaba.com',
+        domain: 'https://source.alemi.kz',
         address: 'Abay 1',
         work_hours: '09:00 - 23:00',
         prompt_mode: 'custom',
@@ -126,7 +126,7 @@ test('cloning copies business settings but derives an isolated host, session and
       }
     : null;
   tenantStore.createRow = async row => { stored = row; return row; };
-  process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX = 'bekaba.com';
+  process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX = 'alemi.kz';
   t.after(() => {
     tenantStore.findRow = originalFind;
     tenantStore.createRow = originalCreate;
@@ -140,11 +140,11 @@ test('cloning copies business settings but derives an isolated host, session and
     whatsappPhone: '',
     domain: '',
     systemPrompt: 'SOURCE PROMPT'
-  }, { publicBase: 'https://whatspro.bekaba.com', sharedPrompt: 'SHARED' });
+  }, { publicBase: 'https://whatspro.alemi.kz', sharedPrompt: 'SHARED' });
 
   assert.equal(stored.instance_id, 'source-copy');
   assert.equal(stored.whatsapp_phone, '', 'a WhatsApp number/session is never shared by a clone');
-  assert.equal(stored.domain, 'https://source-copy.bekaba.com');
+  assert.equal(stored.domain, 'https://source-copy.alemi.kz');
   assert.equal(stored.address, 'Abay 1');
   assert.notEqual(stored.whatspro_api_token, 'source-api-secret');
   assert.notEqual(stored.webhook_secret, 'source-webhook-secret');
@@ -165,7 +165,7 @@ test('a presentable tenant carries no secret, only whether one exists', () => {
     instance_id: 'prestige',
     brand: 'Crazy суши',
     whatsapp_phone: '+77769156184',
-    domain: 'https://prestige.bekaba.com/',
+    domain: 'https://prestige.alemi.kz/',
     work_hours: '09:00 - 03:00',
     prompt_mode: 'custom',
     system_prompt: 'PROMPT',
@@ -242,7 +242,7 @@ test('Excel import preserves existing keys and generates isolated keys for new t
       active: true,
       bot_enabled: true
     }
-  ], { publicBase: 'https://whatspro.bekaba.com', sharedPrompt: 'Shared prompt' });
+  ], { publicBase: 'https://whatspro.alemi.kz', sharedPrompt: 'Shared prompt' });
 
   assert.deepEqual(
     { imported: result.imported, created: result.created, updated: result.updated },

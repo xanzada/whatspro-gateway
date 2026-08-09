@@ -1,6 +1,6 @@
 # Жаңа фаст-фуд желісін қосу
 
-Бәрі бір беттен жасалады: **https://whatspro.bekaba.com/tenants**
+Бәрі бір беттен жасалады: **https://whatspro.alemi.kz/tenants**
 
 Бет телефонға да ыңғайлы. Барлық конфигурация WhatsPro платформасының Redis
 қоймасында оқшауланып сақталады; токендер, құпия кілттер және қызметтік
@@ -73,7 +73,7 @@
 
 ```bash
 H="x-api-key: $WHATSPRO_API_TOKEN"
-B=https://whatspro.bekaba.com
+B=https://whatspro.alemi.kz
 
 curl -H "$H" $B/api/wa/tenants                     # бәрінің дайындығы
 curl -H "$H" $B/api/wa/tenants/prestige            # біреуінің егжей-тегжейі

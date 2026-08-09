@@ -13,7 +13,7 @@ function completeRow(overrides = {}) {
     instance_id: 'prestige',
     whatsapp_phone: '77015550101',
     domain: 'prestige.kz',
-    whatspro_base_url: 'https://wa.bekaba.com',
+    whatspro_base_url: 'https://wa.alemi.kz',
     whatspro_api_token: 'a'.repeat(32),
     system_prompt: 'x'.repeat(400),
     webhook_secret: 'b'.repeat(24),
@@ -56,9 +56,9 @@ test('every column the bot cannot run without blocks readiness on its own', () =
 });
 
 test('a column that is filled but unusable is caught, not counted as done', () => {
-  // The failure this exists for: somebody pastes "wa.bekaba.com" without the
+  // The failure this exists for: somebody pastes "wa.alemi.kz" without the
   // scheme, and the send URL silently never resolves.
-  assert.equal(checkFor(evaluateTenant(completeRow({ whatspro_base_url: 'wa.bekaba.com' })), 'whatspro_base_url').code, 'INVALID');
+  assert.equal(checkFor(evaluateTenant(completeRow({ whatspro_base_url: 'wa.alemi.kz' })), 'whatspro_base_url').code, 'INVALID');
   assert.equal(checkFor(evaluateTenant(completeRow({ whatsapp_phone: '7701' })), 'whatsapp_phone').code, 'INVALID');
   assert.equal(checkFor(evaluateTenant(completeRow({ whatspro_api_token: 'short' })), 'whatspro_api_token').code, 'INVALID');
   assert.equal(checkFor(evaluateTenant(completeRow({ system_prompt: 'Сәлем айт' })), 'system_prompt').code, 'INVALID');

@@ -97,11 +97,11 @@ const server = http.createServer((request, response) => {
         success: true,
         instances: [{ instanceId: 'prestige', label: 'Crazy суши' }, { instanceId: 'maki', label: 'Маки' }].concat(extraInstances)
       });
-      if (url.pathname === '/api/wa/tenant-defaults') return json({ domainSuffix: 'bekaba.com', workHours: '09:00 - 23:00' });
+      if (url.pathname === '/api/wa/tenant-defaults') return json({ domainSuffix: 'alemi.kz', workHours: '09:00 - 23:00' });
       if (url.pathname.endsWith('/settings')) {
         const isPrestige = url.pathname.includes('prestige');
         return json({ tenant: {
-          domain: isPrestige ? 'prestige.bekaba.com' : 'maki.alemi.kz',
+          domain: isPrestige ? 'prestige.alemi.kz' : 'maki.alemi.kz',
           whatsappPhone: isPrestige ? '+77769156184' : '+77067150899',
           systemPrompt: isPrestige ? '# PRESTIGE — BRAND VOICE' : 'Сәлем'
         } });

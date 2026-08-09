@@ -212,9 +212,22 @@ test('chat header uses tenant brand config and archived chats keep the composer 
 });
 
 
-test('Redis compose keeps shared override support and durable local AOF', async () => {
-  const compose = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'docker-compose.yml'), 'utf8');
+test('deploy config keeps shared Redis reachability, local durability and reproducible installs', async () => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const compose = await fs.readFile(path.join(__dirname, '..', 'docker-compose.yml'), 'utf8');
   assert.match(compose, /REDIS_URL=\$\{REDIS_URL:-redis:\/\/redis_local:6379\}/);
   assert.match(compose, /--appendonly["']?,?\s*["']yes/);
   assert.match(compose, /--appendfsync["']?,?\s*["']everysec/);
+  const whatsproService = compose.slice(compose.indexOf('\n  whatspro:'), compose.indexOf('\n  redis_local:'));
+  assert.match(whatsproService, /networks:\s*\r?\n\s*- default\s*\r?\n\s*- dokploy-network/);
+  assert.match(whatsproService, /\/health\/detailed/);
+
+  const dockerfile = await fs.readFile(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /RUN npm ci --omit=dev/);
+
+  const example = await fs.readFile(path.join(__dirname, '..', '.env.example'), 'utf8');
+  assert.match(example, /^WHATSPRO_PUBLIC_URL=https:\/\/whatspro\.alemi\.kz$/m);
+  assert.match(example, /^WHATSPRO_TENANT_DOMAIN_SUFFIX=alemi\.kz$/m);
+  assert.match(example, /^OPENBOT_WEBHOOK_URL=https:\/\/openbot\.alemi\.kz\/whatspro-webhook$/m);
 });

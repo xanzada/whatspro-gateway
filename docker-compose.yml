@@ -14,6 +14,19 @@ services:
       - NODE_ENV=production
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
+    networks:
+      - default
+      - dokploy-network
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health/detailed').then(async r => { const body = await r.json(); if (!r.ok || body.ok !== true) process.exit(1); }).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 90s
     # Every WhatsApp instance carries its own Chromium, so this container grows
     # with the tenant list and had no ceiling at all: one runaway client could
     # take the host down with Redis, Traefik and the bot on it. Cap it, and let
@@ -73,5 +86,6 @@ volumes:
   backup_state:
 
 networks:
+  default:
   dokploy-network:
     external: true

@@ -30,7 +30,7 @@ function isAbsoluteHttpUrl(value) {
   }
 }
 
-// The site column is written as bekaba.com, https://bekaba.com or with a path
+// The site column is written as alemi.kz, https://alemi.kz or with a path
 // depending on who filled it in. api_bot.php is reachable in all three cases, so
 // accept them and only reject what is not a hostname at all.
 function isUsableDomain(value) {
