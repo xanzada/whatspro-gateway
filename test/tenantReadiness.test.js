@@ -13,6 +13,9 @@ function completeRow(overrides = {}) {
     instance_id: 'prestige',
     whatsapp_phone: '77015550101',
     domain: 'prestige.kz',
+    alemi_api_url: 'https://hub.alemi.kz',
+    alemi_instance: 'prestige',
+    alemi_secret: 'externally-issued-alemi-secret',
     whatspro_base_url: 'https://wa.alemi.kz',
     whatspro_api_token: 'a'.repeat(32),
     system_prompt: 'x'.repeat(400),
@@ -47,7 +50,7 @@ test('tenant list exposes bot control without changing WhatsApp active state', (
 });
 
 test('every column the bot cannot run without blocks readiness on its own', () => {
-  for (const column of ['whatsapp_phone', 'domain', 'whatspro_base_url', 'whatspro_api_token', 'system_prompt', 'webhook_secret']) {
+  for (const column of ['whatsapp_phone', 'domain', 'alemi_api_url', 'alemi_instance', 'alemi_secret', 'whatspro_base_url', 'whatspro_api_token', 'system_prompt', 'webhook_secret']) {
     const report = evaluateTenant(completeRow({ [column]: '' }));
     assert.equal(report.summary.ready, false, `${column} missing must block`);
     assert.deepEqual(report.summary.blocking, [column]);
@@ -63,6 +66,9 @@ test('a column that is filled but unusable is caught, not counted as done', () =
   assert.equal(checkFor(evaluateTenant(completeRow({ whatspro_api_token: 'short' })), 'whatspro_api_token').code, 'INVALID');
   assert.equal(checkFor(evaluateTenant(completeRow({ system_prompt: 'Сәлем айт' })), 'system_prompt').code, 'INVALID');
   assert.equal(checkFor(evaluateTenant(completeRow({ domain: 'not a domain' })), 'domain').code, 'INVALID');
+  assert.equal(checkFor(evaluateTenant(completeRow({ alemi_api_url: 'http://hub.alemi.kz' })), 'alemi_api_url').code, 'INVALID');
+  assert.equal(checkFor(evaluateTenant(completeRow({ alemi_api_url: 'https://user:pass@hub.alemi.kz' })), 'alemi_api_url').code, 'INVALID');
+  assert.equal(checkFor(evaluateTenant(completeRow({ alemi_instance: 'not valid!' })), 'alemi_instance').code, 'INVALID');
 });
 
 test('the site column is accepted in every shape an operator writes it', () => {
@@ -90,7 +96,7 @@ test('alternate column spellings count as filled', () => {
 test('two restaurants sharing one WhatsApp number is reported as a collision', () => {
   const collisions = collisionsAcross([
     completeRow({ instance_id: 'prestige' }),
-    completeRow({ instance_id: 'shymkent', whatspro_api_token: 'd'.repeat(32) })
+    completeRow({ instance_id: 'shymkent', alemi_instance: 'shymkent', whatspro_api_token: 'd'.repeat(32) })
   ]);
   const shared = collisions.find(entry => entry.kind === 'shared_whatsapp_phone');
   assert.ok(shared, 'the same number in two rows must surface');
@@ -100,11 +106,22 @@ test('two restaurants sharing one WhatsApp number is reported as a collision', (
 test('two restaurants sharing one API token is reported, because one could read the other', () => {
   const collisions = collisionsAcross([
     completeRow({ instance_id: 'prestige' }),
-    completeRow({ instance_id: 'shymkent', whatsapp_phone: '77015550202' })
+    completeRow({ instance_id: 'shymkent', alemi_instance: 'shymkent', whatsapp_phone: '77015550202' })
   ]);
   const shared = collisions.find(entry => entry.kind === 'shared_api_token');
   assert.ok(shared);
   assert.deepEqual(shared.instances.sort(), ['prestige', 'shymkent']);
+});
+
+test('two WhatsPro tenants sharing one Alemi instance are reported as ambiguous', () => {
+  const collisions = collisionsAcross([
+    completeRow({ instance_id: 'prestige' }),
+    completeRow({ instance_id: 'shymkent', whatsapp_phone: '77015550202', whatspro_api_token: 'd'.repeat(32) })
+  ]);
+  const shared = collisions.find(entry => entry.kind === 'shared_alemi_instance');
+  assert.ok(shared);
+  assert.deepEqual(shared.instances.sort(), ['prestige', 'shymkent']);
+  assert.equal(JSON.stringify(shared).includes('externally-issued-alemi-secret'), false);
 });
 
 test('a duplicated instance_id is reported because which row wins is not defined', () => {
@@ -118,7 +135,7 @@ test('a duplicated instance_id is reported because which row wins is not defined
 test('a colliding restaurant is not counted as ready even though its own row is perfect', () => {
   const report = evaluateAll([
     completeRow({ instance_id: 'prestige' }),
-    completeRow({ instance_id: 'shymkent', whatspro_api_token: 'd'.repeat(32) })
+    completeRow({ instance_id: 'shymkent', alemi_instance: 'shymkent', whatspro_api_token: 'd'.repeat(32) })
   ]);
   assert.equal(report.total, 2);
   assert.equal(report.ready, 0, 'a shared number makes both unsafe, not neither');
@@ -131,6 +148,8 @@ test('fifty clean restaurants all read as ready and produce no collisions', () =
     brand: `Restaurant ${index}`,
     whatsapp_phone: `7701555${String(index).padStart(4, '0')}`,
     whatspro_api_token: `token${String(index).padStart(2, '0')}${'z'.repeat(26)}`,
+    alemi_instance: `rest${index}`,
+    alemi_secret: `alemi-secret-${index}`,
     domain: `rest${index}.kz`
   }));
   const report = evaluateAll(rows);
@@ -186,5 +205,6 @@ test('the readiness route is owner-only and never returns a secret', async t => 
   const body = await response.text();
   assert.equal(body.includes('a'.repeat(32)), false, 'the API token must never appear in the report');
   assert.equal(body.includes('b'.repeat(24)), false, 'nor the webhook secret');
+  assert.equal(body.includes('externally-issued-alemi-secret'), false, 'nor the Alemi secret');
   assert.equal(JSON.parse(body).tenants[0].instanceId, 'prestige');
 });

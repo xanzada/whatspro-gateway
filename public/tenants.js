@@ -74,6 +74,11 @@
       general: 'Жалпы', whatsapp: 'WhatsApp', prompt: 'Промпт', health: 'Күй',
       configuration: 'Конфигурация', back: 'Артқа', address: 'Мекенжай', hours: 'Жұмыс уақыты',
       domain: 'Домен', source: 'Дереккөзі', lastCheck: 'Соңғы тексеру', liveStatus: 'Нақты күй',
+      alemiApiUrl: 'Alemi API мекенжайы', alemiInstance: 'Alemi instance', alemiSecret: 'Alemi API кілті',
+      alemiSecretHint: 'Кілт тек сақтауға жіберіледі; кейін экранда қайта көрсетілмейді.',
+      alemiSecretStored: 'Кілт сақталған', alemiSecretMissing: 'Кілт енгізілмеген', alemiSecretWillUpdate: 'Жаңа кілт сақталады',
+      rotateAlemiSecret: 'Alemi кілтін жаңарту', rotateAlemiSecretTitle: 'Alemi API кілтін орнату немесе ауыстыру',
+      rotateAlemiSecretCopy: 'Жаңа кілтті енгізіңіз. Қауіпсіздік үшін ағымдағы мән көрсетілмейді.', secretUpdated: 'Alemi кілті жаңартылды',
       liveStatusCopy: 'Бұл күй WhatsPro сессиясынан тікелей алынды.',
       qrTitle: 'WhatsApp-ты байланыстыру', qrCopy: 'Телефоныңызда WhatsApp → Байланыстырылған құрылғылар → Құрылғыны байланыстыру бөлімін ашып, осы кодты сканерлеңіз.',
       qrWaiting: 'QR дайын — телефонмен сканерлеңіз', qrConnected: 'WhatsApp сәтті қосылды', qrStart: 'Сессия іске қосылуда…',
@@ -140,6 +145,11 @@
       general: 'Общее', whatsapp: 'WhatsApp', prompt: 'Промпт', health: 'Состояние',
       configuration: 'Конфигурация', back: 'Назад', address: 'Адрес', hours: 'Часы работы',
       domain: 'Домен', source: 'Источник', lastCheck: 'Последняя проверка', liveStatus: 'Фактический статус',
+      alemiApiUrl: 'Адрес Alemi API', alemiInstance: 'Alemi instance', alemiSecret: 'Ключ Alemi API',
+      alemiSecretHint: 'Ключ отправляется только на сохранение и больше не показывается на экране.',
+      alemiSecretStored: 'Ключ сохранён', alemiSecretMissing: 'Ключ не задан', alemiSecretWillUpdate: 'Будет сохранён новый ключ',
+      rotateAlemiSecret: 'Обновить ключ Alemi', rotateAlemiSecretTitle: 'Задать или заменить ключ Alemi API',
+      rotateAlemiSecretCopy: 'Введите новый ключ. Текущее значение не показывается из соображений безопасности.', secretUpdated: 'Ключ Alemi обновлён',
       liveStatusCopy: 'Этот статус получен напрямую из сессии WhatsPro.',
       qrTitle: 'Подключить WhatsApp', qrCopy: 'Откройте WhatsApp → Связанные устройства → Привязка устройства и отсканируйте этот код.',
       qrWaiting: 'QR готов — отсканируйте телефоном', qrConnected: 'WhatsApp успешно подключён', qrStart: 'Сессия запускается…',
@@ -565,6 +575,7 @@
   function actionButtons(tenant, sheet) {
     var html = '<button type="button" data-action="details" data-instance="' + attr(tenant.instanceId) + '">' + icon('eye') + '<span>' + t('viewDetails') + '</span></button>';
     if (!tenant.virtual) html += '<button type="button" data-action="edit" data-instance="' + attr(tenant.instanceId) + '">' + icon('edit') + '<span>' + t('edit') + '</span></button>' +
+      '<button type="button" data-action="alemi-secret" data-instance="' + attr(tenant.instanceId) + '">' + icon('link') + '<span>' + t('rotateAlemiSecret') + '</span></button>' +
       '<button type="button" data-action="duplicate" data-instance="' + attr(tenant.instanceId) + '">' + icon('copy') + '<span>' + t('duplicate') + '</span></button>' +
       '<button type="button" data-action="export-excel" data-instance="' + attr(tenant.instanceId) + '">' + icon('download') + '<span>' + t('exportExcel') + '</span></button>' +
       '<button type="button" data-action="bot-toggle" data-instance="' + attr(tenant.instanceId) + '" data-enabled="' + (tenant.botEnabled === false ? 'true' : 'false') + '">' +
@@ -646,7 +657,10 @@
       '<section class="detail-section" id="section-general"><div class="detail-section-head"><strong>' + t('general') +
       '</strong></div><div class="detail-body"><div class="info-grid">' + infoItem(t('restaurantName'), tenant.brand) +
       infoItem(t('instance'), tenant.instanceId) + infoItem(t('domain'), detail.domain) + infoItem(t('address'), detail.address) +
-      infoItem(t('hours'), detail.workHours) + infoItem(t('source'), 'WhatsPro Platform') +
+      infoItem(t('hours'), detail.workHours) + infoItem(t('alemiApiUrl'), detail.alemiApiUrl) +
+      infoItem(t('alemiInstance'), detail.alemiInstance) +
+      infoItem(t('alemiSecret'), detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') : t('alemiSecretMissing')) +
+      infoItem(t('source'), 'WhatsPro Platform') +
       '</div></div></section>' +
       '<section class="detail-section" id="section-whatsapp"><div class="detail-section-head"><strong>WhatsApp</strong><span>' + t('realTime') +
       '</span></div><div class="detail-body"><div class="info-grid">' + infoItem(t('phone'), detail.whatsappPhone || t('noPhone')) +
@@ -663,7 +677,9 @@
       '<section class="detail-section" id="section-configuration"><div class="detail-section-head"><strong>' + t('configuration') +
       '</strong></div><div class="detail-body"><pre class="log-block">' + escapeHtml(JSON.stringify({
         instanceId: tenant.instanceId, active: tenant.active !== false, botEnabled: tenant.botEnabled !== false, status: live.status || 'unknown',
-        hasStoredSession: Boolean(live.hasStoredSession)
+        hasStoredSession: Boolean(live.hasStoredSession), alemiApiUrl: detail.alemiApiUrl || '',
+        alemiInstance: detail.alemiInstance || tenant.instanceId,
+        alemiSecretSet: Boolean(detail.secrets && detail.secrets.alemiSecret)
       }, null, 2)) + '</pre></div></section></div></div></div>';
   }
   function render() {
@@ -796,6 +812,9 @@
     qrTimer = 0;
     qrInstanceId = '';
     pendingImportFile = null;
+    // Wizard state may hold a just-entered write-only key. Drop its event
+    // closure as soon as the modal closes so it cannot linger in page state.
+    modalRoot.onclick = null;
     modalRoot.innerHTML = '';
     document.body.style.overflow = '';
     if (previousFocus && document.contains(previousFocus)) previousFocus.focus({ preventScroll: true });
@@ -946,6 +965,8 @@
       brand: String(form.brand || '').trim(), address: String(form.address || '').trim(),
       whatsappPhone: String(form.whatsappPhone || '').trim(), workHours: String(form.workHours || '').trim(),
       domain: String(form.domain || '').trim(), systemPrompt: String(form.systemPrompt || '').trim(),
+      alemiApiUrl: String(form.alemiApiUrl || '').trim(), alemiInstance: String(form.alemiInstance || '').trim(),
+      alemiSecret: String(form.alemiSecret || ''),
       startNow: form.startNow !== false
     };
   }
@@ -955,8 +976,11 @@
     var data = existing ? {
       brand: existing.brand || '', address: existing.address || '', whatsappPhone: existing.whatsappPhone || '',
       workHours: existing.workHours || defaults.workHours, domain: existing.domain || '',
-      systemPrompt: existing.systemPrompt || '', startNow: existing.startNow !== false
-    } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '', startNow: true };
+      systemPrompt: existing.systemPrompt || '', alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
+      alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: '',
+      alemiSecretSet: Boolean(existing.secrets && existing.secrets.alemiSecret), startNow: existing.startNow !== false
+    } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '',
+      alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: '', alemiSecret: '', alemiSecretSet: false, startNow: true };
     var editingId = !cloneSourceId && existing && existing.instanceId;
     function draw() {
       var body = '';
@@ -971,12 +995,21 @@
         '</small></div><div class="field"><label for="wizard-domain">' + t('domain') + ' <span class="optional">(' + t('optional') +
         ')</span></label><input id="wizard-domain" name="domain" value="' + attr(data.domain) + '" placeholder="' + attr((slugify(data.brand) || 'restaurant') + (defaults.domainSuffix ? '.' + defaults.domainSuffix : '.kz')) +
         '"><small>' + t('domainHint') + '</small></div></div>';
-      if (step === 2) body = '<div class="field"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
+      if (step === 2) body = '<div class="form-grid"><div class="field"><label for="wizard-alemi-url">' + t('alemiApiUrl') +
+        '</label><input id="wizard-alemi-url" name="alemiApiUrl" type="url" value="' + attr(data.alemiApiUrl) +
+        '" inputmode="url" autocomplete="url"></div><div class="field"><label for="wizard-alemi-instance">' + t('alemiInstance') +
+        '</label><input id="wizard-alemi-instance" name="alemiInstance" value="' + attr(data.alemiInstance) + '" autocomplete="off"></div>' +
+        '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
+        attr(data.alemiSecret) + '" autocomplete="new-password"><small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
+        '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
         ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
-        '</textarea><small>' + t('promptHint') + '</small></div>';
+        '</textarea><small>' + t('promptHint') + '</small></div></div>';
       if (step === 3) body = '<div class="review-grid">' +
         [['restaurantName', data.brand], ['instance', editingId || slugify(data.brand)], ['phone', data.whatsappPhone || '—'],
-          ['hours', data.workHours || '—'], ['domain', data.domain || '—'], ['address', data.address || '—'], ['prompt', data.systemPrompt || t('sharedPrompt')]]
+          ['hours', data.workHours || '—'], ['domain', data.domain || '—'], ['address', data.address || '—'],
+          ['alemiApiUrl', data.alemiApiUrl], ['alemiInstance', data.alemiInstance],
+          ['alemiSecret', data.alemiSecret ? t('alemiSecretWillUpdate') : (data.alemiSecretSet ? t('alemiSecretStored') : t('alemiSecretMissing'))],
+          ['prompt', data.systemPrompt || t('sharedPrompt')]]
           .map(function (row) { return '<div class="review-row"><span>' + t(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>'; }).join('') +
         '</div><label class="checkbox" for="wizard-start"><input id="wizard-start" type="checkbox" name="startNow" ' + (data.startNow ? 'checked' : '') + '><span>' + t('startImmediately') + '</span></label>';
       var footer = '<div class="modal-footer"><button class="button ghost" type="button" ' +
@@ -991,6 +1024,7 @@
         if (input.type === 'checkbox') data[input.name] = input.checked;
         else data[input.name] = input.value;
       });
+      if (!data.alemiInstance && data.brand) data.alemiInstance = editingId || slugify(data.brand);
       if (!editingId && data.brand && !data.domain && step === 1 && defaults.domainSuffix) data.domain = slugify(data.brand) + '.' + defaults.domainSuffix;
     }
     modalRoot.onclick = function (event) {
@@ -1004,6 +1038,13 @@
         input.closest('.field').classList.add('invalid');
         input.focus();
         toast(t('requiredField'), t('restaurantName'), true);
+        return;
+      }
+      if (step === 2 && !data.alemiSecret && !data.alemiSecretSet) {
+        var secretInput = $('[name="alemiSecret"]', modalRoot);
+        secretInput.closest('.field').classList.add('invalid');
+        secretInput.focus();
+        toast(t('requiredField'), t('alemiSecret'), true);
         return;
       }
       if (step < 3) { step += 1; draw(); return; }
@@ -1040,13 +1081,17 @@
       instanceId: generatedId, brand: data.brand, whatsappPhone: data.whatsappPhone || '',
       domain: data.domain || '', address: data.address || '', workHours: data.workHours || '',
       adminPhone: data.whatsappPhone || '', promptMode: data.systemPrompt ? 'custom' : 'shared',
-      systemPrompt: data.systemPrompt || '', active: true
+      systemPrompt: data.systemPrompt || '', alemiApiUrl: data.alemiApiUrl,
+      alemiInstance: data.alemiInstance || generatedId, alemiSecret: data.alemiSecret || '', active: true
     };
     drawProgress();
     var createPath = cloneSourceId
       ? '/api/wa/tenants/' + encodeURIComponent(cloneSourceId) + '/clone'
       : '/api/wa/tenants';
-    api('POST', createPath, payload).then(function (result) {
+    var createRequest = api('POST', createPath, payload);
+    data.alemiSecret = '';
+    payload.alemiSecret = '';
+    createRequest.then(function (result) {
       generatedId = result.instanceId || generatedId;
       progress = 1; drawProgress();
       return ensureInstance(generatedId, data.brand);
@@ -1061,11 +1106,17 @@
       .catch(function (error) { drawProgress(error, false); });
   }
   function saveRestaurant(instanceId, data) {
-    api('PATCH', '/api/wa/tenants/' + encodeURIComponent(instanceId), {
+    var payload = {
       brand: data.brand, whatsappPhone: data.whatsappPhone || '', domain: data.domain || '',
       address: data.address || '', workHours: data.workHours || '', adminPhone: data.whatsappPhone || '',
-      promptMode: data.systemPrompt ? 'custom' : 'shared', systemPrompt: data.systemPrompt || '', active: true
-    }).then(function () {
+      promptMode: data.systemPrompt ? 'custom' : 'shared', systemPrompt: data.systemPrompt || '',
+      alemiApiUrl: data.alemiApiUrl, alemiInstance: data.alemiInstance || instanceId,
+      alemiSecret: data.alemiSecret || '', active: true
+    };
+    var saveRequest = api('PATCH', '/api/wa/tenants/' + encodeURIComponent(instanceId), payload);
+    data.alemiSecret = '';
+    payload.alemiSecret = '';
+    saveRequest.then(function () {
       closeModal();
       toast(t('saved'), data.brand);
       return ensureInstance(instanceId, data.brand).then(function () { return loadData(true); });
@@ -1088,8 +1139,22 @@
       workHours: detail.workHours || defaults.workHours,
       domain: '',
       systemPrompt: detail.systemPrompt || '',
+      alemiApiUrl: detail.alemiApiUrl || 'https://hub.alemi.kz',
+      alemiInstance: '', alemiSecret: '', alemiSecretSet: false,
       startNow: true
     }, { cloneSourceId: instanceId });
+  }
+  function openAlemiSecret(instanceId) {
+    var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
+    if (!tenant || tenant.virtual) return;
+    var detail = settings.get(instanceId) || {};
+    openModal(modalHeader(t('rotateAlemiSecretTitle'), t('rotateAlemiSecretCopy')) +
+      '<div class="modal-body"><div class="field"><label for="alemi-secret-input">' + t('alemiSecret') +
+      '</label><input id="alemi-secret-input" name="alemiSecret" type="password" autocomplete="new-password" autofocus>' +
+      '<small>' + (detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
+      '</small></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
+      '</button><span class="spacer"></span><button class="button primary" data-save-alemi-secret data-instance="' + attr(instanceId) + '">' +
+      t('save') + '</button></div>');
   }
   function openDelete(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
@@ -1190,6 +1255,7 @@
       } else if (name === 'details') openDetails(instanceId);
       else if (name === 'qr') { closeModal(); window.setTimeout(function () { openQrModal(instanceId); }, 0); }
       else if (name === 'edit') { closeModal(); window.setTimeout(function () { openEdit(instanceId); }, 0); }
+      else if (name === 'alemi-secret') { closeModal(); window.setTimeout(function () { openAlemiSecret(instanceId); }, 0); }
       else if (name === 'duplicate') { closeModal(); window.setTimeout(function () { openDuplicate(instanceId); }, 0); }
       else if (name === 'export-excel') { closeModal(); exportWorkbook(instanceId); }
       else if (name === 'bot-toggle') toggleBot(instanceId, action.dataset.enabled === 'true');
@@ -1216,6 +1282,30 @@
     }
     var close = event.target.closest('[data-modal-close]');
     if (close) { closeModal(); return; }
+    var saveAlemiSecret = event.target.closest('[data-save-alemi-secret]');
+    if (saveAlemiSecret) {
+      var secretId = saveAlemiSecret.dataset.instance;
+      var alemiSecretInput = $('[name="alemiSecret"]', modalRoot);
+      var secretValue = alemiSecretInput ? alemiSecretInput.value : '';
+      if (!secretValue.trim()) {
+        if (alemiSecretInput) { alemiSecretInput.closest('.field').classList.add('invalid'); alemiSecretInput.focus(); }
+        toast(t('requiredField'), t('alemiSecret'), true);
+        return;
+      }
+      saveAlemiSecret.disabled = true;
+      var secretRequest = api('POST', '/api/wa/tenants/' + encodeURIComponent(secretId) + '/alemi-secret', { secret: secretValue });
+      if (alemiSecretInput) alemiSecretInput.value = '';
+      secretValue = '';
+      secretRequest.then(function () {
+        closeModal();
+        toast(t('secretUpdated'), secretId);
+        return loadData(true);
+      }).catch(function (error) {
+        saveAlemiSecret.disabled = false;
+        toast(t('actionFailed'), error.message, true);
+      });
+      return;
+    }
     var deleteConfirm = event.target.closest('[data-delete-confirm]');
     if (deleteConfirm) {
       var deleteId = deleteConfirm.dataset.instance;

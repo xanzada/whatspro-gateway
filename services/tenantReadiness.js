@@ -30,9 +30,19 @@ function isAbsoluteHttpUrl(value) {
   }
 }
 
-// The site column is written as alemi.kz, https://alemi.kz or with a path
-// depending on who filled it in. api_bot.php is reachable in all three cases, so
-// accept them and only reject what is not a hostname at all.
+function isSecureAlemiUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+// The public site column is written as alemi.kz, https://alemi.kz or with a path
+// depending on who filled it in. Accept all three operator-friendly forms and
+// only reject what is not a hostname at all; direct API transport is validated
+// separately through alemi_api_url.
 function isUsableDomain(value) {
   const raw = String(value || '').trim();
   if (!raw) return false;
@@ -62,8 +72,29 @@ const FIELDS = [
     id: 'domain',
     level: REQUIRED,
     columns: ['domain', 'site_url', 'siteUrl', 'website'],
-    why: 'Мәзір, тапсырыс күйі, ас үй параметрлері және SOS сигналы осы сайттың api_bot.php файлына барады.',
+    why: 'Ресторанның ашық беті мен клиент сілтемелері осы доменді қолданады. Тікелей API байланысы бөлек Alemi API өрістерімен тексеріледі.',
     valid: isUsableDomain
+  },
+  {
+    id: 'alemi_api_url',
+    level: REQUIRED,
+    columns: ['alemi_api_url', 'alemiApiUrl'],
+    why: 'Alemi мәзірі мен тапсырыс сигналдары осы HTTPS API арқылы оқылады. Бос немесе қате болса — бот сайтпен синхрондалмайды.',
+    valid: isSecureAlemiUrl
+  },
+  {
+    id: 'alemi_instance',
+    level: REQUIRED,
+    columns: ['alemi_instance', 'alemiInstance'],
+    why: 'Alemi-дегі ресторан сәйкестендіргіші. Бос болса — сигнал қай ресторанға тиесілі екені анықталмайды.',
+    valid: value => /^[A-Za-z0-9_-]{2,128}$/.test(value)
+  },
+  {
+    id: 'alemi_secret',
+    level: REQUIRED,
+    columns: ['alemi_secret', 'alemiSecret'],
+    why: 'Alemi берген API кілті. WhatsPro оны жасамайды; дайын кілт енгізілмесе — тікелей API байланысы іске қосылмайды.',
+    valid: value => String(value).trim().length > 0
   },
   {
     id: 'whatspro_base_url',
@@ -130,6 +161,10 @@ const FIELDS = [
   }
 ];
 
+function fieldColumns(id) {
+  return FIELDS.find(field => field.id === id).columns;
+}
+
 function checkFields(record) {
   return FIELDS.map(field => {
     const value = text(record, field.columns);
@@ -146,17 +181,19 @@ function checkFields(record) {
 // Collisions only exist between rows, so they cannot be seen while validating one
 // restaurant at a time — and they are the failures that actually cross tenants.
 // A shared phone routes a customer into somebody else's chat; a shared token
-// hands one restaurant the key to another's.
+// hands one restaurant the key to another's; and a shared Alemi instance makes
+// signals ambiguous even when the WhatsPro instances themselves are unique.
 function collisionsAcross(records) {
   const byInstance = new Map();
   const byPhone = new Map();
   const byToken = new Map();
-
+  const byAlemiInstance = new Map();
   for (const record of Array.isArray(records) ? records : []) {
-    const instance = text(record, FIELDS[0].columns);
+    const instance = text(record, fieldColumns('instance_id'));
     if (!instance) continue;
-    const phone = digits(text(record, FIELDS[1].columns));
-    const token = text(record, FIELDS[4].columns);
+    const phone = digits(text(record, fieldColumns('whatsapp_phone')));
+    const token = text(record, fieldColumns('whatspro_api_token'));
+    const alemiInstance = text(record, fieldColumns('alemi_instance'));
     if (!byInstance.has(instance)) byInstance.set(instance, []);
     byInstance.get(instance).push(record);
     if (phone) {
@@ -166,6 +203,10 @@ function collisionsAcross(records) {
     if (token) {
       if (!byToken.has(token)) byToken.set(token, []);
       byToken.get(token).push(instance);
+    }
+    if (alemiInstance) {
+      if (!byAlemiInstance.has(alemiInstance)) byAlemiInstance.set(alemiInstance, []);
+      byAlemiInstance.get(alemiInstance).push(instance);
     }
   }
 
@@ -196,6 +237,16 @@ function collisionsAcross(records) {
         kind: 'shared_api_token',
         instances: unique,
         detail: `${unique.join(', ')} бір API токенді бөлісіп тұр. Бірі екіншісінің чатын аша алады.`
+      });
+    }
+  }
+  for (const [alemiInstance, instances] of byAlemiInstance) {
+    const unique = [...new Set(instances)];
+    if (unique.length > 1) {
+      collisions.push({
+        kind: 'shared_alemi_instance',
+        instances: unique,
+        detail: `Alemi instance "${alemiInstance}" ${unique.join(', ')} рестораныдарында бірдей. Сайт сигналы қате ресторанға түсуі мүмкін.`
       });
     }
   }
@@ -269,7 +320,7 @@ function isCallsDisabled(record) {
 }
 
 function evaluateTenant(record, options = {}) {
-  const instanceId = text(record, FIELDS[0].columns);
+  const instanceId = text(record, fieldColumns('instance_id'));
   const active = isActive(record);
   const checks = checkFields(record);
   const extras = [];
@@ -278,7 +329,7 @@ function evaluateTenant(record, options = {}) {
   if (options.sessions && active) extras.push(sessionCheck(instanceId, options.sessions));
   return {
     instanceId,
-    brand: text(record, FIELDS[8].columns) || instanceId,
+    brand: text(record, fieldColumns('brand')) || instanceId,
     active,
     botEnabled: isBotEnabled(record),
     callsDisabled: isCallsDisabled(record),
@@ -289,7 +340,7 @@ function evaluateTenant(record, options = {}) {
 }
 
 function evaluateAll(records, options = {}) {
-  const rows = (Array.isArray(records) ? records : []).filter(record => text(record, FIELDS[0].columns));
+  const rows = (Array.isArray(records) ? records : []).filter(record => text(record, fieldColumns('instance_id')));
   const tenants = rows.map(record => evaluateTenant(record, options));
   const collisions = collisionsAcross(rows);
   const collided = new Set(collisions.flatMap(entry => entry.instances));

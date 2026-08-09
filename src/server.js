@@ -1077,7 +1077,8 @@ app.get('/api/wa/platform-storage', requireUiOrApi, async (req, res) => {
 
 app.get('/api/wa/runtime-configs', requireMasterApi, async (_req, res) => {
   try {
-    res.json({ success: true, configs: await tenantStore.listTenantRecords() });
+    const configs = await tenantStore.listTenantRecords();
+    res.json({ success: true, configs: configs.map(tenantAdmin.runtimeListTenant) });
   } catch (error) {
     res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
   }
@@ -1188,6 +1189,18 @@ app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) 
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   try {
     res.json({ success: true, ...(await tenantAdmin.rotateSecrets(instanceId, { publicBase: publicApiBase(req) })) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// Alemi owns this credential, so it has a dedicated write-only endpoint. The
+// value is deliberately absent from both the response and all panel reads.
+app.post('/api/wa/tenants/:instanceId/alemi-secret', requireUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  try {
+    res.json({ success: true, ...(await tenantAdmin.setAlemiSecret(instanceId, req.body?.secret)) });
   } catch (error) {
     return adminError(res, error);
   }

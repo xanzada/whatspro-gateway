@@ -120,6 +120,62 @@ test('tenant shell contains an accessible responsive login gate', async () => {
   assert.doesNotMatch(source, /localStorage\.setItem\([^,]*password/i, 'the remember option must never persist a plaintext password');
 });
 
+test('tenant onboarding configures Alemi per restaurant without exposing its key', async () => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const markup = await fs.readFile(path.join(__dirname, '..', 'public', 'tenants.html'), 'utf8');
+  const ui = await fs.readFile(path.join(__dirname, '..', 'public', 'tenants.js'), 'utf8');
+  const server = await fs.readFile(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+
+  assert.match(markup, /<script src="\/tenants\.js"><\/script>/, 'the tested dynamic wizard is the script used by tenants.html');
+  assert.match(ui, /name="alemiApiUrl" type="url"/);
+  assert.match(ui, /name="alemiInstance"/);
+  assert.match(ui, /name="alemiSecret" type="password"/);
+  assert.match(ui, /autocomplete="new-password"/);
+  assert.match(ui, /data-action="alemi-secret"/);
+  assert.match(ui, /https:\/\/hub\.alemi\.kz/);
+  assert.match(ui, /ale(mi)?SecretSet/);
+  assert.doesNotMatch(ui, /localStorage\.setItem\([^,]*(?:alemi|secret)/i);
+
+  const listRoute = server.slice(server.indexOf("app.get('/api/wa/runtime-configs'"), server.indexOf("app.get('/api/wa/runtime-configs/:instanceId'"));
+  assert.match(listRoute, /runtimeListTenant/);
+  const secretRoute = server.slice(server.indexOf("app.post('/api/wa/tenants/:instanceId/alemi-secret'"), server.indexOf('// Pausing is not a flag'));
+  assert.match(secretRoute, /requireUiOrApi/);
+  assert.match(secretRoute, /tenantAdmin\.setAlemiSecret/);
+  assert.doesNotMatch(secretRoute, /res\.json\(\{[^}]*\bsecret\s*:/is, 'the response must not echo the submitted key');
+});
+
+test('Alemi key API accepts a write-only value and returns presence only', async t => {
+  const tenantAdmin = require('../services/tenantAdmin');
+  const originalSet = tenantAdmin.setAlemiSecret;
+  const previousToken = process.env.WHATSPRO_API_TOKEN;
+  let received = '';
+  tenantAdmin.setAlemiSecret = async (instanceId, secret) => {
+    received = secret;
+    return { instanceId, alemiSecretSet: true };
+  };
+  process.env.WHATSPRO_API_TOKEN = 'alemi-route-master-token';
+  t.after(() => {
+    tenantAdmin.setAlemiSecret = originalSet;
+    if (previousToken === undefined) delete process.env.WHATSPRO_API_TOKEN;
+    else process.env.WHATSPRO_API_TOKEN = previousToken;
+  });
+
+  const listener = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { listener.once('listening', resolve); listener.once('error', reject); });
+  t.after(() => new Promise(resolve => listener.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${listener.address().port}/api/wa/tenants/prestige/alemi-secret`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': 'alemi-route-master-token' },
+    body: JSON.stringify({ secret: 'write-only-alemi-secret' })
+  });
+  const raw = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(received, 'write-only-alemi-secret');
+  assert.equal(raw.includes('write-only-alemi-secret'), false);
+  assert.deepEqual(JSON.parse(raw), { success: true, instanceId: 'prestige', alemiSecretSet: true });
+});
+
 test('chat audio hydration delegates playback and ranges to the native media URL', async () => {
   const source = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   const markup = await require('node:fs/promises').readFile(require('node:path').join(__dirname, '..', 'public', 'chat.html'), 'utf8');

@@ -11,6 +11,7 @@ const {
 } = require('./tenantSnapshot');
 
 const TENANT_STORE_KEY = 'whatspro:tenants:v1';
+const ALEMI_INSTANCE_INDEX_KEY = 'whatspro:alemi-instance-owner:v1';
 
 function cleanString(value, fallback = '') {
   const text = String(value ?? fallback ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -20,6 +21,36 @@ function cleanString(value, fallback = '') {
 function normalizeInstance(value) {
   const instance = cleanString(value);
   return /^[A-Za-z0-9_-]{2,64}$/.test(instance) ? instance : '';
+}
+
+function normalizeAlemiInstance(value) {
+  const instance = cleanString(value);
+  return /^[A-Za-z0-9_-]{2,128}$/.test(instance) ? instance : '';
+}
+
+function alemiInstanceConflict(instance) {
+  const error = new Error('ALEMI_INSTANCE_ALREADY_EXISTS');
+  error.statusCode = 409;
+  error.fields = ['alemiInstance'];
+  error.instanceId = instance;
+  return error;
+}
+
+// HSETNX is the cross-process uniqueness gate. It runs before the tenant write,
+// so two replicas onboarding the same Alemi instance cannot both win.
+async function claimAlemiInstance(alemiInstance, ownerInstance) {
+  if (!alemiInstance) return false;
+  const claimed = await redisClient.sendCommand(['HSETNX', ALEMI_INSTANCE_INDEX_KEY, alemiInstance, ownerInstance]);
+  if (Number(claimed) === 1) return true;
+  const owner = await redisClient.hGet(ALEMI_INSTANCE_INDEX_KEY, alemiInstance);
+  if (owner === ownerInstance) return false;
+  throw alemiInstanceConflict(alemiInstance);
+}
+
+async function releaseAlemiInstance(alemiInstance, ownerInstance) {
+  if (!alemiInstance) return;
+  const owner = await redisClient.hGet(ALEMI_INSTANCE_INDEX_KEY, alemiInstance);
+  if (owner === ownerInstance) await redisClient.hDel(ALEMI_INSTANCE_INDEX_KEY, alemiInstance);
 }
 
 function normalizeColor(value, fallback = '') {
@@ -134,10 +165,18 @@ async function createRow(row) {
   const instance = normalizeInstance(row?.instance_id);
   if (!instance) throw new Error('BAD_INSTANCE_ID');
   const stored = { ...row, instance_id: instance, created_at: row.created_at || new Date().toISOString(), updated_at: new Date().toISOString() };
-  const created = await redisClient.sendCommand(['HSETNX', TENANT_STORE_KEY, instance, JSON.stringify(stored)]);
-  if (Number(created) !== 1) {
-    const error = new Error('TENANT_ALREADY_EXISTS');
-    error.statusCode = 409;
+  const alemiInstance = normalizeAlemiInstance(stored.alemi_instance);
+  if (stored.alemi_instance && !alemiInstance) throw alemiInstanceConflict(stored.alemi_instance);
+  const claimed = await claimAlemiInstance(alemiInstance, instance);
+  try {
+    const created = await redisClient.sendCommand(['HSETNX', TENANT_STORE_KEY, instance, JSON.stringify(stored)]);
+    if (Number(created) !== 1) {
+      const error = new Error('TENANT_ALREADY_EXISTS');
+      error.statusCode = 409;
+      throw error;
+    }
+  } catch (error) {
+    if (claimed) await releaseAlemiInstance(alemiInstance, instance).catch(() => {});
     throw error;
   }
   await upsertSnapshot(stored).catch(error => console.warn('[TENANT SNAPSHOT] create mirror failed:', error.message));
@@ -153,7 +192,19 @@ async function updateRow(instanceValue, patch) {
     throw error;
   }
   const stored = { ...existing, ...patch, instance_id: instance, created_at: existing.created_at || new Date().toISOString(), updated_at: new Date().toISOString() };
-  await redisClient.hSet(TENANT_STORE_KEY, instance, JSON.stringify(stored));
+  const previousAlemiInstance = normalizeAlemiInstance(existing.alemi_instance);
+  const alemiInstance = normalizeAlemiInstance(stored.alemi_instance);
+  if (stored.alemi_instance && !alemiInstance) throw alemiInstanceConflict(stored.alemi_instance);
+  const claimed = await claimAlemiInstance(alemiInstance, instance);
+  try {
+    await redisClient.hSet(TENANT_STORE_KEY, instance, JSON.stringify(stored));
+  } catch (error) {
+    if (claimed) await releaseAlemiInstance(alemiInstance, instance).catch(() => {});
+    throw error;
+  }
+  if (previousAlemiInstance && previousAlemiInstance !== alemiInstance) {
+    await releaseAlemiInstance(previousAlemiInstance, instance);
+  }
   await upsertSnapshot(stored).catch(error => console.warn('[TENANT SNAPSHOT] update mirror failed:', error.message));
   return stored;
 }
@@ -161,12 +212,14 @@ async function updateRow(instanceValue, patch) {
 async function deleteRow(instanceValue) {
   const instance = normalizeInstance(instanceValue);
   requireRedis();
+  const existing = await findRow(instance);
   const deleted = await redisClient.hDel(TENANT_STORE_KEY, instance);
   if (!deleted) {
     const error = new Error('TENANT_NOT_FOUND');
     error.statusCode = 404;
     throw error;
   }
+  await releaseAlemiInstance(normalizeAlemiInstance(existing?.alemi_instance), instance);
   await deleteSnapshot(instance).catch(error => console.warn('[TENANT SNAPSHOT] delete mirror failed:', error.message));
   return true;
 }
@@ -199,6 +252,7 @@ async function getStorageSummary() {
 }
 
 module.exports = {
+  ALEMI_INSTANCE_INDEX_KEY,
   TENANT_STORE_KEY,
   createRow,
   deleteRow,

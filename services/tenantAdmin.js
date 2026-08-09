@@ -3,13 +3,12 @@
 const crypto = require('crypto');
 const tenantStore = require('./tenantStore');
 
-// Sixteen columns exist on the restaurants table and only eight of them are a
-// decision anybody makes. The rest are URLs that are the same for every tenant
-// and secrets that should never be typed by hand — a person choosing their own
-// token is how two restaurants end up sharing one. This module owns that split:
-// the panel collects the eight, and everything else is generated here.
+// Platform transport keys remain generated here. The Alemi credential is the
+// exception: Alemi issues it, so onboarding accepts a prepared write-only value
+// and never invents or returns one.
 
-const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled', 'callsDisabled'];
+const ALEMI_DEFAULT_API_URL = 'https://hub.alemi.kz';
+const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled', 'callsDisabled', 'alemiApiUrl', 'alemiInstance', 'alemiSecret'];
 
 function clean(value, max = 500) {
   return String(value ?? '').replace(/[\r\t]+/g, ' ').trim().slice(0, max);
@@ -26,6 +25,28 @@ function normalizePhoneField(value) {
 
 function isValidInstanceId(value) {
   return /^[a-zA-Z0-9_-]{2,64}$/.test(String(value || ''));
+}
+
+function normalizeAlemiApiUrl(value) {
+  const raw = clean(value, 500) || ALEMI_DEFAULT_API_URL;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function normalizeAlemiSecret(value, required = false) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    if (!required) return '';
+    throw badRequest(['alemiSecret']);
+  }
+  if (typeof value !== 'string') throw badRequest(['alemiSecret']);
+  const secret = value.trim();
+  if (secret.length > 4096 || /[\u0000-\u001f\u007f]/.test(secret)) throw badRequest(['alemiSecret']);
+  return secret;
 }
 
 // Distinct by construction rather than by discipline: 24 random bytes, prefixed
@@ -92,11 +113,14 @@ function applyDefaults(input = {}) {
   const suffix = tenantDomainSuffix();
   const domain = clean(input.domain, 200) || (instanceId && suffix ? `https://${instanceId}.${suffix}` : '');
   const whatsappPhone = normalizePhoneField(input.whatsappPhone);
+  const alemiApiUrl = normalizeAlemiApiUrl(input.alemiApiUrl);
   return {
     ...input,
     brand,
     instanceId,
     domain,
+    alemiApiUrl,
+    alemiInstance: clean(input.alemiInstance, 128) || instanceId,
     workHours: clean(input.workHours, 120) || clean(process.env.WHATSPRO_DEFAULT_WORK_HOURS || '09:00 - 03:00', 120),
     // The owner is reachable on the restaurant's own number until somebody says
     // otherwise, which is true far more often than it is not.
@@ -115,6 +139,8 @@ function operatorFields(rawInput = {}) {
     domain: clean(input.domain, 200),
     address: clean(input.address, 300),
     work_hours: clean(input.workHours, 120),
+    alemi_api_url: clean(input.alemiApiUrl, 500),
+    alemi_instance: clean(input.alemiInstance, 128),
     prompt_mode: promptMode,
     active: input.active === undefined ? true : Boolean(input.active),
     bot_enabled: input.botEnabled === undefined ? true : Boolean(input.botEnabled),
@@ -126,6 +152,8 @@ function validationErrors(fields) {
   const errors = [];
   if (!isValidInstanceId(fields.instance_id)) errors.push('instanceId');
   if (!fields.brand) errors.push('brand');
+  if (!fields.alemi_api_url) errors.push('alemiApiUrl');
+  if (!/^[A-Za-z0-9_-]{2,128}$/.test(fields.alemi_instance)) errors.push('alemiInstance');
   const digits = fields.whatsapp_phone.replace(/\D/g, '');
   if (digits && (digits.length < 10 || digits.length > 15)) errors.push('whatsappPhone');
   return errors;
@@ -153,6 +181,7 @@ function resolvePrompt(fields, input, sharedPrompt, existing = null) {
 
 async function createTenant(input, options = {}) {
   const fields = operatorFields(input);
+  const alemiSecret = normalizeAlemiSecret(input.alemiSecret, true);
   const errors = validationErrors(fields);
   if (errors.length) throw badRequest(errors);
   if (await findRow(fields.instance_id)) {
@@ -164,6 +193,7 @@ async function createTenant(input, options = {}) {
   const payload = {
     ...fields,
     ...platformFields(options.publicBase),
+    alemi_secret: alemiSecret,
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt)
   };
   await tenantStore.createRow(payload);
@@ -180,6 +210,8 @@ async function updateTenant(instanceId, input, options = {}) {
   const fields = operatorFields({
     ...input,
     instanceId,
+    alemiApiUrl: input.alemiApiUrl === undefined ? existing.alemi_api_url : input.alemiApiUrl,
+    alemiInstance: input.alemiInstance === undefined ? existing.alemi_instance : input.alemiInstance,
     active: input.active === undefined ? existing.active : input.active,
     botEnabled: input.botEnabled === undefined ? existing.bot_enabled : input.botEnabled,
     callsDisabled: input.callsDisabled === undefined ? existing.calls_disabled : input.callsDisabled
@@ -191,6 +223,8 @@ async function updateTenant(instanceId, input, options = {}) {
     ...fields,
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt, existing)
   };
+  const alemiSecret = normalizeAlemiSecret(input.alemiSecret);
+  if (alemiSecret) payload.alemi_secret = alemiSecret;
   // Rows created before the panel existed have blank platform fields. Fill those
   // in on the way past instead of leaving a restaurant half-configured because
   // it predates the tooling.
@@ -214,6 +248,11 @@ function workbookInput(row = {}) {
     workHours: row.work_hours,
     promptMode: row.prompt_mode,
     systemPrompt: row.system_prompt,
+    alemiApiUrl: row.alemi_api_url,
+    alemiInstance: row.alemi_instance,
+    // Import accepts a prepared key as write-only input, but exports never add
+    // this column, so a backup cannot become a credential dump.
+    alemiSecret: row.alemi_secret ?? row.alemiSecret,
     active: row.active,
     botEnabled: row.bot_enabled,
     callsDisabled: row.calls_disabled
@@ -332,6 +371,8 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
     address: input.address || source.address,
     workHours: input.workHours || source.work_hours,
     promptMode: input.promptMode || source.prompt_mode,
+    alemiApiUrl: input.alemiApiUrl,
+    alemiInstance: input.alemiInstance,
     active: input.active === undefined ? false : input.active
   });
   const errors = validationErrors(fields);
@@ -345,12 +386,27 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
   const payload = {
     ...fields,
     ...platformFields(options.publicBase),
+    alemi_secret: normalizeAlemiSecret(input.alemiSecret, true),
     system_prompt: fields.prompt_mode === 'custom'
       ? cleanMultiline(input.systemPrompt || source.system_prompt)
       : cleanMultiline(options.sharedPrompt || source.system_prompt)
   };
   await tenantStore.createRow(payload);
   return { instanceId: fields.instance_id, clonedFrom: sourceInstanceId, created: true };
+}
+
+// Alemi issues this key. WhatsPro only accepts a prepared replacement and never
+// generates, echoes or logs it; the boolean response is enough for the panel.
+async function setAlemiSecret(instanceId, value) {
+  const existing = await findRow(instanceId);
+  if (!existing) {
+    const error = new Error('TENANT_NOT_FOUND');
+    error.statusCode = 404;
+    throw error;
+  }
+  const secret = normalizeAlemiSecret(value, true);
+  await tenantStore.updateRow(instanceId, { alemi_secret: secret });
+  return { instanceId, alemiSecretSet: true };
 }
 
 async function rotateSecrets(instanceId, options = {}) {
@@ -397,6 +453,8 @@ function presentableTenant(row) {
     domain: clean(row.domain, 200),
     address: clean(row.address, 300),
     workHours: clean(row.work_hours, 120),
+    alemiApiUrl: normalizeAlemiApiUrl(row.alemi_api_url),
+    alemiInstance: clean(row.alemi_instance, 128) || clean(row.instance_id, 64),
     promptMode: clean(row.prompt_mode, 16).toLowerCase() === 'custom' ? 'custom' : 'shared',
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
@@ -407,9 +465,22 @@ function presentableTenant(row) {
     secrets: {
       apiToken: Boolean(String(row.whatspro_api_token || '').trim()),
       webhookSecret: Boolean(String(row.webhook_secret || '').trim()),
-      kanbanSecret: Boolean(String(row.kanban_secret || '').trim())
+      kanbanSecret: Boolean(String(row.kanban_secret || '').trim()),
+      alemiSecret: Boolean(String(row.alemi_secret || '').trim())
     }
   };
+}
+
+// OpenBot can discover tenants from the broad runtime list, but credentials are
+// fetched only from the master-scoped per-instance endpoint. This keeps a list
+// response or accidental list dump from containing every Alemi key at once.
+function runtimeListTenant(row) {
+  const safe = { ...(row || {}) };
+  const present = Boolean(String(safe.alemi_secret || safe.alemiSecret || '').trim());
+  delete safe.alemi_secret;
+  delete safe.alemiSecret;
+  safe.alemi_secret_set = present;
+  return safe;
 }
 
 module.exports = {
@@ -422,11 +493,13 @@ module.exports = {
   importTenants,
   listRows,
   presentableTenant,
+  runtimeListTenant,
   rotateSecrets,
+  setAlemiSecret,
   setActive,
   setBotEnabled,
   setCallsDisabled,
   updateTenant,
   slugify,
-  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput }
+  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret }
 };

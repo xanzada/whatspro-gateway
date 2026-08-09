@@ -66,6 +66,29 @@ test('platform tenant storage keeps tenant secrets isolated through updates', as
   assert.equal((await tenantStore.listTenantRecords()).length, 2);
 });
 
+test('Alemi instance ownership is claimed atomically across create, update and delete', async t => {
+  installMemoryRedis(t);
+  const results = await Promise.allSettled([
+    tenantStore.createRow({ instance_id: 'alpha', brand: 'Alpha', alemi_instance: 'shared-alemi' }),
+    tenantStore.createRow({ instance_id: 'beta', brand: 'Beta', alemi_instance: 'shared-alemi' })
+  ]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  const rejected = results.find(result => result.status === 'rejected').reason;
+  assert.equal(rejected.message, 'ALEMI_INSTANCE_ALREADY_EXISTS');
+  assert.equal(rejected.statusCode, 409);
+  assert.deepEqual(rejected.fields, ['alemiInstance']);
+
+  const owner = (await tenantStore.listTenantRecords())[0].instance_id;
+  const other = owner === 'alpha' ? 'beta' : 'alpha';
+  await tenantStore.createRow({ instance_id: other, brand: other, alemi_instance: `${other}-alemi` });
+  await assert.rejects(() => tenantStore.updateRow(other, { alemi_instance: 'shared-alemi' }), /ALEMI_INSTANCE_ALREADY_EXISTS/);
+  assert.equal((await tenantStore.findRow(other)).alemi_instance, `${other}-alemi`, 'a rejected claim must not partly update the tenant');
+
+  await tenantStore.deleteRow(owner);
+  await tenantStore.updateRow(other, { alemi_instance: 'shared-alemi' });
+  assert.equal((await tenantStore.findRow(other)).alemi_instance, 'shared-alemi', 'deleting the owner releases the identifier');
+});
+
 test('chat branding exposes no tenant secret', () => {
   const config = tenantStore.sanitizeTenantConfig({
     instance_id: 'alpha',

@@ -44,6 +44,8 @@ test('the platform fills in what nobody should have to type', () => {
     const filled = admin.applyDefaults({ brand: 'Crazy суши', whatsappPhone: '+7 701 555 01 01' });
     assert.equal(filled.instanceId, 'crazy-sushi');
     assert.equal(filled.domain, 'https://crazy-sushi.alemi.kz');
+    assert.equal(filled.alemiApiUrl, 'https://hub.alemi.kz');
+    assert.equal(filled.alemiInstance, 'crazy-sushi');
     assert.equal(filled.workHours, '10:00 - 22:00');
     assert.equal(filled.adminPhone, '+77015550101', 'the owner is on the restaurant number until told otherwise');
   });
@@ -76,13 +78,23 @@ test('required fields are named back so the form can highlight them', () => {
   const fields = admin.operatorFields({ brand: '', whatsappPhone: '123' });
   assert.equal(fields.bot_enabled, true, 'new tenants answer through the bot by default');
   const errors = admin.validationErrors(fields);
-  assert.deepEqual(errors.sort(), ['brand', 'instanceId', 'whatsappPhone']);
+  assert.deepEqual(errors.sort(), ['alemiInstance', 'brand', 'instanceId', 'whatsappPhone']);
   assert.deepEqual(admin.validationErrors(admin.operatorFields({
     brand: 'Prestige', whatsappPhone: '77015550101', instanceId: 'prestige', domain: 'prestige.kz'
   })), []);
   assert.deepEqual(admin.validationErrors(admin.operatorFields({
     brand: 'QR арқылы қосылатын ресторан', whatsappPhone: '', instanceId: 'qr-restaurant', domain: ''
   })), [], 'phone and domain are optional because WhatsApp is attached by QR and a custom host is not required');
+});
+
+test('create requires an externally issued Alemi key instead of inventing one', async () => {
+  await assert.rejects(() => tenantAdmin.createTenant({
+    instanceId: 'prestige', brand: 'Prestige', alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: 'prestige'
+  }), error => {
+    assert.equal(error.statusCode, 400);
+    assert.deepEqual(error.fields, ['alemiSecret']);
+    return true;
+  });
 });
 
 test('every generated secret is unique and long enough to be one', () => {
@@ -122,7 +134,8 @@ test('cloning copies business settings but derives an isolated host, session and
         prompt_mode: 'custom',
         system_prompt: 'SOURCE PROMPT',
         whatspro_api_token: 'source-api-secret',
-        webhook_secret: 'source-webhook-secret'
+        webhook_secret: 'source-webhook-secret',
+        alemi_secret: 'source-alemi-secret'
       }
     : null;
   tenantStore.createRow = async row => { stored = row; return row; };
@@ -139,15 +152,28 @@ test('cloning copies business settings but derives an isolated host, session and
     brand: 'Source copy',
     whatsappPhone: '',
     domain: '',
-    systemPrompt: 'SOURCE PROMPT'
+    systemPrompt: 'SOURCE PROMPT',
+    alemiSecret: 'clone-alemi-secret'
   }, { publicBase: 'https://whatspro.alemi.kz', sharedPrompt: 'SHARED' });
 
   assert.equal(stored.instance_id, 'source-copy');
   assert.equal(stored.whatsapp_phone, '', 'a WhatsApp number/session is never shared by a clone');
   assert.equal(stored.domain, 'https://source-copy.alemi.kz');
   assert.equal(stored.address, 'Abay 1');
+  assert.equal(stored.alemi_api_url, 'https://hub.alemi.kz');
+  assert.equal(stored.alemi_instance, 'source-copy');
+  assert.equal(stored.alemi_secret, 'clone-alemi-secret', 'a clone requires a newly supplied Alemi credential');
+  assert.notEqual(stored.alemi_secret, 'source-alemi-secret');
   assert.notEqual(stored.whatspro_api_token, 'source-api-secret');
   assert.notEqual(stored.webhook_secret, 'source-webhook-secret');
+
+  await assert.rejects(() => tenantAdmin.cloneTenant('source', {
+    instanceId: 'source-copy-2', brand: 'Source copy 2'
+  }, { publicBase: 'https://whatspro.alemi.kz', sharedPrompt: 'SHARED' }), error => {
+    assert.equal(error.statusCode, 400);
+    assert.deepEqual(error.fields, ['alemiSecret']);
+    return true;
+  });
 });
 
 test('shared mode takes the shared text and custom mode keeps its own', () => {
@@ -169,6 +195,9 @@ test('a presentable tenant carries no secret, only whether one exists', () => {
     work_hours: '09:00 - 03:00',
     prompt_mode: 'custom',
     system_prompt: 'PROMPT',
+    alemi_api_url: 'https://hub.alemi.kz',
+    alemi_instance: 'prestige',
+    alemi_secret: 'alemi_supersecret',
     whatspro_api_token: 'wp_supersecret',
     webhook_secret: 'hook_supersecret',
     kanban_secret: ''
@@ -176,10 +205,46 @@ test('a presentable tenant carries no secret, only whether one exists', () => {
   const serialized = JSON.stringify(view);
   assert.equal(serialized.includes('wp_supersecret'), false);
   assert.equal(serialized.includes('hook_supersecret'), false);
-  assert.deepEqual(view.secrets, { apiToken: true, webhookSecret: true, kanbanSecret: false });
+  assert.equal(serialized.includes('alemi_supersecret'), false);
+  assert.equal(view.alemiApiUrl, 'https://hub.alemi.kz');
+  assert.equal(view.alemiInstance, 'prestige');
+  assert.deepEqual(view.secrets, { apiToken: true, webhookSecret: true, kanbanSecret: false, alemiSecret: true });
   assert.equal(view.active, true, 'a row from before the column existed is not silently paused');
   assert.equal(view.botEnabled, true, 'a row from before bot control existed remains enabled');
   assert.equal(view.promptMode, 'custom');
+});
+
+test('Alemi secret can be set or rotated but is never echoed', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  const originalUpdate = tenantStore.updateRow;
+  let patch;
+  tenantStore.findRow = async instanceId => instanceId === 'prestige' ? { instance_id: instanceId } : null;
+  tenantStore.updateRow = async (_instanceId, value) => { patch = value; return value; };
+  t.after(() => {
+    tenantStore.findRow = originalFind;
+    tenantStore.updateRow = originalUpdate;
+  });
+
+  const result = await tenantAdmin.setAlemiSecret('prestige', 'externally-issued-secret');
+  assert.deepEqual(result, { instanceId: 'prestige', alemiSecretSet: true });
+  assert.deepEqual(patch, { alemi_secret: 'externally-issued-secret' });
+  assert.equal(JSON.stringify(result).includes('externally-issued-secret'), false);
+  await assert.rejects(() => tenantAdmin.setAlemiSecret('prestige', ''), error => {
+    assert.equal(error.statusCode, 400);
+    assert.deepEqual(error.fields, ['alemiSecret']);
+    return true;
+  });
+});
+
+test('the broad runtime list exposes only Alemi key presence', () => {
+  const listed = tenantAdmin.runtimeListTenant({
+    instance_id: 'prestige', alemi_instance: 'prestige', alemi_secret: 'do-not-list-me'
+  });
+  assert.equal(listed.alemi_secret, undefined);
+  assert.equal(listed.alemiSecret, undefined);
+  assert.equal(listed.alemi_secret_set, true);
+  assert.equal(JSON.stringify(listed).includes('do-not-list-me'), false);
 });
 
 test('bot pause is stored independently from WhatsApp active state', () => {
@@ -239,6 +304,7 @@ test('Excel import preserves existing keys and generates isolated keys for new t
       instance_id: 'new-point',
       brand: 'New point',
       whatsapp_phone: '+77010000002',
+      alemi_secret: 'new-point-alemi-secret',
       active: true,
       bot_enabled: true
     }
