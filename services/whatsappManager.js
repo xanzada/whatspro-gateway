@@ -1980,10 +1980,17 @@ async function watchWppIncomingCalls(instanceId, client) {
         // in the log even when no call listener recognises it.
         try {
             if (window.WPP?.onAny && !window.__wpproSpy) {
+                window.__wpproSpyCount = 0;
                 window.WPP.onAny(name => {
-                    if (typeof name === 'string' && /call/i.test(name)) {
-                        try { window[binding]({ spy: name }); } catch (_) {}
-                    }
+                    // Every event, not just call-shaped ones. The question this
+                    // answers is whether a ring reaches the page at all, and
+                    // filtering by name assumes the answer. Capped so a busy
+                    // session cannot flood the log.
+                    if (typeof name !== 'string') return;
+                    const isCall = /call/i.test(name);
+                    if (!isCall && window.__wpproSpyCount >= 150) return;
+                    window.__wpproSpyCount += 1;
+                    try { window[binding]({ spy: name }); } catch (_) {}
                 });
                 window.__wpproSpy = true;
             }
@@ -2017,17 +2024,24 @@ async function reportCallHookHealth(instanceId, client) {
     const page = client?.pupPage;
     if (!page || typeof page.evaluate !== 'function') return;
     const health = await page.evaluate(() => {
-        const store = window.Store || {};
-        const collection = store.Call || store.CallCollection;
+        // whatsapp-web.js patches Map.set on WAWebCallCollection, not on
+        // window.Store.Call — checking the latter reported "not patched" for a
+        // page where the patch was fine, so the collection is resolved the same
+        // way the library does before drawing any conclusion from it.
+        let collection = null;
+        try { collection = window.require?.('WAWebCallCollection') ?? null; } catch (_) {}
+        const legacy = window.Store?.Call || window.Store?.CallCollection || null;
+        const internalMap = collection && Object.values(collection).find(v => v instanceof Map);
+
         return {
             wppReady: Boolean(window.WPP?.isReady),
             wppOn: typeof window.WPP?.on === 'function',
             wppRejectCall: typeof window.WPP?.call?.rejectCall === 'function',
             wajsListener: Boolean(window.__wpproCallHooked),
-            // The collection whatsapp-web.js patches. Missing means its `call`
-            // event can never fire, whatever else looks healthy.
-            wwebjsCollection: Boolean(collection),
-            wwebjsPatched: Boolean(collection && collection.set && collection.set.toString().includes('onAddCall')),
+            // Both the module the library actually patches and the legacy Store
+            // path, so a false here means "really missing", not "looked wrong".
+            wwebjsCollection: Boolean(collection || legacy),
+            wwebjsPatched: Boolean(internalMap && !/native code/.test(String(internalMap.set))),
             // wa-js reports incoming calls by wrapping CallStore.processIncomingCall.
             // If that store is missing, its event is as dead as the patch above,
             // and the listener count tells us whether anyone is actually subscribed.
@@ -2035,12 +2049,17 @@ async function reportCallHookHealth(instanceId, client) {
             processIncomingCall: typeof window.WPP?.whatsapp?.CallStore?.processIncomingCall,
             incomingListeners: Number(window.WPP?.ev?.listenerCount?.('call.incoming_call') ?? -1),
             ownHook: Boolean(window.__wpproOwnCallHook),
+            // Calls WhatsApp itself is holding right now. A ringing phone with
+            // an empty collection means the ring never reached this browser.
+            liveCalls: internalMap ? internalMap.size : -1,
         };
     }).catch(err => ({ error: err?.message || String(err) }));
 
     console.log(`[WHATSAPP CALL HOOKS] ${instanceId} ->`, JSON.stringify(health));
-    if (health && !health.error && !health.wajsListener && !health.wwebjsPatched) {
-        console.error(`[WHATSAPP CALL HOOKS] ${instanceId}: NEITHER call source is attached — incoming calls will not be rejected`);
+    // ownHook is ours and does not depend on either library's detection, so it
+    // counts as a source here.
+    if (health && !health.error && !health.wajsListener && !health.wwebjsPatched && !health.ownHook) {
+        console.error(`[WHATSAPP CALL HOOKS] ${instanceId}: NO call source is attached — incoming calls will not be rejected`);
     }
 }
 
