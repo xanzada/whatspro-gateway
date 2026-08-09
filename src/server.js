@@ -872,6 +872,10 @@ app.get('/tenants', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'tenants.html'));
 });
 
+app.get('/call-watcher', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'callwatcher.html'));
+});
+
 app.get('/connect', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'connect.html'));
 });

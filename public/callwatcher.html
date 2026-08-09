@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Қоңырау бақылаушысы — QR</title>
+  <link rel="stylesheet" href="/connect.css">
+  <style>
+    .cw-wrap { max-width: 420px; margin: 0 auto; padding: 24px 16px; text-align: center; font-family: system-ui, sans-serif; }
+    .cw-frame { min-height: 296px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 12px; padding: 12px; }
+    .cw-frame img { width: 100%; max-width: 272px; height: auto; image-rendering: pixelated; }
+    .cw-steps { text-align: left; line-height: 1.6; font-size: 14px; color: #4a5568; }
+    .cw-note { font-size: 13px; color: #718096; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main class="cw-wrap">
+    <h1 id="cw-title">Қоңырау бақылаушысы</h1>
+    <p id="cw-sub">Ресторан: <strong id="cw-instance"></strong></p>
+    <div class="cw-frame" id="cw-frame" aria-live="polite">
+      <span id="cw-status">QR дайындалуда…</span>
+    </div>
+    <ol class="cw-steps">
+      <li>Ресторан нөмірі тұрған телефонда WhatsApp ашыңыз.</li>
+      <li><strong>Параметрлер → Байланысқан құрылғылар</strong> дегенді басыңыз.</li>
+      <li><strong>Құрылғыны байланыстыру</strong> → осы QR-ды сканерлеңіз.</li>
+    </ol>
+    <p class="cw-note">QR әрбір 20 секундта жаңарады, бет оны өзі жаңартып отырады. Сканерленген соң қайта сканерлеу қажет емес.</p>
+  </main>
+  <script src="/callwatcher.js"></script>
+</body>
+</html>
