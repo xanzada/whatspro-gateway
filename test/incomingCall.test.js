@@ -234,3 +234,46 @@ test('the panel and the gateway agree on what a blank calls column means', () =>
   assert.equal(byId.off, true);
   assert.equal(byId.on, false);
 });
+
+// Two sources report every call. These cover the dispatcher that keeps that
+// from becoming two rejections and two greetings for one ring.
+
+test('the first source to report a call wins and the second is dropped', async () => {
+  whatsappTest.seenCallIds.clear();
+  const handled = [];
+  const client = {
+    // Stands in for the whole handler: the dispatcher is what is under test.
+    pupPage: null,
+    getContactById: async () => null
+  };
+  const call = { id: 'CALL-DUP-1', from: '77476884956@c.us' };
+
+  await whatsappTest.dispatchIncomingCall('prestige', client, call, 'wwebjs');
+  const afterFirst = whatsappTest.seenCallIds.size;
+  await whatsappTest.dispatchIncomingCall('prestige', client, call, 'wa-js');
+
+  assert.equal(afterFirst, 1, 'the first source claims the call');
+  assert.equal(whatsappTest.seenCallIds.size, 1, 'the duplicate adds no second claim');
+  assert.deepEqual(handled, []);
+});
+
+test('the same call id from two tenants is not treated as a duplicate', async () => {
+  whatsappTest.seenCallIds.clear();
+  const call = { id: 'CALL-SHARED', from: '77476884956@c.us' };
+
+  await whatsappTest.dispatchIncomingCall('prestige', { pupPage: null }, call, 'wwebjs');
+  await whatsappTest.dispatchIncomingCall('maki', { pupPage: null }, call, 'wwebjs');
+
+  assert.equal(whatsappTest.seenCallIds.size, 2, 'each tenant claims its own call');
+});
+
+test('an outgoing call is ignored without claiming the id', async () => {
+  whatsappTest.seenCallIds.clear();
+
+  await whatsappTest.dispatchIncomingCall('prestige', { pupPage: null }, { id: 'C1', outgoing: true }, 'wa-js');
+  assert.equal(whatsappTest.seenCallIds.size, 0, 'an outgoing call must not consume the id');
+
+  // The real incoming call that follows must still be handled.
+  await whatsappTest.dispatchIncomingCall('prestige', { pupPage: null }, { id: 'C1', from: '77476884956@c.us' }, 'wa-js');
+  assert.equal(whatsappTest.seenCallIds.size, 1);
+});

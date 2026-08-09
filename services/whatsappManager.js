@@ -1370,7 +1370,11 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         // about fifteen. Paying that cost while the phone is ringing is how a
         // rejection arrives too late to stop it.
         void ensureWppCallApi(client)
-            .then(ready => console.log(`[WHATSAPP CALL] ${instanceId}: call API ${ready ? 'ready' : 'unavailable'}`))
+            .then(async ready => {
+                console.log(`[WHATSAPP CALL] ${instanceId}: call API ${ready ? 'ready' : 'unavailable'}`);
+                if (ready) await watchWppIncomingCalls(instanceId, client);
+                await reportCallHookHealth(instanceId, client);
+            })
             .catch(err => console.warn(`[WHATSAPP CALL] ${instanceId}: call API preload failed: ${err?.message || err}`));
     });
 
@@ -1618,10 +1622,8 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     });
 
     client.on('call', call => {
-        console.log(`[WHATSAPP CALL RAW] ${instanceId} ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
-        void handleIncomingCall(instanceId, client, call).catch(error => {
-            console.error(`[WHATSAPP CALL] ${instanceId}:`, error.message);
-        });
+        console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=wwebjs) ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
+        void dispatchIncomingCall(instanceId, client, call, 'wwebjs');
     });
 
 client.initialize().catch(async err => {
@@ -1840,6 +1842,46 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
  * `startWhatsAppInstance` primes it on `ready` so the first real call does not
  * pay the ~2s bundle load while the phone is ringing.
  */
+// Two independent sources report the same incoming call: whatsapp-web.js's
+// `call` event, which works by monkey-patching `Map.set` on an internal
+// WhatsApp collection (Client.js) and goes silent without warning whenever that
+// internal shape changes, and wa-js's own `call.incoming_call` event. Whichever
+// arrives first wins; the loser is dropped here so the caller is not rejected
+// and greeted twice.
+const seenCallIds = new Map();
+const SEEN_CALL_TTL_MS = 2 * 60 * 1000;
+
+function claimCall(instanceId, callId, source) {
+    const now = Date.now();
+    for (const [key, at] of seenCallIds) {
+        if (now - at > SEEN_CALL_TTL_MS) seenCallIds.delete(key);
+    }
+    // A call with no id cannot be deduplicated by id, so it is keyed by tenant
+    // and second — two sources reporting the same idless call land together.
+    const key = `${instanceId}:${callId || `anon-${Math.floor(now / 1000)}`}`;
+    const claimedAt = seenCallIds.get(key);
+    if (claimedAt !== undefined) {
+        console.log(`[WHATSAPP CALL] ${instanceId}: ${callId || '(no id)'} already handled ${now - claimedAt}ms ago, ignoring duplicate from ${source}`);
+        return false;
+    }
+    seenCallIds.set(key, now);
+    return true;
+}
+
+function dispatchIncomingCall(instanceId, client, call, source) {
+    const callId = call?.id === undefined || call?.id === null ? '' : String(call.id);
+    // Outgoing calls are filtered downstream too, but claiming one here would
+    // make the real incoming call that follows look like a duplicate.
+    if (call?.fromMe || call?.outgoing) {
+        console.log(`[WHATSAPP CALL] ${instanceId}: outgoing call ${callId || '(no id)'} from ${source}, ignoring`);
+        return Promise.resolve();
+    }
+    if (!claimCall(instanceId, callId, source)) return Promise.resolve();
+    return handleIncomingCall(instanceId, client, call).catch(error => {
+        console.error(`[WHATSAPP CALL] ${instanceId} (source=${source}):`, error.message);
+    });
+}
+
 // Read once and kept in memory: the bundle is ~500 KB and every session that
 // starts would otherwise re-read it from disk.
 let wppBundleSource;
@@ -1855,6 +1897,96 @@ function readWppCallBundle() {
     return wppBundleSource;
 }
 
+// The second call source. wa-js emits `call.incoming_call` from its own
+// registration inside WhatsApp's call model, independent of the `Map.set` patch
+// whatsapp-web.js relies on, so it keeps reporting when that patch stops. The
+// binding is re-exposed on every page load because navigation wipes both the
+// injected bundle and the binding itself.
+const wppCallWatchers = new WeakSet();
+
+async function watchWppIncomingCalls(instanceId, client) {
+    const page = client?.pupPage;
+    if (!page || typeof page.exposeFunction !== 'function') return false;
+    if (wppCallWatchers.has(page)) return true;
+    wppCallWatchers.add(page);
+
+    const BINDING = '__wpproIncomingCall';
+    try {
+        await page.exposeFunction(BINDING, payload => {
+            console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=wa-js) ->`, JSON.stringify(payload));
+            void dispatchIncomingCall(instanceId, client, payload, 'wa-js');
+        });
+    } catch (error) {
+        // Already exposed from an earlier load of this same page: harmless.
+        if (!/already exists|has been already registered/i.test(error.message || '')) {
+            wppCallWatchers.delete(page);
+            console.warn(`[WHATSAPP CALL] ${instanceId}: wa-js call binding failed: ${error.message}`);
+            return false;
+        }
+    }
+
+    const subscribe = () => page.evaluate(binding => {
+        if (!window.WPP?.on || window.__wpproCallHooked) return false;
+        window.WPP.on('call.incoming_call', call => {
+            try {
+                window[binding]({
+                    id: call?.id,
+                    from: call?.sender?._serialized || call?.sender?.user || call?.peerJid?._serialized || null,
+                    isVideo: Boolean(call?.isVideo),
+                    isGroup: Boolean(call?.isGroup),
+                    offerTime: call?.offerTime ?? null,
+                });
+            } catch (_) { /* the page must never break on our listener */ }
+        });
+        window.__wpproCallHooked = true;
+        return true;
+    }, BINDING);
+
+    const hooked = await subscribe().catch(err => {
+        console.warn(`[WHATSAPP CALL] ${instanceId}: wa-js call subscribe failed: ${err?.message || err}`);
+        return false;
+    });
+    console.log(`[WHATSAPP CALL] ${instanceId}: wa-js incoming_call listener ${hooked ? 'attached' : 'not attached'}`);
+
+    // A reload drops the listener silently; re-attaching is what keeps the
+    // second source from quietly becoming as dead as the first.
+    page.on('framenavigated', frame => {
+        if (frame !== page.mainFrame()) return;
+        void ensureWppCallApi(client)
+            .then(ready => (ready ? subscribe() : false))
+            .then(ok => ok && console.log(`[WHATSAPP CALL] ${instanceId}: wa-js listener re-attached after navigation`))
+            .catch(() => {});
+    });
+    return hooked;
+}
+
+// Reports whether each source is actually wired, at startup rather than at ring
+// time. A call every source missed leaves no trace at all, so the state of the
+// hooks is logged while there is still time to see it.
+async function reportCallHookHealth(instanceId, client) {
+    const page = client?.pupPage;
+    if (!page || typeof page.evaluate !== 'function') return;
+    const health = await page.evaluate(() => {
+        const store = window.Store || {};
+        const collection = store.Call || store.CallCollection;
+        return {
+            wppReady: Boolean(window.WPP?.isReady),
+            wppOn: typeof window.WPP?.on === 'function',
+            wppRejectCall: typeof window.WPP?.call?.rejectCall === 'function',
+            wajsListener: Boolean(window.__wpproCallHooked),
+            // The collection whatsapp-web.js patches. Missing means its `call`
+            // event can never fire, whatever else looks healthy.
+            wwebjsCollection: Boolean(collection),
+            wwebjsPatched: Boolean(collection && collection.set && collection.set.toString().includes('onAddCall')),
+        };
+    }).catch(err => ({ error: err?.message || String(err) }));
+
+    console.log(`[WHATSAPP CALL HOOKS] ${instanceId} ->`, JSON.stringify(health));
+    if (health && !health.error && !health.wajsListener && !health.wwebjsPatched) {
+        console.error(`[WHATSAPP CALL HOOKS] ${instanceId}: NEITHER call source is attached — incoming calls will not be rejected`);
+    }
+}
+
 async function ensureWppCallApi(client) {
     const page = client?.pupPage;
     if (!page || typeof page.evaluate !== 'function') return false;
@@ -1862,10 +1994,20 @@ async function ensureWppCallApi(client) {
     const alreadyReady = await page.evaluate(() => Boolean(window.WPP?.isReady)).catch(() => false);
     if (alreadyReady) {
         // The interface flag does not survive a page navigation, so it is
-        // re-asserted rather than assumed. It is idempotent.
-        await page.evaluate(async () => {
-            try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* already on */ }
-        }).catch(() => {});
+        // re-asserted rather than assumed. It is idempotent. A failure here is
+        // worth a line: without the call interface WhatsApp Web stays a
+        // companion device that reports canHandleLocally false, and the server
+        // drops the reject stanza — which looks exactly like a working
+        // rejection from this side.
+        const enabled = await page.evaluate(async () => {
+            try {
+                await window.WPP?.call?.enableCallInterface?.();
+                return { ok: true };
+            } catch (err) {
+                return { ok: false, error: String(err?.message || err) };
+            }
+        }).catch(err => ({ ok: false, error: String(err?.message || err) }));
+        if (!enabled?.ok) console.warn(`[WHATSAPP CALL] enableCallInterface failed: ${enabled?.error || 'unknown'}`);
         return true;
     }
 
@@ -1897,19 +2039,24 @@ async function ensureWppCallApi(client) {
             // unverified path. `loader.onReady` is the module-system-agnostic
             // callback, and the isReady poll covers a bundle that became ready
             // between injection and this call.
-            const ready = await page.evaluate(() => new Promise(resolve => {
+            const outcome = await page.evaluate(() => new Promise(resolve => {
                 const started = Date.now();
                 let settled = false;
                 const finish = async () => {
                     if (settled) return;
                     settled = true;
-                    try { await window.WPP?.call?.enableCallInterface?.(); } catch (err) { /* best effort */ }
-                    resolve(true);
+                    let interfaceError = '';
+                    try {
+                        await window.WPP?.call?.enableCallInterface?.();
+                    } catch (err) {
+                        interfaceError = String(err?.message || err);
+                    }
+                    resolve({ ready: true, interfaceError });
                 };
                 const poll = () => {
                     if (settled) return;
                     if (window.WPP?.isReady) return void finish();
-                    if (Date.now() - started > 20000) return resolve(false);
+                    if (Date.now() - started > 20000) return resolve({ ready: false });
                     setTimeout(poll, 250);
                 };
                 if (typeof window.WPP?.loader?.onReady === 'function') window.WPP.loader.onReady(finish);
@@ -1917,13 +2064,16 @@ async function ensureWppCallApi(client) {
                 poll();
             })).catch(err => {
                 console.warn(`[WHATSAPP CALL] WPP readiness wait failed: ${err?.message || err}`);
-                return false;
+                return { ready: false };
             });
 
             const loaderType = await page.evaluate(() => String(window.WPP?.loader?.loaderType || 'unknown')).catch(() => 'unknown');
-            if (ready) console.log(`[WHATSAPP CALL] WPP call API ready (loader=${loaderType})`);
+            if (outcome?.interfaceError) {
+                console.warn(`[WHATSAPP CALL] enableCallInterface failed: ${outcome.interfaceError}`);
+            }
+            if (outcome?.ready) console.log(`[WHATSAPP CALL] WPP call API ready (loader=${loaderType})`);
             else console.warn(`[WHATSAPP CALL] WPP never became ready (loader=${loaderType}), falling back to whatsapp-web.js`);
-            return ready;
+            return Boolean(outcome?.ready);
         })();
         wppCallApiLoads.set(page, loading);
         void loading.finally(() => {
@@ -2550,6 +2700,8 @@ module.exports = {
 
         rejectIncomingCallReliably,
         handleIncomingCall,
+        dispatchIncomingCall,
+        seenCallIds,
         resolveCallPhone,
         queueOutgoingText,
         clearRestartTimer,
