@@ -318,6 +318,32 @@ test('acks are renumbered to wwebjs, off-by-one included, and a failure is -1', 
   });
 });
 
+test('a one-to-one delivery and read receipt moves the ticks, and never moves them back', async () => {
+  const fake = fakeBaileys();
+  const acks = [];
+
+  await withClient('receipts', fake, async client => {
+    client.on('message_ack', (msg, ack) => acks.push(ack));
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+
+    const key = { remoteJid: '77476884956@s.whatsapp.net', fromMe: true, id: 'RCPT-1' };
+    fake.sockets[0].emit('messages.upsert', { type: 'append', messages: [textMessage({ key, message: { conversation: 'hi' } })] });
+
+    // A private chat reports delivery and read here, not as a status on
+    // messages.update, which is why the panel used to stay on one tick.
+    fake.sockets[0].emit('message-receipt.update', [{ key, receipt: { userJid: key.remoteJid, receiptTimestamp: 1 } }]);
+    fake.sockets[0].emit('message-receipt.update', [{ key, receipt: { userJid: key.remoteJid, readTimestamp: 2 } }]);
+    // A second device repeating the delivery receipt must not un-read it.
+    fake.sockets[0].emit('message-receipt.update', [{ key, receipt: { userJid: key.remoteJid, receiptTimestamp: 3 } }]);
+    // A played voice note is still 'read' for the panel.
+    fake.sockets[0].emit('message-receipt.update', [{ key, receipt: { userJid: key.remoteJid, playedTimestamp: 4 } }]);
+    // Nothing actionable in the receipt is not an ack.
+    fake.sockets[0].emit('message-receipt.update', [{ key, receipt: { userJid: key.remoteJid } }]);
+
+    assert.deepEqual(acks, [2, 3]);
+  });
+});
+
 test('an ack for a message this process never saw still resolves a phone', async () => {
   const fake = fakeBaileys();
   const acks = [];

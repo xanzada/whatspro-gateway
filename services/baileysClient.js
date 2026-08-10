@@ -425,6 +425,10 @@ class BaileysClient extends EventEmitter {
         sock.ev.on('connection.update', guard(update => this._onConnectionUpdate(update, sock)));
         sock.ev.on('messages.upsert', guard(payload => this._onMessagesUpsert(payload)));
         sock.ev.on('messages.update', guard(updates => this._onMessagesUpdate(updates)));
+        // A one-to-one chat reports delivery and read on the receipt stream, not
+        // as a status on messages.update, so the panel stayed on a single tick
+        // forever when only the latter was wired.
+        sock.ev.on('message-receipt.update', guard(updates => this._onReceiptUpdate(updates)));
         sock.ev.on('call', guard(events => this._onCall(events, sock)));
         // A history chunk is dropped on the floor rather than trusted: the flags
         // above should prevent one, and a webhook replay is unrecoverable.
@@ -534,6 +538,27 @@ class BaileysClient extends EventEmitter {
                 this._safeEmit('message_ack', msg, ack);
             } catch (error) {
                 this._log('error', `ack handling failed: ${error?.message || error}`);
+            }
+        }
+    }
+
+    _onReceiptUpdate(updates) {
+        for (const entry of [].concat(updates || [])) {
+            try {
+                const receipt = entry?.receipt || {};
+                // wwebjs numbering: 2 is delivered, 3 is read. A played voice
+                // note is still 'read' as far as the panel is concerned.
+                let ack = null;
+                if (receipt.readTimestamp || receipt.playedTimestamp) ack = 3;
+                else if (receipt.receiptTimestamp) ack = 2;
+                if (ack === null) continue;
+                const msg = this._messageForKey(entry.key);
+                if (!msg) continue;
+                if (Number(msg.ack) >= ack) continue;
+                msg.ack = ack;
+                this._safeEmit('message_ack', msg, ack);
+            } catch (error) {
+                this._log('error', `receipt handling failed: ${error?.message || error}`);
             }
         }
     }
