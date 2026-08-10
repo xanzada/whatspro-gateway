@@ -1088,7 +1088,7 @@ app.get('/api/wa/runtime-configs/:instanceId', requireMasterApi, async (req, res
   try {
     const config = await tenantStore.findRow(req.params.instanceId);
     if (!config) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
-    res.json({ success: true, config });
+    res.json({ success: true, config: tenantAdmin.withCurrentTransport(config) });
   } catch (error) {
     res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
   }

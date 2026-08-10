@@ -79,6 +79,22 @@ function platformFields(publicBase) {
   };
 }
 
+// Where a restaurant's replies are sent is a property of this gateway, not of the
+// restaurant, so it must never be answered from a row written months ago. Moving
+// the platform to a new host once left every stored URL pointing at the old one —
+// the tenants kept working in the panel while every outbound message 404'd. The
+// stored columns remain the fallback for a deployment that sets no public URL.
+function withCurrentTransport(row, publicBase) {
+  const base = String(publicBase || process.env.WHATSPRO_PUBLIC_URL || '').replace(/\/+$/, '');
+  if (!base) return { ...(row || {}) };
+  return {
+    ...(row || {}),
+    whatspro_base_url: base,
+    whatspro_send_url: `${base}/api/send`,
+    whatspro_presence_url: `${base}/api/presence`
+  };
+}
+
 // Typing a name in Kazakh and an id in Latin is the same decision made twice, so
 // the id is derived from the name unless somebody overrides it.
 const TRANSLITERATION = {
@@ -492,7 +508,7 @@ function presentableTenant(row) {
 // fetched only from the master-scoped per-instance endpoint. This keeps a list
 // response or accidental list dump from containing every Alemi key at once.
 function runtimeListTenant(row) {
-  const safe = { ...(row || {}) };
+  const safe = withCurrentTransport(row);
   const present = Boolean(String(safe.alemi_secret || safe.alemiSecret || '').trim());
   delete safe.alemi_secret;
   delete safe.alemiSecret;
@@ -518,5 +534,6 @@ module.exports = {
   setCallsDisabled,
   updateTenant,
   slugify,
+  withCurrentTransport,
   __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting }
 };

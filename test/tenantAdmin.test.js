@@ -274,6 +274,37 @@ test('Alemi secret can be set or rotated but is never echoed', async t => {
   });
 });
 
+test('the bot is told where this gateway lives now, not where it lived when the row was written', () => {
+  // A row created before the platform moved hosts still carries the old URLs. The
+  // panel keeps working while every outbound message 404s, so the answer the bot
+  // reads is recomputed instead of remembered.
+  const stale = {
+    instance_id: 'prestige',
+    whatspro_base_url: 'https://whatspro.bekaba.com',
+    whatspro_send_url: 'https://whatspro.bekaba.com/api/send',
+    whatspro_presence_url: 'https://whatspro.bekaba.com/api/presence',
+    alemi_secret: 'alemi_supersecret'
+  };
+
+  withEnv({ WHATSPRO_PUBLIC_URL: 'https://whatspro.alemi.kz/' }, () => {
+    const listed = tenantAdmin.runtimeListTenant(stale);
+    assert.equal(listed.whatspro_base_url, 'https://whatspro.alemi.kz', 'a trailing slash must not survive into the URLs');
+    assert.equal(listed.whatspro_send_url, 'https://whatspro.alemi.kz/api/send');
+    assert.equal(listed.whatspro_presence_url, 'https://whatspro.alemi.kz/api/presence');
+    assert.equal(listed.alemi_secret, undefined, 'the list still carries no Alemi key');
+    assert.equal(listed.alemi_secret_set, true);
+    assert.equal(tenantAdmin.withCurrentTransport(stale).whatspro_send_url, 'https://whatspro.alemi.kz/api/send');
+  });
+
+  withEnv({ WHATSPRO_PUBLIC_URL: undefined }, () => {
+    assert.equal(
+      tenantAdmin.withCurrentTransport(stale).whatspro_send_url,
+      'https://whatspro.bekaba.com/api/send',
+      'with no public URL configured the stored value is better than an empty one'
+    );
+  });
+});
+
 test('the broad runtime list exposes only Alemi key presence', () => {
   const listed = tenantAdmin.runtimeListTenant({
     instance_id: 'prestige', alemi_instance: 'prestige', alemi_secret: 'do-not-list-me'
