@@ -1692,6 +1692,7 @@ async function stopWhatsAppInstance(instanceId) {
     // tenant has to stop it too. Left running it would keep answering calls for
     // a tenant the platform considers off.
     callWatcherQrs.delete(instanceId);
+    callWatcherRelinks.delete(instanceId);
     try { require('./callWatcher').stopCallWatcher(instanceId); } catch (_) {}
 
     const initializingClient = initializingClients.get(instanceId);
@@ -1938,6 +1939,28 @@ function callWatcherAuthDir(instanceId) {
     return path.join(AUTH_DATA_PATH, `call-watcher-${instanceId}`);
 }
 
+// When the phone unlinks the watcher device, its stored credentials are dead:
+// the watcher parks itself and never retries, because a rescan is the only fix.
+// Nothing was asking for that rescan, so the tenant simply stopped seeing calls
+// until someone redeployed. Clearing the dead credentials and starting over puts
+// a fresh QR on the onboarding page instead, which is the actionable state.
+const CALL_WATCHER_RELINK_COOLDOWN_MS = 60000;
+const callWatcherRelinks = new Map();
+
+async function relinkCallWatcher(instanceId, client) {
+    if (shutdownInProgress || intentionallyStopped.has(instanceId)) return false;
+    // An unlink that repeats — a phone that keeps rejecting the device — must not
+    // turn into a loop of socket churn.
+    const last = callWatcherRelinks.get(instanceId) || 0;
+    if (Date.now() - last < CALL_WATCHER_RELINK_COOLDOWN_MS) return false;
+    callWatcherRelinks.set(instanceId, Date.now());
+
+    removeCallWatcherAuth(instanceId, 'unlinked_from_phone');
+    console.log(`[CALL WATCHER] ${instanceId}: unlinked, asking for a fresh scan`);
+    await startCallWatcherFor(instanceId, client);
+    return true;
+}
+
 async function startCallWatcherFor(instanceId, client) {
     const watcher = require('./callWatcher');
     try {
@@ -1947,6 +1970,15 @@ async function startCallWatcherFor(instanceId, client) {
                 callWatcherQrs.set(instanceId, { qr, at: Date.now() });
                 console.log(`[CALL WATCHER] ${instanceId}: scan this QR to let the bot see calls (WhatsApp > Linked devices)`);
                 try { require('qrcode-terminal').generate(qr, { small: true }); } catch (_) {}
+            },
+            // Called from inside the watcher's own close handler, so the restart is
+            // deferred rather than tearing the socket down underneath it.
+            onLoggedOut: () => {
+                setImmediate(() => {
+                    void relinkCallWatcher(instanceId, client).catch(error => {
+                        console.error(`[CALL WATCHER] ${instanceId}: relink failed: ${error?.message || error}`);
+                    });
+                });
             },
             onIncomingCall: (call, sock) => dispatchIncomingCall(
                 instanceId,
@@ -2867,6 +2899,10 @@ module.exports = {
         seenCallIds,
         callWatcherQrs,
         getCallWatcherQr,
+        relinkCallWatcher,
+        startCallWatcherFor,
+        callWatcherRelinks,
+        callWatcherAuthDir,
         resolveCallPhone,
         queueOutgoingText,
         clearRestartTimer,

@@ -192,6 +192,32 @@ test('a stale socket that keeps firing is ignored after a reconnect', async () =
   }, { onIncomingCall: call => { seen.push(call); } });
 });
 
+test('a QR waiting to be scanned is left alone by the watchdog', async () => {
+  const fake = fakeBaileys();
+  const codes = [];
+
+  await withWatcher('scanning', fake, async () => {
+    fake.sockets[0].emit('connection.update', { connection: 'connecting', qr: 'QR-1' });
+    assert.deepEqual(codes, ['QR-1']);
+    assert.equal(callWatcherStatus('scanning').awaitingScan, true);
+
+    // The watchdog is wound down to 150ms here, so this window covers several
+    // of its cycles. Tearing the socket down would invalidate the code mid-scan.
+    await new Promise(resolve => setTimeout(resolve, 700));
+    assert.equal(
+      callWatcherStatus('scanning').reconnecting, false,
+      'the watchdog must not even arm a retry while a scan is pending'
+    );
+    assert.equal(fake.sockets.length, 1, 'the socket showing the QR must survive');
+    assert.deepEqual(codes, ['QR-1'], 'the code on screen must not be replaced');
+
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    const status = callWatcherStatus('scanning');
+    assert.equal(status.awaitingScan, false, 'a landed scan clears the flag');
+    assert.equal(status.connected, true);
+  }, { onQr: qr => codes.push(qr), watchdogMs: 150 });
+});
+
 test('a connect that throws still leaves a retry armed', async () => {
   let attempts = 0;
   const fake = fakeBaileys();
@@ -240,7 +266,8 @@ test('stopping the watcher really stops it, timers and all', async () => {
 
     assert.equal(stopCallWatcher('stops'), true);
     assert.deepEqual(callWatcherStatus('stops'), {
-      watching: false, connected: false, loggedOut: false, reconnecting: false, attempts: 0
+      watching: false, connected: false, loggedOut: false,
+      awaitingScan: false, reconnecting: false, attempts: 0
     });
 
     await new Promise(resolve => setTimeout(resolve, 2200));

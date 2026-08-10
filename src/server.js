@@ -1249,6 +1249,10 @@ app.get('/api/wa/tenants/:instanceId/call-watcher', requireUiOrApi, async (req, 
       success: true,
       connected: Boolean(status.connected),
       watching: Boolean(status.watching),
+      // A code on screen nobody has scanned yet and a watcher that is down look
+      // the same from the outside, and only one of them is waiting on a person.
+      awaitingScan: Boolean(status.awaitingScan),
+      loggedOut: Boolean(status.loggedOut),
       qr: pending ? await require('qrcode').toDataURL(pending.qr) : null
     });
   } catch (error) {

@@ -44,6 +44,40 @@ const WATCHDOG_MS = 30000;
 // Date.now is injected as a seam so tests can hold it still.
 let nowMs = () => Date.now();
 
+// Set CALL_SPY=1 to dump what actually arrives on the socket. A ringing call
+// updates several times a second, so each kind of line is throttled rather than
+// left to flood the log. Off by default: this is a diagnostic, not telemetry.
+const SPY_THROTTLE_MS = 1000;
+const spySeen = new Map();
+
+// A CALL_SPY file next to the session folders turns the spy on as well as the
+// env var. Dokploy owns the compose env, so setting a variable means recreating
+// the container; a file can be dropped into a running one, which is the only way
+// to catch a call that is happening right now.
+function spyEnabled(authDir) {
+    if (process.env.CALL_SPY === '1') return true;
+    try {
+        return fs.existsSync(path.join(path.dirname(authDir), 'CALL_SPY'));
+    } catch {
+        return false;
+    }
+}
+
+function spy(log, instanceId, label, payload, authDir) {
+    if (!spyEnabled(authDir)) return;
+    const key = `${instanceId}:${label}`;
+    const last = spySeen.get(key) || 0;
+    if (nowMs() - last < SPY_THROTTLE_MS) return;
+    spySeen.set(key, nowMs());
+    let body;
+    try {
+        body = JSON.stringify(payload, (_k, v) => (typeof v === 'bigint' ? String(v) : v));
+    } catch {
+        body = String(payload);
+    }
+    log.log(`[CALL SPY] ${instanceId} ${label}: ${String(body).slice(0, 900)}`);
+}
+
 function reconnectDelay(attempt) {
     return Math.min(RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1), RECONNECT_MAX_MS);
 }
@@ -65,7 +99,7 @@ async function startCallWatcher(instanceId, options = {}) {
     const onQr = options.onQr;
     const logger = options.logger || console;
 
-    const state = { instanceId, sock: null, stopped: false, attempt: 0, connected: false, generation: 0, timer: null, watchdog: null };
+    const state = { instanceId, sock: null, stopped: false, attempt: 0, connected: false, awaitingScan: false, generation: 0, timer: null, watchdog: null };
     watchers.set(instanceId, state);
 
     fs.mkdirSync(authDir, { recursive: true });
@@ -128,15 +162,32 @@ async function startCallWatcher(instanceId, options = {}) {
 
         sock.ev.on('creds.update', saveCreds);
 
+        // The raw stanza, one level below the parsed 'call' event. If a call
+        // reaches the socket but baileys never surfaces it, this is where that
+        // shows up — and the difference between the two is the whole diagnosis.
+        if (spyEnabled(authDir) && typeof sock.ws?.on === 'function') {
+            for (const tag of ['CB:call', 'CB:ack,class:call', 'CB:offer']) {
+                sock.ws.on(tag, node => spy(logger, instanceId, `raw ${tag}`, node, authDir));
+            }
+        }
+
         sock.ev.on('connection.update', update => {
             if (!isCurrent()) return;
             const { connection, lastDisconnect, qr } = update;
 
-            if (qr && typeof onQr === 'function') onQr(qr);
+            // A QR on screen means someone is mid-scan. Tearing that socket down
+            // invalidates the code they are looking at, so the watchdog has to
+            // leave it alone until the scan lands or the socket closes by itself.
+            if (qr) {
+                state.awaitingScan = true;
+                state.lastSeen = nowMs();
+                if (typeof onQr === 'function') onQr(qr);
+            }
 
             if (connection === 'open') {
                 state.attempt = 0;
                 state.connected = true;
+                state.awaitingScan = false;
                 state.lastSeen = nowMs();
                 logger.log(`[CALL WATCHER] ${instanceId}: socket open, watching for call offers`);
                 return;
@@ -144,6 +195,7 @@ async function startCallWatcher(instanceId, options = {}) {
 
             if (connection === 'close') {
                 state.connected = false;
+                state.awaitingScan = false;
                 const code = lastDisconnect?.error?.output?.statusCode;
                 if (state.stopped) return;
                 // Only the phone unlinking the device is terminal. Everything
@@ -164,6 +216,7 @@ async function startCallWatcher(instanceId, options = {}) {
         sock.ev.on('call', events => {
             if (!isCurrent()) return;
             state.lastSeen = nowMs();
+            spy(logger, instanceId, 'call', events, authDir);
             for (const event of [].concat(events || [])) {
                 // A ringing call emits a status update several times a second, so
                 // only the two states that change what we do are worth a line.
@@ -184,8 +237,9 @@ async function startCallWatcher(instanceId, options = {}) {
     // good" a state this watcher cannot sit in.
     state.watchdog = setInterval(() => {
         if (state.stopped || state.loggedOut || state.connected || state.timer) return;
+        if (state.awaitingScan) return;
         scheduleReconnect('watchdog found the socket down');
-    }, WATCHDOG_MS);
+    }, Number(options.watchdogMs) > 0 ? Number(options.watchdogMs) : WATCHDOG_MS);
     if (typeof state.watchdog?.unref === 'function') state.watchdog.unref();
 
     await connect().catch(err => {
@@ -227,6 +281,8 @@ function callWatcherStatus(instanceId) {
         // Only true when the phone unlinked the device. It is the one state a
         // rescan can fix, and the only one the panel should ask about.
         loggedOut: Boolean(state?.loggedOut),
+        // A QR is on screen and a person is expected to scan it.
+        awaitingScan: Boolean(state?.awaitingScan),
         reconnecting: Boolean(state?.timer),
         attempts: Number(state?.attempt || 0)
     };

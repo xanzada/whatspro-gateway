@@ -40,14 +40,20 @@
         showDone();
         return;
       }
-      if (data.qr && data.qr !== lastQr) {
+      // An unlink invalidates whatever code is on screen, and the gateway is
+      // already asking for a new one, so the old image must not stay up.
+      if (data.loggedOut) {
+        lastQr = null;
+        show('Телефон құрылғыны ажыратты. Жаңа QR дайындалуда…');
+      } else if (data.qr && data.qr !== lastQr) {
         lastQr = data.qr;
         var image = new Image();
         image.alt = 'QR';
         image.src = data.qr;
         $('cw-frame').replaceChildren(image);
       } else if (!data.qr && !lastQr) {
-        show(data.watching ? 'QR дайындалуда…' : 'Бақылаушы іске қосылмаған.');
+        if (!data.watching) show('Бақылаушы іске қосылмаған.');
+        else show(data.awaitingScan ? 'QR сканерлеуді күтіп тұр…' : 'QR дайындалуда…');
       }
     } catch (error) {
       show('Байланыс үзілді, қайта қосылуда…');
