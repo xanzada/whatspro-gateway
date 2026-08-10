@@ -246,9 +246,22 @@ test('a presentable tenant carries no secret, only whether one exists', () => {
   assert.equal(view.alemiApiUrl, 'https://hub.alemi.kz');
   assert.equal(view.alemiInstance, 'prestige');
   assert.deepEqual(view.secrets, { apiToken: true, webhookSecret: true, kanbanSecret: false, alemiSecret: true });
+  assert.equal(view.alemiLinked, true);
   assert.equal(view.active, true, 'a row from before the column existed is not silently paused');
   assert.equal(view.botEnabled, true, 'a row from before bot control existed remains enabled');
   assert.equal(view.promptMode, 'custom');
+});
+
+test('a tenant that was never linked to the hub is not dressed up as linked', () => {
+  // maki in production: no alemi_instance, no alemi_secret. The old fallback
+  // echoed instance_id back and the panel showed it as a hub instance.
+  const view = tenantAdmin.presentableTenant({ instance_id: 'maki', brand: 'Maki' });
+  assert.equal(view.alemiInstance, '');
+  assert.equal(view.alemiLinked, false);
+  assert.equal(view.secrets.alemiSecret, false);
+  // One half alone is still not a link.
+  assert.equal(tenantAdmin.presentableTenant({ instance_id: 'maki', alemi_instance: 'maki' }).alemiLinked, false);
+  assert.equal(tenantAdmin.presentableTenant({ instance_id: 'maki', alemi_secret: 'only-a-key' }).alemiLinked, false);
 });
 
 test('Alemi secret can be set or rotated but is never echoed', async t => {

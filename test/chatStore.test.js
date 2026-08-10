@@ -419,6 +419,15 @@ test('receipts are monotonic and cannot recreate a deleted chat', async () => {
   assert.equal(redis.data.has('chatwoot:receipts:acme:77001234567'), false);
 });
 
+test('a negative ack overwrites an optimistic sent instead of being ranked below it', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis);
+  await store.appendMessage('acme', '77001234567', { id: 'out1', text: 'hello', role: 'operator' }, { state: 'operator' });
+  assert.equal(await store.updateMessageReceipt('acme', '77001234567', 'out1', 'sent'), true);
+  assert.equal(await store.updateMessageReceipt('acme', '77001234567', 'out1', 'failed'), true);
+  assert.equal((await store.getHistory('acme', '77001234567'))[0].deliveryStatus, 'failed');
+});
+
 test('idempotent operator append repairs metadata and respects delete tombstones', async () => {
   let now = 1_700_000_000_000;
   const redis = new FakeRedis();

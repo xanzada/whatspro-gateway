@@ -72,6 +72,9 @@ test('receipt state maps WhatsApp ACK progression monotonically', () => {
   assert.equal(core.receiptState({ ack: 3 }), 'read');
   assert.equal(core.receiptState({ status: 'delivered' }), 'delivered');
   assert.equal(core.receiptState({ status: 'played' }), 'read');
+  // A rejected message is not a quieter kind of "sent".
+  assert.equal(core.receiptState({ status: 'failed' }), 'failed');
+  assert.equal(core.receiptState({ ack: -1 }), 'failed');
 });
 
 test('HTML escaping and phone normalization are safe', () => {

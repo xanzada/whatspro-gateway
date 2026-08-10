@@ -233,7 +233,7 @@
     shareQr: 'Сілтемемен бөлісу',
     copyLink: 'Сілтемені көшіру',
     shareTitle: 'WhatsApp-ты қосу',
-    shareText: 'Сілтемені ашып, екі QR кодты сол бір телефонмен сканерлеңіз: 1-код — хабарламалар үшін, 2-код — қоңыраулар үшін. Екінші код сканерленген соң, клиент звандағанда бот қоңырауды бір секундта басып тастап, оған бірден жауап хабарламасын жібереді.',
+    shareText: 'Сілтемені ашып, QR кодты телефонмен сканерлеңіз. Бір код хабарламаларға да, қоңырауларға да жарайды: клиент звандағанда бот қоңырауды бір секундта басып тастап, оған бірден жауап хабарламасын жібереді.',
     linkCopied: 'Қосылу сілтемесі көшірілді',
     linkExpires: 'Сілтеме 72 сағат жарамды',
     exportExcel: 'Excel-ге сақтау',
@@ -291,7 +291,7 @@
     shareQr: 'Поделиться ссылкой',
     copyLink: 'Скопировать ссылку',
     shareTitle: 'Подключение WhatsApp',
-    shareText: 'Откройте ссылку и отсканируйте два QR-кода одним и тем же телефоном: первый — для сообщений, второй — для звонков. После второго кода бот сбрасывает входящий звонок за секунду и сразу отправляет клиенту сообщение.',
+    shareText: 'Откройте ссылку и отсканируйте QR-код телефоном. Один код подключает и сообщения, и звонки: бот сбрасывает входящий звонок за секунду и сразу отправляет клиенту сообщение.',
     linkCopied: 'Ссылка подключения скопирована',
     linkExpires: 'Ссылка действует 72 часа',
     exportExcel: 'Сохранить в Excel',
@@ -678,7 +678,8 @@
       '</strong></div><div class="detail-body"><pre class="log-block">' + escapeHtml(JSON.stringify({
         instanceId: tenant.instanceId, active: tenant.active !== false, botEnabled: tenant.botEnabled !== false, status: live.status || 'unknown',
         hasStoredSession: Boolean(live.hasStoredSession), alemiApiUrl: detail.alemiApiUrl || '',
-        alemiInstance: detail.alemiInstance || tenant.instanceId,
+        alemiInstance: detail.alemiInstance || '',
+        alemiLinked: Boolean(detail.alemiLinked),
         alemiSecretSet: Boolean(detail.secrets && detail.secrets.alemiSecret)
       }, null, 2)) + '</pre></div></section></div></div></div>';
   }

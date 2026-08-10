@@ -67,8 +67,10 @@
 
   function receiptState(item) {
     var ack = item && (item.ack != null ? item.ack : (item.ackStatus != null ? item.ackStatus : item.status));
-    if (typeof ack === 'number') return ack >= 3 ? 'read' : ack >= 2 ? 'delivered' : 'sent';
+    if (typeof ack === 'number') return ack < 0 ? 'failed' : ack >= 3 ? 'read' : ack >= 2 ? 'delivered' : 'sent';
     ack = String(ack == null ? '' : ack).toLowerCase();
+    // A message WhatsApp rejected must not read as delivered-to-the-server "✓".
+    if (['failed', 'error', '-1'].indexOf(ack) >= 0) return 'failed';
     if (['read', 'played', '3', '4'].indexOf(ack) >= 0) return 'read';
     return ['delivered', '2'].indexOf(ack) >= 0 ? 'delivered' : 'sent';
   }

@@ -1,4 +1,20 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+// The Chromium transport is still reachable as a rollback path, but it is no
+// longer loaded at boot: requiring whatsapp-web.js pulls puppeteer and a browser
+// launch surface in with it, which is the memory this migration is removing.
+let wwebjsModule = null;
+function loadWwebjs() {
+    if (!wwebjsModule) wwebjsModule = require('whatsapp-web.js');
+    return wwebjsModule;
+}
+
+let baileysClientCtor = null;
+function loadBaileysClient() {
+    if (!baileysClientCtor) {
+        const loaded = require('./baileysClient');
+        baileysClientCtor = loaded.BaileysClient || loaded;
+    }
+    return baileysClientCtor;
+}
 
 const crypto = require('node:crypto');
 const { Agent, Dispatcher } = require('undici');
@@ -85,6 +101,10 @@ function isChatMediaCandidate(msg) {
 
 function deliveryStatusFromAck(ack) {
     const value = Number(ack);
+    // A rejected message used to render as a normal single tick. The transport
+    // reports it as a negative ack, which is the only signal that the message
+    // will never arrive, so it must not fall through to 'sent'.
+    if (value < 0) return 'failed';
     if (value >= 3) return 'read';
     if (value === 2) return 'delivered';
     return 'sent';
@@ -642,12 +662,55 @@ const LOG_THROTTLE_MS = Number(process.env.WHATSAPP_LOG_THROTTLE_MS || 60000);
 // nominal delay must still be treated as the same reconnect attempt.
 const RESTART_DEDUPE_SLACK_MS = 2000;
 
-function getSessionPath(instanceId) {
+// Which transport a tenant runs on. Baileys is the default; a single tenant can
+// be pinned back to Chromium through WHATSPRO_WWEBJS_INSTANCES, and the whole
+// gateway through WHATSPRO_TRANSPORT=wwebjs. Both are env-only on purpose: a
+// rollback must not need a migration or a schema change, only a restart.
+const DEFAULT_TRANSPORT = String(process.env.WHATSPRO_TRANSPORT || 'baileys').trim().toLowerCase();
+const WWEBJS_PINNED_INSTANCES = new Set(
+    String(process.env.WHATSPRO_WWEBJS_INSTANCES || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean)
+);
+// Recorded when the client is built, so a tenant that is already running keeps
+// answering on the transport it was started with even if the env changes under it.
+const instanceTransports = new Map();
+
+function configuredTransport(instanceId) {
+    if (WWEBJS_PINNED_INSTANCES.has(instanceId)) return 'wwebjs';
+    return DEFAULT_TRANSPORT === 'wwebjs' ? 'wwebjs' : 'baileys';
+}
+
+function activeTransport(instanceId) {
+    return instanceTransports.get(instanceId) || configuredTransport(instanceId);
+}
+
+function usesBaileys(instanceId) {
+    return activeTransport(instanceId) === 'baileys';
+}
+
+function getWwebjsSessionPath(instanceId) {
     return path.join(AUTH_DATA_PATH, `session-${instanceId}`);
 }
 
+function getBaileysSessionPath(instanceId) {
+    return path.join(AUTH_DATA_PATH, `baileys-${instanceId}`);
+}
+
+function getSessionPath(instanceId) {
+    return usesBaileys(instanceId) ? getBaileysSessionPath(instanceId) : getWwebjsSessionPath(instanceId);
+}
+
 function hasStoredSession(instanceId) {
-    const sessionPath = getSessionPath(instanceId);
+    // Baileys keeps the pairing in creds.json; the signal-key files next to it
+    // are worthless on their own, so a directory holding only those is not a
+    // restorable session and must still ask for a QR.
+    if (usesBaileys(instanceId)) {
+        return fs.existsSync(path.join(getBaileysSessionPath(instanceId), 'creds.json'));
+    }
+
+    const sessionPath = getWwebjsSessionPath(instanceId);
     if (!fs.existsSync(sessionPath)) return false;
 
     try {
@@ -766,6 +829,31 @@ function queueOutgoingText(instanceId, phone, text, reason = 'client_not_ready',
     console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${phone}: queued text (${reason}). pending=${queue.length}`);
 }
 
+// An operator's image or PDF used to be lost outright on a transient failure:
+// sendMedia had no retry and the queue only carried text. Media rides the same
+// queue now, with the payload it needs to be re-sent.
+function queueOutgoingMedia(instanceId, phone, media, reason = 'client_not_ready', attempts = 0) {
+    if (!media || !media.base64Data) return;
+
+    const queue = pendingTextQueues.get(instanceId) || [];
+    queue.push({
+        phone,
+        text: '',
+        media: {
+            base64Data: media.base64Data,
+            fileName: media.fileName || '',
+            caption: media.caption || ''
+        },
+        reason,
+        attempts,
+        createdAt: Date.now()
+    });
+
+    while (queue.length > OUTGOING_TEXT_QUEUE_MAX) queue.shift();
+    pendingTextQueues.set(instanceId, queue);
+    console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${phone}: queued media (${reason}). pending=${queue.length}`);
+}
+
 function scheduleFlush(instanceId, delayMs = 1000) {
     const current = flushTimers.get(instanceId);
     if (current) clearTimeout(current);
@@ -838,7 +926,7 @@ function purgeExpiredOutgoingText(instanceId) {
     const now = Date.now();
     const alive = queue.filter(item => {
         if (now - item.createdAt <= OUTGOING_TEXT_QUEUE_TTL_MS) return true;
-        console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: dropped expired text (${item.reason}).`);
+        console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: dropped expired ${item.media ? 'media' : 'text'} (${item.reason}).`);
         return false;
     });
 
@@ -913,11 +1001,15 @@ function stopSessionSupervisor() {
 }
 
 function removeSessionFolder(instanceId, reason = 'manual') {
-    const sessionPath = getSessionPath(instanceId);
-    if (!fs.existsSync(sessionPath)) return;
-
-    fs.rmSync(sessionPath, { recursive: true, force: true });
-    console.log(`[WHATSAPP] ${instanceId} session folder cleared (${reason}).`);
+    // Both transports store credentials for the same WhatsApp account. When the
+    // credentials are being cleared they are dead on both, and leaving one behind
+    // is how a tenant ends up half-linked: a fresh QR on one transport, a stale
+    // pairing on the other.
+    for (const sessionPath of [getBaileysSessionPath(instanceId), getWwebjsSessionPath(instanceId)]) {
+        if (!fs.existsSync(sessionPath)) continue;
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        console.log(`[WHATSAPP] ${instanceId} session folder cleared: ${path.basename(sessionPath)} (${reason}).`);
+    }
 }
 
 // Wiping the session while the watcher keeps its own credentials would leave the
@@ -981,7 +1073,11 @@ function isChromiumResourceError(error) {
 }
 
 function cleanupChromiumRuntimeLocks(instanceId) {
-    const sessionPath = getSessionPath(instanceId);
+    // Nothing to sweep on the Baileys transport: there is no browser profile, so
+    // no singleton locks and no crashpad directories.
+    if (usesBaileys(instanceId)) return 0;
+
+    const sessionPath = getWwebjsSessionPath(instanceId);
     if (!fs.existsSync(sessionPath)) return 0;
 
     const stack = [sessionPath];
@@ -1210,6 +1306,52 @@ async function getPhoneFromLid(client, values = []) {
     }
 }
 
+// Builds the transport for this tenant. Both clients expose the same event and
+// method surface, so everything below this point is transport-agnostic.
+function createTransportClient(instanceId) {
+    const transport = configuredTransport(instanceId);
+    instanceTransports.set(instanceId, transport);
+
+    if (transport === 'baileys') {
+        const BaileysClient = loadBaileysClient();
+        return new BaileysClient({
+            instanceId,
+            authDir: getBaileysSessionPath(instanceId)
+        });
+    }
+
+    const { Client, LocalAuth } = loadWwebjs();
+    return new Client({
+        authStrategy: new LocalAuth({
+            clientId: instanceId,
+            dataPath: AUTH_DATA_PATH
+        }),
+        puppeteer: {
+            headless: true,
+            executablePath: fs.existsSync('/usr/bin/chromium-browser') ? '/usr/bin/chromium-browser' : (fs.existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : '/usr/bin/chromium'),
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--no-zygote',
+                '--disable-gpu',
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-sync',
+                '--disable-crash-reporter',
+                '--disable-crashpad',
+                '--disable-breakpad',
+                '--disable-features=Translate,BackForwardCache',
+                '--allow-file-access-from-files',
+                '--autoplay-policy=no-user-gesture-required'
+            ]
+        }
+    });
+}
+
 // 1. ЖАҢА ИНСТАНС ҚОСУ НЕ ЖҮКТЕУ ФУНКЦИЯСЫ
 async function startWhatsAppInstance(instanceId, options = {}) {
     if (shutdownInProgress) {
@@ -1252,35 +1394,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     cleanupChromiumRuntimeLocks(instanceId);
     console.log(`🚀 [WHATSAPP] ${instanceId} үшін жаңа сессия іске қосылуда...`);
 
-   const client = new Client({
-        authStrategy: new LocalAuth({ 
-            clientId: instanceId,
-            dataPath: AUTH_DATA_PATH
-        }),
-        puppeteer: {
-            headless: true,
-            executablePath: fs.existsSync('/usr/bin/chromium-browser') ? '/usr/bin/chromium-browser' : (fs.existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : '/usr/bin/chromium'),
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--no-zygote',
-                '--disable-gpu',
-                '--disable-extensions',
-                '--disable-background-networking',
-                '--disable-sync',
-                '--disable-crash-reporter',
-                '--disable-crashpad',
-                '--disable-breakpad',
-                '--disable-features=Translate,BackForwardCache',
-                '--allow-file-access-from-files',
-                '--autoplay-policy=no-user-gesture-required'
-            ]
-        }
-    });
+   const client = createTransportClient(instanceId);
+    const transport = activeTransport(instanceId);
+    console.log(`[WHATSAPP] ${instanceId} transport=${transport}`);
     initializingClients.set(instanceId, client);
 
     // 🚀 ЖАҢА: ЗОМБИ СЕССИЯДАН ҚОРҒАНУ (WATCHDOG TIMER)
@@ -1377,6 +1493,12 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         // 🚀 ЕҢ МАҢЫЗДЫ ӨЗГЕРІС: Инстансты тек 100% ҚОСЫЛҒАНДА ғана жадыға жазамыз!
         clients.set(instanceId, client);
         scheduleFlush(instanceId, 500);
+
+        // On Baileys the call offer is a stanza on this very socket, so there is
+        // nothing to inject and nothing to prime: the `call` handler below is
+        // already listening. Only the Chromium transport needs the wa-js bundle
+        // and the second socket.
+        if (transport === 'baileys') return;
 
         // The call API is primed here rather than on the first call: injecting
         // the bundle takes a couple of seconds, and a caller only rings for
@@ -1639,15 +1761,30 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     });
 
     client.on('call', call => {
-        console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=wwebjs) ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
+        console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${transport}) ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
+        if (transport === 'baileys') {
+            // The offer arrives while the phone is still ringing and the reject
+            // goes back over the same socket, so the four-source detection stack
+            // and the three-rung reject ladder the page transport needed are not
+            // in play here.
+            void dispatchIncomingCall(instanceId, client, call, 'baileys', {
+                rejectCall: async (activeClient, incoming) => {
+                    if (typeof incoming?.reject === 'function') return (await incoming.reject()) !== false;
+                    return (await activeClient.rejectCall(incoming?.id, incoming?.from)) !== false;
+                }
+            });
+            return;
+        }
         void dispatchIncomingCall(instanceId, client, call, 'wwebjs');
     });
 
-    // The Baileys watcher is the only source that sees a call while it is still
-    // ringing, because the offer is a socket stanza and never a page event.
-    // It rejects over its own socket and hands the call to the same dispatcher,
-    // so the greeting and the tenant rules stay exactly where they were.
-    void startCallWatcherFor(instanceId, client);
+    // The Chromium page never sees a call while it is still ringing, so that
+    // transport needs a second Baileys socket — and a second QR — purely to hear
+    // the offer. The Baileys transport hears it on its own socket, which is what
+    // collapses the two scans into one.
+    if (transport !== 'baileys') {
+        void startCallWatcherFor(instanceId, client);
+    }
 
 client.initialize().catch(async err => {
         console.error(`❌ [WHATSAPP] ${instanceId} ИНИЦИАЛИЗАЦИЯ ҚАТЕСІ:`, err.message);
@@ -1680,6 +1817,9 @@ async function stopWhatsAppInstance(instanceId) {
     intentionallyStopped.add(instanceId);
     supervisedInstances.delete(instanceId);
     stateCheckFailures.delete(instanceId);
+    // Forget the recorded transport so the next start re-reads the env. This is
+    // what makes a rollback take effect on a restart instead of needing a wipe.
+    instanceTransports.delete(instanceId);
     clearRestartTimer(instanceId);
     pendingTextQueues.delete(instanceId);
     const flushTimer = flushTimers.get(instanceId);
@@ -1774,17 +1914,18 @@ async function shutdownWhatsAppClients(reason = 'process_shutdown') {
 // 6. QR КОДТЫ НЕМЕСЕ СТАТУСТЫ КӨРУ ФУНКЦИЯСЫ
 async function getInstanceStatus(instanceId) {
     const storedSession = hasStoredSession(instanceId);
+    const transport = activeTransport(instanceId);
 
     if (qrCodes.has(instanceId)) {
-        return { status: 'qr_ready', qr: qrCodes.get(instanceId), hasStoredSession: storedSession };
+        return { status: 'qr_ready', qr: qrCodes.get(instanceId), hasStoredSession: storedSession, transport };
     }
 
     const client = clients.get(instanceId);
     if (!client) {
         if (initializingClients.has(instanceId)) {
-            return { ...(instanceStates.get(instanceId) || { status: storedSession ? 'restoring_session' : 'starting' }), hasStoredSession: storedSession };
+            return { ...(instanceStates.get(instanceId) || { status: storedSession ? 'restoring_session' : 'starting' }), hasStoredSession: storedSession, transport };
         }
-        return { ...(instanceStates.get(instanceId) || { status: 'not_running' }), hasStoredSession: storedSession };
+        return { ...(instanceStates.get(instanceId) || { status: 'not_running' }), hasStoredSession: storedSession, transport };
     }
 
     if (isClientPageClosed(client)) {
@@ -1796,7 +1937,11 @@ async function getInstanceStatus(instanceId) {
 
     try {
         const state = await withTimeout(client.getState(), WA_STATE_TIMEOUT_MS, 'WA_STATE_TIMEOUT');
-        if (isConnectedState(state) || client.info?.wid) {
+        const baileys = usesBaileys(instanceId);
+        // The wwebjs fallback on info.wid covers a page that answers late. Under
+        // Baileys the identity is cached for the life of the object, so trusting
+        // it would report a dead socket as connected forever.
+        if (isConnectedState(state) || (!baileys && client.info?.wid)) {
             stateCheckFailures.delete(instanceId);
             resetRestartAttempts(instanceId);
             setInstanceState(instanceId, 'connected', { waState: state || 'CONNECTED' });
@@ -1809,7 +1954,10 @@ async function getInstanceStatus(instanceId) {
         // deleting the session folder here unpaired healthy tenants. Only the
         // WhatsApp 'disconnected' / 'auth_failure' events or an explicit
         // operator action may clear stored credentials.
-        const status = state ? 'starting' : 'disconnected';
+        // Baileys runs its own reconnect ladder and watchdog, so a socket that
+        // is between attempts is 'starting'. Counting it as a health failure
+        // would put this supervisor in a race with that one.
+        const status = (state || baileys) ? 'starting' : 'disconnected';
         setInstanceState(instanceId, status, { waState: state || null });
         if (status === 'disconnected') registerHealthFailure(instanceId, `state_${state || 'NULL'}`);
         else stateCheckFailures.delete(instanceId);
@@ -1925,6 +2073,10 @@ const callWatcherQrs = new Map();
 // replaces the last. Reading it does not clear it: a scan is confirmed by the
 // socket opening, not by an admin loading the page once.
 function getCallWatcherQr(instanceId) {
+    // One QR covers messages and calls on the Baileys transport, so there is
+    // never a second code to show. The endpoint stays for back-compat.
+    if (usesBaileys(instanceId)) return null;
+
     const entry = callWatcherQrs.get(instanceId);
     if (!entry) return null;
     const watcher = require('./callWatcher');
@@ -2617,7 +2769,9 @@ async function flushPendingOutgoingText(instanceId) {
 
     for (const item of queue) {
         try {
-            const sent = await deliverWhatsAppText(client, instanceId, item.phone, item.text);
+            const sent = item.media
+                ? await deliverWhatsAppMedia(client, instanceId, item.phone, item.media.base64Data, item.media.fileName, item.media.caption)
+                : await deliverWhatsAppText(client, instanceId, item.phone, item.text);
             if (!sent && item.attempts < 3) {
                 retry.push({ ...item, attempts: item.attempts + 1, reason: 'retry_no_chat_id' });
             }
@@ -2670,37 +2824,75 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
     }
 }
 // 📸 МЕДИА ЖІБЕРУ ФУНКЦИЯСЫ (Сурет, Аудио)
-async function sendMedia(instanceId, phone, base64Data, fileName, caption) {
-    let markerKey = '';
+function splitBase64Payload(base64Data) {
+    let cleanBase64 = String(base64Data || '');
+    let mimeType = 'image/jpeg';
+    if (cleanBase64.includes(';base64,')) {
+        const parts = cleanBase64.split(';base64,');
+        mimeType = parts[0].split(':')[1];
+        cleanBase64 = parts[1];
+    }
+    return { mimeType, cleanBase64 };
+}
+
+// Baileys takes a plain descriptor; whatsapp-web.js needs its own MessageMedia
+// instance. The rest of the send path is identical.
+function buildOutgoingMedia(instanceId, mimeType, cleanBase64, fileName) {
+    if (usesBaileys(instanceId)) {
+        return { mimetype: mimeType, data: cleanBase64, filename: fileName || 'file' };
+    }
+    const { MessageMedia } = loadWwebjs();
+    return new MessageMedia(mimeType, cleanBase64, fileName || 'file');
+}
+
+async function deliverWhatsAppMedia(client, instanceId, phone, base64Data, fileName, caption) {
+    const chatId = toWhatsAppChatId(phone, jidMap);
+    if (!chatId) return false;
+
+    const markerKey = await markBotSending(instanceId, phone, chatId);
+    const { mimeType, cleanBase64 } = splitBase64Payload(base64Data);
+    const media = buildOutgoingMedia(instanceId, mimeType, cleanBase64, fileName);
+
+    let message;
+    try {
+        message = await client.sendMessage(chatId, media, { caption: caption || '' });
+    } catch (error) {
+        await releaseBotSending(markerKey);
+        error.sendAttempted = true;
+        throw error;
+    }
+
+    return {
+        success: true,
+        messageId: String(message?.id?.id || ''),
+        ack: Number(message?.ack || 0)
+    };
+}
+
+async function sendMedia(instanceId, phone, base64Data, fileName, caption, options = {}) {
     try {
         const client = await getReadyClient(instanceId);
         if (!client) {
-            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendMedia skipped because client is not initialized.`);
+            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendMedia queued because client is not initialized.`);
+            if (!options.skipQueue) {
+                queueOutgoingMedia(instanceId, phone, { base64Data, fileName, caption }, 'client_missing');
+                requestReconnect(instanceId, 'outgoing_media_client_missing');
+                scheduleFlush(instanceId, 10000);
+            }
             return false;
         }
-        const chatId = toWhatsAppChatId(phone, jidMap);
-        if (!chatId) return false;
-        markerKey = await markBotSending(instanceId, phone, chatId);
 
-        // Base64 мәтінінен таза суретті бөліп алу (data:image/jpeg;base64,... дегенді алып тастау)
-        let cleanBase64 = base64Data;
-        let mimeType = 'image/jpeg';
-        if (base64Data.includes(';base64,')) {
-            const parts = base64Data.split(';base64,');
-            mimeType = parts[0].split(':')[1];
-            cleanBase64 = parts[1];
-        }
-
-        const media = new MessageMedia(mimeType, cleanBase64, fileName || 'file');
-        const message = await client.sendMessage(chatId, media, { caption: caption || '' });
-        return {
-            success: true,
-            messageId: String(message?.id?.id || ''),
-            ack: Number(message?.ack || 0)
-        };
+        const result = await deliverWhatsAppMedia(client, instanceId, phone, base64Data, fileName, caption);
+        return result || false;
     } catch (error) {
-        await releaseBotSending(markerKey);
         console.error(`❌ [MEDIA ERROR] ${instanceId}:`, error.message);
+        // An operator's image or receipt used to be dropped here. It goes back on
+        // the same queue text uses, so a transient failure costs a delay and not
+        // the file.
+        if (!options.skipQueue) {
+            queueOutgoingMedia(instanceId, phone, { base64Data, fileName, caption }, error.message);
+            scheduleFlush(instanceId, 5000);
+        }
         return false;
     }
 }
@@ -2725,7 +2917,7 @@ async function markAsRead(instanceId, phone) {
 }
 
 // ✍️ "ЖАЗЫП ЖАТЫР..." СТАТУСЫН КӨРСЕТУ (Presence)
-async function sendPresence(instanceId, phone) {
+async function sendPresence(instanceId, phone, state = 'typing') {
     try {
         const client = clients.get(instanceId);
         if (!client) {
@@ -2735,6 +2927,12 @@ async function sendPresence(instanceId, phone) {
         const chatId = toWhatsAppChatId(phone, jidMap);
         if (!chatId) return false;
         const chat = await client.getChatById(chatId);
+        // 'read' was accepted by the API and then thrown away, so a caller asking
+        // for blue ticks got a typing indicator instead.
+        if (String(state || '').trim().toLowerCase() === 'read') {
+            await chat.sendSeen();
+            return true;
+        }
         await chat.sendStateTyping();
         return true;
     } catch (error) {
@@ -2843,6 +3041,10 @@ async function getBase64Media(instanceId, keyObj) {
 }
 module.exports = {
     getCallWatcherQr,
+    // One QR covers messages and calls on the Baileys transport. The onboarding
+    // flow and the tenant panel ask this instead of assuming a second scan.
+    usesSingleQr: usesBaileys,
+    activeTransport,
     startWhatsAppInstance,
     startSessionSupervisor,
     stopSessionSupervisor,
@@ -2860,6 +3062,19 @@ module.exports = {
         isChromiumProfileLockError,
         isChromiumResourceError,
         isConnectedState,
+        configuredTransport,
+        activeTransport,
+        usesBaileys,
+        instanceTransports,
+        getSessionPath,
+        getBaileysSessionPath,
+        getWwebjsSessionPath,
+        hasStoredSession,
+        cleanupChromiumRuntimeLocks,
+        splitBase64Payload,
+        buildOutgoingMedia,
+        queueOutgoingMedia,
+        deliverWhatsAppMedia,
         isQualifiedAudio,
         isQualifiedImage,
         isQualifiedDocument,

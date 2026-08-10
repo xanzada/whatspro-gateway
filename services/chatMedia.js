@@ -80,6 +80,37 @@ function decodeDocumentDataUri(value) {
   return { buffer, mimeType };
 }
 
+// The per-file setTimeout below only lives as long as this process, so every
+// restart or redeploy used to orphan the transcodes forever on a host where disk
+// is the binding constraint. The whole directory is swept at boot and hourly.
+async function sweepAudioCache(cacheDir = DEFAULT_CACHE_DIR, ttlMs = CACHE_TTL_MS) {
+  const deadline = Date.now() - ttlMs;
+  let names;
+  try {
+    names = await fs.readdir(cacheDir);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn('[CHAT MEDIA CACHE]', error?.message || error);
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const filePath = path.join(cacheDir, name);
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile() || stat.mtimeMs > deadline) continue;
+      await fs.unlink(filePath);
+      removed += 1;
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[CHAT MEDIA CACHE]', error?.message || error);
+    }
+  }
+  return removed;
+}
+
+sweepAudioCache().catch(() => {});
+const cacheSweep = setInterval(() => { sweepAudioCache().catch(() => {}); }, CACHE_TTL_MS);
+cacheSweep.unref();
+
 async function cacheAudioFile(cacheDir, media) {
   await fs.mkdir(cacheDir, { recursive: true });
   const digest = crypto.createHash('sha256').update(media.buffer).digest('hex');
@@ -235,4 +266,4 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
   };
 }
 
-module.exports = { createChatMediaHandler, decodeAudioDataUri, decodeDocumentDataUri, decodeImageDataUri, resolveFfmpegPath };
+module.exports = { createChatMediaHandler, decodeAudioDataUri, decodeDocumentDataUri, decodeImageDataUri, resolveFfmpegPath, sweepAudioCache };

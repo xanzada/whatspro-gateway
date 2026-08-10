@@ -266,7 +266,9 @@ function createChatStore(redis, options = {}) {
       "local current = redis.call('HGET', KEYS[4], ARGV[1])",
       "local legacyRanks = { pending = 0, sent = 1, delivered = 2, read = 3, played = 4, failed = -1 }",
       "local currentRank = current and tonumber(current:match('^(-?%d+):') or legacyRanks[current] or -1) or -1",
-      "if current and tonumber(ARGV[3]) < currentRank then return 1 end",
+      // A negative ack (failed) is not a step backwards in the ladder, it is the
+      // outcome, so it is exempt from the monotonic guard.
+      "if current and tonumber(ARGV[3]) >= 0 and tonumber(ARGV[3]) < currentRank then return 1 end",
       "redis.call('HSET', KEYS[4], ARGV[1], ARGV[3] .. ':' .. ARGV[2])",
       "redis.call('EXPIRE', KEYS[4], ttl)",
       'return 1'
@@ -283,7 +285,7 @@ function createChatStore(redis, options = {}) {
     if (remaining <= 0) return false;
     const current = String(await command(['HGET', keys.receipts(instanceId, phone), String(messageId)], ''));
     const currentRank = current.includes(':') ? Number(current.split(':')[0]) : ranks[current];
-    if (current && Number.isFinite(currentRank) && currentRank > ranks[status]) return true;
+    if (current && Number.isFinite(currentRank) && ranks[status] >= 0 && currentRank > ranks[status]) return true;
     await command(['HSET', keys.receipts(instanceId, phone), String(messageId), `${ranks[status]}:${status}`]);
     await command(['EXPIRE', keys.receipts(instanceId, phone), String(remaining)], 0);
     return true;

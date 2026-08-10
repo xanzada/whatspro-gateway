@@ -212,7 +212,8 @@
   function renderReceipt(item, role) {
     if (role !== 'bot' && role !== 'operator') return '';
     var receipt = core.receiptState({ ack: item.ack, ackStatus: item.ackStatus, status: item.deliveryStatus || item.status });
-    return '<span class="ticks ' + receipt + '" aria-label="' + receipt + '">' + (receipt === 'sent' ? '✓' : '✓✓') + '</span>';
+    var mark = receipt === 'failed' ? '✕' : receipt === 'sent' ? '✓' : '✓✓';
+    return '<span class="ticks ' + receipt + '" aria-label="' + receipt + '">' + mark + '</span>';
   }
 
   function mediaUrl(id) {

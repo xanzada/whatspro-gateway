@@ -41,7 +41,9 @@ services:
   redis_local:
     image: redis:7-alpine
     restart: always
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # Chat media lives in Redis as base64 with a 24h TTL, so an unbounded Redis
+    # eats the host. Cap it and drop the oldest TTL-bearing media first.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-ttl"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

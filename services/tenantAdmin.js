@@ -487,7 +487,9 @@ function presentableTenant(row) {
     address: clean(row.address, 300),
     workHours: clean(row.work_hours, 120),
     alemiApiUrl: normalizeAlemiApiUrl(row.alemi_api_url),
-    alemiInstance: clean(row.alemi_instance, 128) || clean(row.instance_id, 64),
+    // Only the stored value: falling back to instance_id made a tenant that was
+    // never linked to the hub look identical to a linked one in the panel.
+    alemiInstance: clean(row.alemi_instance, 128),
     promptMode: clean(row.prompt_mode, 16).toLowerCase() === 'custom' ? 'custom' : 'shared',
     systemPrompt: cleanMultiline(row.system_prompt),
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
@@ -500,7 +502,10 @@ function presentableTenant(row) {
       webhookSecret: Boolean(String(row.webhook_secret || '').trim()),
       kanbanSecret: Boolean(String(row.kanban_secret || '').trim()),
       alemiSecret: Boolean(String(row.alemi_secret || '').trim())
-    }
+    },
+    // Hub integration only works when both halves are stored, so the panel is
+    // told outright instead of inferring it from the instance name.
+    alemiLinked: Boolean(clean(row.alemi_instance, 128)) && Boolean(String(row.alemi_secret || '').trim())
   };
 }
 

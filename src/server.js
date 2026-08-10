@@ -17,7 +17,8 @@ const {
   getBase64Media,
   recoverChatMedia,
   shutdownWhatsAppClients,
-  getCallWatcherQr
+  getCallWatcherQr,
+  usesSingleQr
 } = require('../services/whatsappManager');
 const qrcode = require('qrcode');
 const { callWatcherStatus } = require('../services/callWatcher');
@@ -58,6 +59,12 @@ const loginAttempts = new Map();
 const operatorEffectJobs = new Map();
 const sendCompletionJobs = new Map();
 const liveSendWalPaths = new Set();
+// Ambiguous sends are kept on disk as a terminal record, so they are reported once
+// instead of on every 5s recovery pass.
+const ambiguousSendWalLogged = new Set();
+// An intent record this process did not write is only orphaned once it is old enough
+// that no in-flight send could still own it.
+const SEND_INTENT_STALE_MS = Math.max(1000, Number(process.env.WHATSPRO_SEND_INTENT_STALE_MS || 120000));
 let walRecoveryComplete = false;
 const SEND_LEASE_TTL_SECONDS = 24 * 60 * 60;
 const SEND_RESULT_TTL_SECONDS = 24 * 60 * 60;
@@ -198,6 +205,19 @@ async function writeSendWal(record) {
 
 async function removeSendWal(walPath) {
   if (walPath) await fs.unlink(walPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  ambiguousSendWalLogged.delete(walPath);
+}
+
+// A send whose outcome WhatsApp never confirmed must not stay in `phase:'intent'`:
+// recovery cannot resolve it and would refuse to finish, which blocks every operator
+// send for every tenant. Recording it as a terminal `ambiguous` phase keeps the
+// per-requestId duplicate guard (the WAL pre-check in the send route plus the pending
+// idempotency lease) while letting recovery complete.
+async function markSendWalAmbiguous(record, reason) {
+  const walPath = await writeSendWal({ ...record, phase: 'ambiguous', reason, ambiguousAt: Date.now() });
+  console.error(`[CHAT SEND WAL] ambiguous outcome recorded ${record.instanceId}/${record.phone}: ${reason}`);
+  ambiguousSendWalLogged.add(walPath);
+  return walPath;
 }
 
 const configuredProxyHops = String(process.env.TRUST_PROXY_HOPS || '').trim();
@@ -534,7 +554,10 @@ function parseHistoryEntry(raw) {
 }
 
 function getEntryCreatedAt(entry) {
-  return Number(entry?.createdAt || entry?.timestamp || entry?.time || 0) || 0;
+  const value = Number(entry?.createdAt || entry?.timestamp || entry?.time || 0) || 0;
+  // Legacy and OpenBot-written rows store seconds; chatStore and chat-core normalise the
+  // same way, so without this the row scores near zero and sinks in the inbox ZSET.
+  return value > 0 && value < 1e12 ? value * 1000 : value;
 }
 
 function isOperatorEntry(entry) {
@@ -716,21 +739,40 @@ async function drainOperatorEffectOutbox() {
   }
 }
 
-async function recoverSendWal() {
-  if (!redisClient.isOpen) return;
+async function recoverSendWal(redis = redisClient) {
+  if (!redis.isOpen) return;
   const files = await fs.readdir(SEND_WAL_DIR).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
-  let ambiguousIntent = false;
   for (const file of files.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
     const walPath = path.join(SEND_WAL_DIR, file);
     let record;
     try { record = JSON.parse(await fs.readFile(walPath, 'utf8')); } catch { continue; }
     if (record?.phase === 'intent' && liveSendWalPaths.has(walPath)) continue;
     if (record?.phase === 'intent') {
-      ambiguousIntent = true;
+      // Left behind by a crash or by the previous release, which kept intent records
+      // on the transport-failure paths. Retire it as ambiguous instead of refusing
+      // to finish recovery.
+      if (Date.now() - Number(record.operationStartedAt || 0) < SEND_INTENT_STALE_MS) continue;
+      await markSendWalAmbiguous(record, 'orphaned intent record found during recovery')
+        .catch(error => console.error('[CHAT SEND WAL] ambiguous record update failed:', error?.message || error));
+      continue;
+    }
+    if (record?.phase === 'ambiguous') {
+      // Terminal. Kept only as long as the idempotency lease that guards a retry of
+      // the same requestId; once that is gone the record has nothing left to protect.
+      const leaseKey = record?.lease?.key || '';
+      const current = leaseKey ? String(await redis.sendCommand(['GET', leaseKey]).catch(() => '') || '') : '';
+      if (!current) {
+        await removeSendWal(walPath).catch(error => console.error('[CHAT SEND WAL] ambiguous cleanup failed:', error.message));
+        continue;
+      }
+      if (!ambiguousSendWalLogged.has(walPath)) {
+        console.error(`[CHAT SEND WAL] ambiguous outcome awaiting operator review ${record.instanceId}/${record.phone}: ${record.reason || 'unknown'}`);
+        ambiguousSendWalLogged.add(walPath);
+      }
       continue;
     }
     if (!record?.lease?.key || !record?.response || !record?.effectData?.effectKey) continue;
-    const current = String(await redisClient.sendCommand(['GET', record.lease.key]).catch(() => ''));
+    const current = String(await redis.sendCommand(['GET', record.lease.key]).catch(() => ''));
     if (current.startsWith('done:')) {
       await removeSendWal(walPath);
       continue;
@@ -742,7 +784,7 @@ async function recoverSendWal() {
     if (!current) {
       const completed = `done:${JSON.stringify({ payloadHash: record.lease.payloadHash, response: record.response, effectKey: record.effectData.effectKey })}`;
       const script = "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[2]); redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2]); return 1 end return 0";
-      const recovered = Number(await redisClient.sendCommand(['EVAL', script, '3', record.lease.key, record.effectData.effectKey,
+      const recovered = Number(await redis.sendCommand(['EVAL', script, '3', record.lease.key, record.effectData.effectKey,
         OPERATOR_EFFECT_OUTBOX_KEY, completed, String(SEND_RESULT_TTL_SECONDS), JSON.stringify(record.effectData.payload), String(Date.now())]).catch(() => 0));
       if (recovered === 1) {
         await removeSendWal(walPath);
@@ -750,7 +792,6 @@ async function recoverSendWal() {
       }
     }
   }
-  if (ambiguousIntent) throw new Error('AMBIGUOUS_SEND_INTENT_REQUIRES_RECONCILIATION');
 }
 
 async function sweepExpiredChatIndexes() {
@@ -1235,13 +1276,27 @@ app.post('/api/wa/tenants/:instanceId/bot-enabled', requireUiOrApi, async (req, 
   }
 });
 
-// Seeing calls needs a second linked device on the same number, scanned once
-// per restaurant. Until it is scanned this returns the live QR; after it is,
-// null with connected:true.
+// Calls ride the main socket now, so a linked tenant is already watching and
+// this answers connected without a code. The route stays for the panel and for
+// tenants pinned back to the Chromium transport, which still need their own.
 app.get('/api/wa/tenants/:instanceId/call-watcher', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   try {
+    if (usesSingleQr(instanceId)) {
+      const live = await getInstanceStatus(instanceId);
+      const connected = String(live?.status || '') === 'connected';
+      res.set('Cache-Control', 'no-store');
+      return res.json({
+        success: true,
+        connected,
+        watching: connected,
+        awaitingScan: false,
+        loggedOut: false,
+        qr: null,
+        singleQr: true
+      });
+    }
     const status = require('../services/callWatcher').callWatcherStatus(instanceId);
     const pending = require('../services/whatsappManager').getCallWatcherQr(instanceId);
     res.set('Cache-Control', 'no-store');
@@ -1299,11 +1354,12 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
       await startWhatsAppInstance(scoped.instanceId);
       live = await getInstanceStatus(scoped.instanceId);
     }
-    // WhatsApp authorises one linked device per scan, so the call watcher needs
-    // its own. Onboarding hands out both from this one link rather than making
-    // the restaurant come back for a second page later.
-    const watcher = callWatcherStatus(scoped.instanceId);
-    const watcherQr = watcher.connected ? null : getCallWatcherQr(scoped.instanceId);
+    // One scan links the device for messages and calls alike, so onboarding is
+    // done the moment the main socket is up. A tenant pinned to the Chromium
+    // transport still needs the second linked device, and still gets it here.
+    const singleQr = usesSingleQr(scoped.instanceId);
+    const watcher = singleQr ? { connected: true } : callWatcherStatus(scoped.instanceId);
+    const watcherQr = singleQr || watcher.connected ? null : getCallWatcherQr(scoped.instanceId);
     const mainConnected = String(live?.status || '') === 'connected';
 
     res.set('Cache-Control', 'no-store');
@@ -1315,6 +1371,7 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
       step: mainConnected ? (watcher.connected ? 'done' : 'calls') : 'session',
       callsConnected: Boolean(watcher.connected),
       callsQr: mainConnected && watcherQr ? await qrcode.toDataURL(watcherQr.qr) : null,
+      singleQr,
       expiresAt: scoped.expiresAt
     });
   } catch (error) {
@@ -1634,7 +1691,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
     const idempotencyKey = `chatwoot:send-idempotency:${instanceId}:${phone}:${requestId}`;
     try {
       const priorWal = JSON.parse(await fs.readFile(sendWalPath(idempotencyKey), 'utf8'));
-      if (priorWal?.phase === 'intent') return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
+      if (priorWal?.phase === 'intent' || priorWal?.phase === 'ambiguous') return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
     } catch (error) {
       if (error.code !== 'ENOENT') return res.status(503).json({ error: 'SEND_RECOVERY_CORRUPT' });
     }
@@ -1652,8 +1709,9 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
     if (!lease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
 
     let walPath;
+    const intentRecord = { phase: 'intent', lease, instanceId, phone, text, operationStartedAt };
     try {
-      walPath = await writeSendWal({ phase: 'intent', lease, instanceId, phone, text, operationStartedAt });
+      walPath = await writeSendWal(intentRecord);
       liveSendWalPaths.add(walPath);
     } catch (error) {
       await sendIdempotency.release(lease);
@@ -1668,7 +1726,8 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
       sendResult = await sendWhatsAppText(instanceId, phone, text, { skipQueue: true });
     } catch (error) {
       liveSendWalPaths.delete(walPath);
-      walRecoveryComplete = false;
+      await markSendWalAmbiguous(intentRecord, `transport error: ${error?.message || error}`)
+        .catch(walError => console.error('[CHAT SEND WAL] ambiguous record update failed:', walError?.message || walError));
       console.error(`[CHAT SEND] ${instanceId}/${phone}:`, error?.message || error);
       return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
     } finally {
@@ -1677,7 +1736,8 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
     const ok = sendResult && typeof sendResult === 'object' ? sendResult.success === true : Boolean(sendResult);
     if (!ok && sendResult?.outcomeUnknown) {
       liveSendWalPaths.delete(walPath);
-      walRecoveryComplete = false;
+      await markSendWalAmbiguous(intentRecord, 'transport reported an unknown outcome')
+        .catch(walError => console.error('[CHAT SEND WAL] ambiguous record update failed:', walError?.message || walError));
       return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
     }
     if (!ok) {
@@ -1694,7 +1754,11 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
       ttl: OPERATOR_ACTIVE_SECONDS,
       expiresAt
     };
-    const deliveryStatus = Number(sendResult?.ack) >= 3 ? 'read' : Number(sendResult?.ack) >= 2 ? 'delivered' : 'sent';
+    // Acks arrive normalised to whatsapp-web.js numbering (PENDING=0, SERVER=1,
+    // DEVICE=2, READ=3); the Baileys client additionally reports -1 for a message the
+    // transport rejected, which must not read as "sent".
+    const deliveryStatus = Number(sendResult?.ack) < 0 ? 'failed'
+      : Number(sendResult?.ack) >= 3 ? 'read' : Number(sendResult?.ack) >= 2 ? 'delivered' : 'sent';
     const effectPayload = effectDataFor(responsePayload, deliveryStatus);
     const effectKey = `chatwoot:operator-effect:${instanceId}:${phone}:${requestId}`;
     const effectData = { effectKey, payload: effectPayload };
@@ -1918,14 +1982,17 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
 });
 
 app.post('/api/presence', requireApi, async (req, res) => {
-  const { instanceId, instance, phone } = req.body || {};
+  const { instanceId, instance, phone, state } = req.body || {};
   const cleanInstanceId = String(instanceId || instance || '').trim();
   const cleanPhone = normalizePhone(phone);
   if (!isValidInstanceId(cleanInstanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!withinApiScope(req, cleanInstanceId)) return res.status(403).json({ error: 'INSTANCE_OUT_OF_SCOPE' });
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
 
-  const ok = await sendPresence(cleanInstanceId, cleanPhone);
+  // The caller's state was accepted and then dropped, so a 'read' request only
+  // ever showed "typing…". Anything unrecognised keeps the old default.
+  const cleanState = String(state || '').trim().toLowerCase() === 'read' ? 'read' : 'typing';
+  const ok = await sendPresence(cleanInstanceId, cleanPhone, cleanState);
   res.status(ok ? 200 : 503).json({ success: Boolean(ok) });
 });
 
@@ -2061,6 +2128,7 @@ module.exports = {
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope,
-    issueConnectToken, readConnectToken
+    issueConnectToken, readConnectToken,
+    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR
   }
 };
