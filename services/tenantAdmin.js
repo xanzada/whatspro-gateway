@@ -200,6 +200,31 @@ async function createTenant(input, options = {}) {
   return { instanceId: fields.instance_id, created: true };
 }
 
+// An update names the fields it changes and nothing else. Every operator field
+// is carried over from the stored row when the caller omits it, so a caller that
+// only wants to move one value — hub.alemi.kz linking a restaurant, a script
+// aligning an instance id — cannot blank a brand or a phone number by omission.
+// An explicit empty string still clears a field; only `undefined` means "keep".
+function mergeExisting(instanceId, input = {}, existing = {}) {
+  const keep = (value, stored) => (value === undefined ? stored : value);
+  return {
+    ...input,
+    instanceId,
+    brand: keep(input.brand, existing.brand),
+    whatsappPhone: keep(input.whatsappPhone, existing.whatsapp_phone),
+    adminPhone: keep(input.adminPhone, existing.admin_phone),
+    domain: keep(input.domain, existing.domain),
+    address: keep(input.address, existing.address),
+    workHours: keep(input.workHours, existing.work_hours),
+    promptMode: keep(input.promptMode, existing.prompt_mode),
+    alemiApiUrl: keep(input.alemiApiUrl, existing.alemi_api_url),
+    alemiInstance: keep(input.alemiInstance, existing.alemi_instance),
+    active: keep(input.active, existing.active),
+    botEnabled: keep(input.botEnabled, existing.bot_enabled),
+    callsDisabled: keep(input.callsDisabled, existing.calls_disabled)
+  };
+}
+
 async function updateTenant(instanceId, input, options = {}) {
   const existing = await findRow(instanceId);
   if (!existing) {
@@ -207,15 +232,7 @@ async function updateTenant(instanceId, input, options = {}) {
     error.statusCode = 404;
     throw error;
   }
-  const fields = operatorFields({
-    ...input,
-    instanceId,
-    alemiApiUrl: input.alemiApiUrl === undefined ? existing.alemi_api_url : input.alemiApiUrl,
-    alemiInstance: input.alemiInstance === undefined ? existing.alemi_instance : input.alemiInstance,
-    active: input.active === undefined ? existing.active : input.active,
-    botEnabled: input.botEnabled === undefined ? existing.bot_enabled : input.botEnabled,
-    callsDisabled: input.callsDisabled === undefined ? existing.calls_disabled : input.callsDisabled
-  });
+  const fields = operatorFields(mergeExisting(instanceId, input, existing));
   const errors = validationErrors(fields);
   if (errors.length) throw badRequest(errors);
 
@@ -501,5 +518,5 @@ module.exports = {
   setCallsDisabled,
   updateTenant,
   slugify,
-  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret }
+  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting }
 };

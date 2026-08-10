@@ -87,6 +87,43 @@ test('required fields are named back so the form can highlight them', () => {
   })), [], 'phone and domain are optional because WhatsApp is attached by QR and a custom host is not required');
 });
 
+test('an update that names one field leaves every other field alone', () => {
+  const existing = {
+    instance_id: 'prestige',
+    brand: 'Crazy суши',
+    whatsapp_phone: '+77769156184',
+    admin_phone: '+77769156184',
+    domain: 'https://prestige.alemi.kz',
+    address: 'Абай 10',
+    work_hours: '09:00 - 03:00',
+    prompt_mode: 'custom',
+    alemi_api_url: 'https://hub.alemi.kz',
+    alemi_instance: 'storefront_test_fe6d775',
+    active: true,
+    bot_enabled: true,
+    calls_disabled: true
+  };
+
+  // hub.alemi.kz links a restaurant by moving this one value and nothing else.
+  const fields = admin.operatorFields(admin.mergeExisting('prestige', { alemiInstance: 'prestige' }, existing));
+  assert.deepEqual(admin.validationErrors(fields), [], 'a one-field update must not fail validation on fields it never sent');
+  assert.equal(fields.alemi_instance, 'prestige');
+  assert.equal(fields.brand, 'Crazy суши');
+  assert.equal(fields.whatsapp_phone, '+77769156184');
+  assert.equal(fields.domain, 'https://prestige.alemi.kz');
+  assert.equal(fields.address, 'Абай 10');
+  assert.equal(fields.work_hours, '09:00 - 03:00');
+  assert.equal(fields.prompt_mode, 'custom');
+  assert.equal(fields.calls_disabled, true);
+});
+
+test('an explicitly empty value still clears the field', () => {
+  const existing = { instance_id: 'prestige', brand: 'Crazy суши', address: 'Абай 10', whatsapp_phone: '', alemi_api_url: 'https://hub.alemi.kz', alemi_instance: 'prestige' };
+  const fields = admin.operatorFields(admin.mergeExisting('prestige', { address: '' }, existing));
+  assert.equal(fields.address, '', 'omitting a field means keep; sending an empty one means clear');
+  assert.equal(fields.brand, 'Crazy суши');
+});
+
 test('create requires an externally issued Alemi key instead of inventing one', async () => {
   await assert.rejects(() => tenantAdmin.createTenant({
     instanceId: 'prestige', brand: 'Prestige', alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: 'prestige'
