@@ -906,6 +906,19 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
   .review-row { grid-template-columns: 100px minmax(0, 1fr); }
   .field textarea { min-height: 150px; }
   .qr-share-actions .button { flex: 1 1 135px; }
+  /* Secret row on a phone: the 12-character key owns a full line, the controls
+     wrap under it into a stretching row and stay tappable. */
+  .secret-row input { flex: 1 1 100%; min-height: 44px; font-size: 15px; letter-spacing: .01em; }
+  .info-item.secret-item input { min-height: 44px; font-size: 15px; }
+  .secret-row .button {
+    min-height: 40px;
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .secret-row .button span { overflow: visible; }
   .toast-region { left: 12px; right: 12px; bottom: 12px; }
   .toast { width: 100%; min-width: 0; max-width: none; }
 }

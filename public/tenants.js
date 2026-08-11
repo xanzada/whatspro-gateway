@@ -78,9 +78,11 @@
       alemiSecretHint: 'Кілт тек сақтауға жіберіледі; кейін экранда қайта көрсетілмейді. Сол мәнді hub.alemi.kz-тегі ресторанның Secret Key өрісіне қойыңыз.',
       alemiSecretStored: 'Кілт сақталған', alemiSecretMissing: 'Кілт енгізілмеген', alemiSecretWillUpdate: 'Жаңа кілт сақталады',
       generateSecret: 'Генерациялау', copySecret: 'Көшіру', secretCopied: 'Кілт көшірілді',
-      secretGenerated: 'Кілт жасалды — көшіріп, hub.alemi.kz-ке қойыңыз',
+      secretGenerated: '12 таңбалы кілт жасалды — көшіріп, hub.alemi.kz-ке қойыңыз',
       secretEmptyToCopy: 'Алдымен кілт жасаңыз немесе енгізіңіз',
-      secretGenerateFailed: 'Браузер қауіпсіз кездейсоқ сан бере алмады',
+      secretGenerateFailed: 'Браузер қауіпсіз кездейсоқ мән бере алмады',
+      secretUniqueUnconfirmed: 'Кілттің бірегейлігі серверде тексерілмеді — сақтау кезінде қайталанса, жаңасын жасаңыз',
+      secretDuplicate: 'Бұл кілт басқа ресторанда қолданылып тұр — жаңасын жасаңыз',
       rotateAlemiSecret: 'Alemi кілтін жаңарту', rotateAlemiSecretTitle: 'Alemi API кілтін орнату немесе ауыстыру',
       rotateAlemiSecretCopy: 'Жаңа кілтті енгізіңіз. Қауіпсіздік үшін ағымдағы мән көрсетілмейді.', secretUpdated: 'Alemi кілті жаңартылды',
       liveStatusCopy: 'Бұл күй WhatsPro сессиясынан тікелей алынды.',
@@ -153,9 +155,11 @@
       alemiSecretHint: 'Ключ отправляется только на сохранение и больше не показывается на экране. Это же значение впишите в поле Secret Key ресторана на hub.alemi.kz.',
       alemiSecretStored: 'Ключ сохранён', alemiSecretMissing: 'Ключ не задан', alemiSecretWillUpdate: 'Будет сохранён новый ключ',
       generateSecret: 'Сгенерировать', copySecret: 'Скопировать', secretCopied: 'Ключ скопирован',
-      secretGenerated: 'Ключ создан — скопируйте и впишите на hub.alemi.kz',
+      secretGenerated: 'Ключ из 12 символов создан — скопируйте и впишите на hub.alemi.kz',
       secretEmptyToCopy: 'Сначала создайте или введите ключ',
-      secretGenerateFailed: 'Браузер не смог выдать безопасное случайное число',
+      secretGenerateFailed: 'Браузер не смог выдать безопасное случайное значение',
+      secretUniqueUnconfirmed: 'Уникальность ключа не подтверждена сервером — если при сохранении окажется дубликатом, создайте новый',
+      secretDuplicate: 'Этот ключ уже используется в другом ресторане — создайте новый',
       rotateAlemiSecret: 'Обновить ключ Alemi', rotateAlemiSecretTitle: 'Задать или заменить ключ Alemi API',
       rotateAlemiSecretCopy: 'Введите новый ключ. Текущее значение не показывается из соображений безопасности.', secretUpdated: 'Ключ Alemi обновлён',
       liveStatusCopy: 'Этот статус получен напрямую из сессии WhatsPro.',
@@ -461,20 +465,77 @@
     });
   }
 
-  function generateNumericSecret(length) {
-    var size = length || 12;
+  // One key, four character classes. 0/1/I/O/l are left out on purpose: operators
+  // retype this key by hand into hub.alemi.kz. '-', '_' and '.' are the only
+  // specials that stay safe in a URL query (the key also travels as ?token=), in an
+  // HTTP header and inside JSON at the same time.
+  var SECRET_CLASSES = ['23456789', 'ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '-_.'];
+  var SECRET_ALPHABET = SECRET_CLASSES.join('');
+  var SECRET_LENGTH = 12;
+
+  function randomBelow(source, bound) {
+    // Rejection sampling: bytes at or above the last whole multiple of `bound`
+    // would bias the modulo, so they are drawn again.
+    var limit = Math.floor(256 / bound) * bound;
+    var buffer = new Uint8Array(1);
+    for (var guard = 0; guard < 1000; guard += 1) {
+      source.getRandomValues(buffer);
+      if (buffer[0] < limit) return buffer[0] % bound;
+    }
+    return buffer[0] % bound;
+  }
+  function generateMixedSecret(length) {
+    var size = Math.max(SECRET_CLASSES.length, length || SECRET_LENGTH);
     var source = window.crypto || window.msCrypto;
     if (!source || typeof source.getRandomValues !== 'function') return '';
-    var digits = '';
-    var buffer = new Uint8Array(size * 2);
-    while (digits.length < size) {
-      source.getRandomValues(buffer);
-      for (var i = 0; i < buffer.length && digits.length < size; i += 1) {
-        // Rejection sampling: 250..255 would bias the modulo, so drop those bytes.
-        if (buffer[i] < 250) digits += String(buffer[i] % 10);
-      }
+    var picked = [];
+    var i;
+    // One character from every class first, so a digit, both letter cases and a
+    // special are always present; the remainder is drawn from the full alphabet.
+    for (i = 0; i < SECRET_CLASSES.length; i += 1) {
+      picked.push(SECRET_CLASSES[i].charAt(randomBelow(source, SECRET_CLASSES[i].length)));
     }
-    return digits;
+    while (picked.length < size) picked.push(SECRET_ALPHABET.charAt(randomBelow(source, SECRET_ALPHABET.length)));
+    // Fisher-Yates over the same CSPRNG so the class order is not predictable.
+    for (i = picked.length - 1; i > 0; i -= 1) {
+      var j = randomBelow(source, i + 1);
+      var swap = picked[i];
+      picked[i] = picked[j];
+      picked[j] = swap;
+    }
+    return picked.join('');
+  }
+  function fillSecretInput(input, value) {
+    input.type = 'text';
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+    input.select();
+  }
+  function requestSecret(button, input) {
+    var local = generateMixedSecret(SECRET_LENGTH);
+    button.disabled = true;
+    return api('GET', '/api/wa/tenants/alemi-secret/suggest').then(function (data) {
+      var suggested = String((data && data.secret) || '').trim();
+      if (!suggested) throw new Error('EMPTY_SUGGESTION');
+      button.disabled = false;
+      fillSecretInput(input, suggested);
+      toast(t('secretGenerated'), '');
+    }).catch(function () {
+      // Only the server can prove the key collides with no other tenant. Offline we
+      // still hand over a usable key, but flag that uniqueness is unconfirmed.
+      button.disabled = false;
+      if (!local) { toast(t('actionFailed'), t('secretGenerateFailed'), true); return; }
+      fillSecretInput(input, local);
+      toast(t('secretGenerated'), t('secretUniqueUnconfirmed'), true);
+    });
+  }
+  function secretErrorMessage(error) {
+    // api() keeps the machine-readable code on error.code; a raw
+    // ALEMI_SECRET_DUPLICATE must never reach the toast.
+    var code = String((error && error.code) || '');
+    if (code === 'ALEMI_SECRET_DUPLICATE' || (error && error.status === 409)) return t('secretDuplicate');
+    return (error && error.message) || t('actionFailed');
   }
 
   function secretActions(inputId) {
@@ -1119,7 +1180,7 @@
         steps.map(function (label, index) { var state = index < progress ? 'done' : (index === progress && !done ? 'active' : ''); return '<div class="provision-step ' +
           state + '"><span class="mark">' + (index < progress || done ? '✓' : index + 1) + '</span><span>' + escapeHtml(label) + '</span></div>'; }).join('') +
         '</div>' + (error ? '<div class="failure-panel"><span class="mark">!</span><div><strong>' + t('actionFailed') + '</strong><p>' +
-          escapeHtml(error.message) + '</p></div></div>' : '') + (done ? '<div class="success-panel"><span class="mark">✓</span><div><strong>' +
+          escapeHtml(secretErrorMessage(error)) + '</p></div></div>' : '') + (done ? '<div class="success-panel"><span class="mark">✓</span><div><strong>' +
           t('ready') + '</strong><p>' + t('readyCopy') + '</p></div></div>' : '') + '</div><div class="modal-footer"><span class="spacer"></span>' +
         (done ? '<button class="button" data-modal-close>' + t('close') + '</button><button class="button primary" data-action="qr" data-instance="' +
           attr(generatedId) + '">' + icon('qr') + t('showQr') + '</button>' : '') + '</div>');
@@ -1167,7 +1228,7 @@
       closeModal();
       toast(t('saved'), data.brand);
       return ensureInstance(instanceId, data.brand).then(function () { return loadData(true); });
-    }).catch(function (error) { toast(t('actionFailed'), error.message, true); });
+    }).catch(function (error) { toast(t('actionFailed'), secretErrorMessage(error), true); });
   }
   function openEdit(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
@@ -1289,16 +1350,7 @@
     var genSecret = event.target.closest('[data-generate-secret]');
     if (genSecret) {
       var genTarget = document.getElementById(genSecret.dataset.generateSecret);
-      if (genTarget) {
-        var fresh = generateNumericSecret(12);
-        if (!fresh) { toast(t('actionFailed'), t('secretGenerateFailed'), true); return; }
-        genTarget.type = 'text';
-        genTarget.value = fresh;
-        genTarget.dispatchEvent(new Event('input', { bubbles: true }));
-        genTarget.focus();
-        genTarget.select();
-        toast(t('secretGenerated'), '');
-      }
+      if (genTarget) requestSecret(genSecret, genTarget);
       return;
     }
     var copyInput = event.target.closest('[data-copy-input]');
@@ -1381,7 +1433,7 @@
         return loadData(true);
       }).catch(function (error) {
         saveAlemiSecret.disabled = false;
-        toast(t('actionFailed'), error.message, true);
+        toast(t('actionFailed'), secretErrorMessage(error), true);
       });
       return;
     }

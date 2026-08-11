@@ -1058,6 +1058,19 @@ app.post(
   }
 );
 
+// Registered before /api/wa/tenants/:instanceId so no restaurant named
+// "alemi-secret" can shadow it. The panel asks for a key instead of a person
+// inventing one twice; the value is checked against every stored key before it is
+// offered and nothing is written here.
+app.get('/api/wa/tenants/alemi-secret/suggest', requireUiOrApi, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    return res.json({ success: true, secret: await tenantAdmin.suggestAlemiSecret() });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
 app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });

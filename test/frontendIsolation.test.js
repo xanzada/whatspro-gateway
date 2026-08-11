@@ -64,10 +64,31 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   assert.match(tenants, /class="secret-row"/);
   assert.match(css, /\.secret-row \{/);
 
-  // 12 digits, drawn from the CSPRNG with rejection sampling so no digit is favoured.
-  assert.match(tenants, /generateNumericSecret\(12\)/);
+  // 12 mixed-charset characters, drawn from the CSPRNG with rejection sampling.
+  assert.match(tenants, /generateMixedSecret\(SECRET_LENGTH\)/);
+  assert.match(tenants, /var SECRET_LENGTH = 12;/);
   assert.match(tenants, /getRandomValues/);
-  assert.match(tenants, /buffer\[i\] < 250/);
+  assert.match(tenants, /Math\.floor\(256 \/ bound\) \* bound/);
+
+  // The alphabet keeps one class of each kind and drops the characters an operator
+  // cannot retype reliably.
+  const classes = tenants.match(/var SECRET_CLASSES = \[([^\]]+)\];/);
+  assert.ok(classes, 'the alphabet must live in a single SECRET_CLASSES constant');
+  const alphabet = (classes[1].match(/'[^']*'/g) || []).map((part) => part.slice(1, -1));
+  assert.deepEqual(alphabet, ['23456789', 'ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '-_.']);
+  ['0', '1', 'I', 'O', 'l'].forEach((char) => {
+    assert.ok(alphabet.join('').indexOf(char) < 0, `${char} is too easy to misread to stay in the alphabet`);
+  });
+
+  // The server hands out a key that collides with no other tenant; a failed
+  // request still fills the field, but warns that uniqueness is unconfirmed.
+  assert.match(tenants, /api\('GET', '\/api\/wa\/tenants\/alemi-secret\/suggest'\)/);
+  assert.match(tenants, /t\('secretUniqueUnconfirmed'\)/);
+  assert.match(tenants, /\.catch\(function \(\) \{[\s\S]*?fillSecretInput\(input, local\)/);
+
+  // A duplicate key is reported in the operator's language, never as a raw code.
+  assert.match(tenants, /code === 'ALEMI_SECRET_DUPLICATE'[\s\S]*?t\('secretDuplicate'\)/);
+  assert.match(tenants, /secretErrorMessage\(error\)/);
 
   // The key itself must never be echoed into a toast body.
   assert.match(tenants, /copyText\(copyValue, \{ title: t\('secretCopied'\), secret: true \}\)/);
@@ -77,7 +98,13 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   assert.match(tenants, /data-secret-input="detail-alemi-secret"/);
   assert.match(tenants, /\/alemi-secret', \{ secret: secretValue \}/);
 
-  ['generateSecret', 'copySecret', 'secretCopied', 'secretGenerated', 'secretEmptyToCopy', 'secretGenerateFailed']
+  // The row has to survive a phone: the input on its own line, controls below.
+  const phoneBlock = css.slice(css.indexOf('@media (max-width: 620px)'));
+  assert.match(phoneBlock, /\.secret-row input \{[^}]*flex: 1 1 100%/);
+  assert.match(phoneBlock, /\.secret-row \.button \{[^}]*min-height: 40px/);
+
+  ['generateSecret', 'copySecret', 'secretCopied', 'secretGenerated', 'secretEmptyToCopy', 'secretGenerateFailed',
+    'secretUniqueUnconfirmed', 'secretDuplicate']
     .forEach((key) => {
       const hits = tenants.match(new RegExp(`${key}:`, 'g')) || [];
       assert.equal(hits.length, 2, `${key} must be translated in both kk and ru`);

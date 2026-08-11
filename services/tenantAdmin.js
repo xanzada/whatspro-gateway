@@ -55,6 +55,88 @@ function generateSecret(prefix) {
   return `${prefix}_${crypto.randomBytes(24).toString('hex')}`;
 }
 
+// Operators retype this key by hand, so 0/1/I/O/l are left out: a key that cannot
+// be misread is worth more than four extra symbols. The three specials are the
+// only ones that survive a URL query, an HTTP header and JSON at once — the key
+// also travels as ?token= on the inbound webhook.
+const ALEMI_SECRET_CLASSES = ['23456789', 'ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '-_.'];
+const ALEMI_SECRET_POOL = ALEMI_SECRET_CLASSES.join('');
+const ALEMI_SECRET_DEFAULT_LENGTH = 12;
+
+// crypto.randomInt is used for both the picks and the shuffle: taking a raw byte
+// modulo an alphabet length biases the low characters, and Math.random is not a
+// credential source at all.
+function pickCharacter(alphabet) {
+  return alphabet[crypto.randomInt(alphabet.length)];
+}
+
+function generateAlemiSecret(length = ALEMI_SECRET_DEFAULT_LENGTH) {
+  const requested = Number.isFinite(Number(length)) ? Math.trunc(Number(length)) : ALEMI_SECRET_DEFAULT_LENGTH;
+  // Never shorter than one character per class, or the guarantee below is a lie.
+  const size = Math.min(Math.max(requested, ALEMI_SECRET_CLASSES.length), 256);
+  const characters = ALEMI_SECRET_CLASSES.map(pickCharacter);
+  while (characters.length < size) characters.push(pickCharacter(ALEMI_SECRET_POOL));
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swap = crypto.randomInt(index + 1);
+    const held = characters[index];
+    characters[index] = characters[swap];
+    characters[swap] = held;
+  }
+  return characters.join('');
+}
+
+// Equal-length buffers only: timingSafeEqual throws on a mismatch, and a length
+// difference already means "not equal" without comparing anything.
+function alemiSecretsMatch(left, right) {
+  const first = Buffer.from(String(left ?? ''), 'utf8');
+  const second = Buffer.from(String(right ?? ''), 'utf8');
+  if (!first.length || first.length !== second.length) return false;
+  return crypto.timingSafeEqual(first, second);
+}
+
+function alemiSecretDuplicate() {
+  const error = new Error('ALEMI_SECRET_DUPLICATE');
+  error.statusCode = 409;
+  error.fields = ['alemiSecret'];
+  return error;
+}
+
+function storedAlemiSecret(row) {
+  return String(row?.alemi_secret ?? row?.alemiSecret ?? '');
+}
+
+// Two restaurants sharing one Alemi key means either can act as the other at the
+// hub, and the webhook cannot tell them apart. The value is never logged and the
+// error never names the row that already holds it — that would turn a 409 into a
+// way to read other tenants' keys one guess at a time.
+async function assertAlemiSecretUnique(secret, ownInstanceId = '') {
+  if (!secret) return;
+  const owner = clean(ownInstanceId, 64);
+  const rows = await listRows();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (owner && clean(row?.instance_id, 64) === owner) continue;
+    if (alemiSecretsMatch(secret, storedAlemiSecret(row))) throw alemiSecretDuplicate();
+  }
+}
+
+// The panel asks for a key rather than inventing one, so the value it offers is
+// already known not to collide. Nothing is stored here: the key becomes real only
+// when it is saved against a tenant, which checks uniqueness again.
+async function suggestAlemiSecret(options = {}) {
+  const attempts = Math.max(1, Math.trunc(Number(options.attempts) || 12));
+  const length = Number(options.length) || ALEMI_SECRET_DEFAULT_LENGTH;
+  const generate = typeof options.generate === 'function' ? options.generate : generateAlemiSecret;
+  const rows = await listRows();
+  const stored = (Array.isArray(rows) ? rows : []).map(storedAlemiSecret).filter(Boolean);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const secret = generate(length);
+    if (!stored.some(existing => alemiSecretsMatch(secret, existing))) return secret;
+  }
+  const error = new Error('SECRET_GENERATE_FAILED');
+  error.statusCode = 503;
+  throw error;
+}
+
 async function findRow(instanceId) {
   return tenantStore.findRow(instanceId);
 }
@@ -205,6 +287,7 @@ async function createTenant(input, options = {}) {
     error.statusCode = 409;
     throw error;
   }
+  await assertAlemiSecretUnique(alemiSecret, fields.instance_id);
 
   const payload = {
     ...fields,
@@ -257,7 +340,12 @@ async function updateTenant(instanceId, input, options = {}) {
     system_prompt: resolvePrompt(fields, input, options.sharedPrompt, existing)
   };
   const alemiSecret = normalizeAlemiSecret(input.alemiSecret);
-  if (alemiSecret) payload.alemi_secret = alemiSecret;
+  if (alemiSecret) {
+    // The row's own stored key is not a collision with itself, so saving a form
+    // that carries the same key back is still allowed.
+    await assertAlemiSecretUnique(alemiSecret, instanceId);
+    payload.alemi_secret = alemiSecret;
+  }
   // Rows created before the panel existed have blank platform fields. Fill those
   // in on the way past instead of leaving a restaurant half-configured because
   // it predates the tooling.
@@ -416,10 +504,13 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
     throw error;
   }
 
+  const cloneSecret = normalizeAlemiSecret(input.alemiSecret, true);
+  await assertAlemiSecretUnique(cloneSecret, fields.instance_id);
+
   const payload = {
     ...fields,
     ...platformFields(options.publicBase),
-    alemi_secret: normalizeAlemiSecret(input.alemiSecret, true),
+    alemi_secret: cloneSecret,
     system_prompt: fields.prompt_mode === 'custom'
       ? cleanMultiline(input.systemPrompt || source.system_prompt)
       : cleanMultiline(options.sharedPrompt || source.system_prompt)
@@ -438,6 +529,7 @@ async function setAlemiSecret(instanceId, value) {
     throw error;
   }
   const secret = normalizeAlemiSecret(value, true);
+  await assertAlemiSecretUnique(secret, instanceId);
   await tenantStore.updateRow(instanceId, { alemi_secret: secret });
   return { instanceId, alemiSecretSet: true };
 }
@@ -528,6 +620,7 @@ module.exports = {
   createTenant,
   deleteTenant,
   findRow,
+  generateAlemiSecret,
   importTenants,
   listRows,
   presentableTenant,
@@ -537,8 +630,9 @@ module.exports = {
   setActive,
   setBotEnabled,
   setCallsDisabled,
+  suggestAlemiSecret,
   updateTenant,
   slugify,
   withCurrentTransport,
-  __test: { generateSecret, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting }
+  __test: { generateSecret, generateAlemiSecret, suggestAlemiSecret, alemiSecretsMatch, assertAlemiSecretUnique, ALEMI_SECRET_CLASSES, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting }
 };
