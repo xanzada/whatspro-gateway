@@ -124,6 +124,39 @@ test('two WhatsPro tenants sharing one Alemi instance are reported as ambiguous'
   assert.equal(JSON.stringify(shared).includes('externally-issued-alemi-secret'), false);
 });
 
+// The bot resolves an inbound call by matching EITHER instance field, so a
+// mistyped alemi_instance breaks nothing locally and only surfaces as a 401 from
+// the hub. Surfacing it here is the whole point — as a warning, because a save
+// must never be blocked on it.
+test('an alemi_instance that disagrees with instance_id warns without blocking', () => {
+  const report = evaluateTenant(completeRow({ alemi_instance: 'prestige-old' }));
+  const mismatch = checkFor(report, 'alemi_instance_match');
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.level, 'recommended');
+  assert.equal(mismatch.code, 'MISMATCH');
+  assert.equal(mismatch.column, 'alemi_instance');
+  assert.match(mismatch.why, /ID инстанса/, 'the operator is told which hub field it must equal');
+  assert.equal(report.summary.ready, true, 'a mismatch is never a blocker');
+  assert.deepEqual(report.summary.blocking, []);
+  assert.deepEqual(report.summary.warnings, ['alemi_instance_match']);
+
+  // Matching ids stay silent, and a case-only difference still counts as a
+  // divergence because instance ids are used verbatim as Redis keys.
+  assert.equal(checkFor(evaluateTenant(completeRow()), 'alemi_instance_match').ok, true);
+  assert.equal(checkFor(evaluateTenant(completeRow({ alemi_instance: 'Prestige' })), 'alemi_instance_match').ok, false);
+
+  // An empty alemi_instance is already a blocking required check; it must not be
+  // reported a second time as a mismatch.
+  const empty = evaluateTenant(completeRow({ alemi_instance: '' }));
+  assert.deepEqual(empty.summary.blocking, ['alemi_instance']);
+  assert.deepEqual(empty.summary.warnings, []);
+
+  // Still a warning, never an error, when the whole fleet is evaluated.
+  const fleet = evaluateAll([completeRow({ alemi_instance: 'prestige-old' })]);
+  assert.equal(fleet.ready, 1);
+  assert.deepEqual(fleet.tenants[0].summary.warnings, ['alemi_instance_match']);
+});
+
 test('a duplicated instance_id is reported because which row wins is not defined', () => {
   const collisions = collisionsAcross([
     completeRow({ whatsapp_phone: '77015550101' }),

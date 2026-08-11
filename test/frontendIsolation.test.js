@@ -103,8 +103,12 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   assert.match(phoneBlock, /\.secret-row input \{[^}]*flex: 1 1 100%/);
   assert.match(phoneBlock, /\.secret-row \.button \{[^}]*min-height: 40px/);
 
+  // A too-short key comes back as the shared field-validation code, so the field
+  // list is what routes it to a translated message instead of a raw error string.
+  assert.match(tenants, /TENANT_FIELDS_INVALID'[\s\S]*?indexOf\('alemiSecret'\)[\s\S]*?t\('secretTooShort'\)/);
+
   ['generateSecret', 'copySecret', 'secretCopied', 'secretGenerated', 'secretEmptyToCopy', 'secretGenerateFailed',
-    'secretUniqueUnconfirmed', 'secretDuplicate']
+    'secretUniqueUnconfirmed', 'secretDuplicate', 'secretTooShort']
     .forEach((key) => {
       const hits = tenants.match(new RegExp(`${key}:`, 'g')) || [];
       assert.equal(hits.length, 2, `${key} must be translated in both kk and ru`);

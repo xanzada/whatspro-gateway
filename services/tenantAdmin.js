@@ -38,6 +38,12 @@ function normalizeAlemiApiUrl(value) {
   }
 }
 
+// A hand-typed key becomes an HMAC key and an inbound ?token= at once, so a
+// one-character value is not a short key, it is no key. The floor is 8 rather
+// than the generator's 12: a hub-issued key may legitimately be shorter than
+// what we offer, and refusing it would lock an operator out of a working setup.
+const ALEMI_SECRET_MIN_LENGTH = 8;
+
 function normalizeAlemiSecret(value, required = false) {
   if (value === undefined || value === null || String(value).trim() === '') {
     if (!required) return '';
@@ -45,6 +51,7 @@ function normalizeAlemiSecret(value, required = false) {
   }
   if (typeof value !== 'string') throw badRequest(['alemiSecret']);
   const secret = value.trim();
+  if (secret.length < ALEMI_SECRET_MIN_LENGTH) throw badRequest(['alemiSecret']);
   if (secret.length > 4096 || /[\u0000-\u001f\u007f]/.test(secret)) throw badRequest(['alemiSecret']);
   return secret;
 }

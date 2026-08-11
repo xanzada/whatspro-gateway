@@ -293,6 +293,28 @@ function sessionCheck(instanceId, sessions = []) {
   };
 }
 
+// Three ids must name the same restaurant: the hub's "ID инстанса", our
+// alemi_instance and our own instance_id. Nothing compared ours to each other,
+// and the bot resolves an inbound call by matching EITHER field — so a wrong
+// alemi_instance routes nothing wrong locally and stays invisible until the hub
+// answers 401. Recommended, never required: a divergence can be deliberate, and
+// blocking a save on it would strand a row an operator is halfway through.
+function alemiInstanceMatchCheck(record) {
+  const instanceId = text(record, fieldColumns('instance_id'));
+  const alemiInstance = text(record, fieldColumns('alemi_instance'));
+  // An empty alemi_instance is already reported by its own required check;
+  // repeating it here as a mismatch would only double the noise.
+  const ok = !instanceId || !alemiInstance || alemiInstance === instanceId;
+  return {
+    id: 'alemi_instance_match',
+    level: RECOMMENDED,
+    ok,
+    code: ok ? 'OK' : 'MISMATCH',
+    column: fieldColumns('alemi_instance')[0],
+    why: 'alemi_instance мәні hub.alemi.kz-тегі ресторанның "ID инстанса" өрісіне тең болуы керек және ол WhatsPro instance_id-мен сәйкес келмей тұр. Сәйкессіздік hub 401 қайтарғанша көрінбейді.'
+  };
+}
+
 function isActive(record) {
   const value = record?.active;
   // A row written before the column existed has no value, and an existing
@@ -323,7 +345,7 @@ function evaluateTenant(record, options = {}) {
   const instanceId = text(record, fieldColumns('instance_id'));
   const active = isActive(record);
   const checks = checkFields(record);
-  const extras = [];
+  const extras = [alemiInstanceMatchCheck(record)];
   // A paused restaurant has no session on purpose. Reporting that as a fault
   // would make every deliberately closed branch look broken.
   if (options.sessions && active) extras.push(sessionCheck(instanceId, options.sessions));

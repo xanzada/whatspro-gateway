@@ -83,6 +83,7 @@
       secretGenerateFailed: 'Браузер қауіпсіз кездейсоқ мән бере алмады',
       secretUniqueUnconfirmed: 'Кілттің бірегейлігі серверде тексерілмеді — сақтау кезінде қайталанса, жаңасын жасаңыз',
       secretDuplicate: 'Бұл кілт басқа ресторанда қолданылып тұр — жаңасын жасаңыз',
+      secretTooShort: 'Кілт кемінде 8 таңба болуы керек — hub.alemi.kz-тегі Secret Key-ді толық көшіріңіз немесе жаңасын жасаңыз',
       rotateAlemiSecret: 'Alemi кілтін жаңарту', rotateAlemiSecretTitle: 'Alemi API кілтін орнату немесе ауыстыру',
       rotateAlemiSecretCopy: 'Жаңа кілтті енгізіңіз. Қауіпсіздік үшін ағымдағы мән көрсетілмейді.', secretUpdated: 'Alemi кілті жаңартылды',
       liveStatusCopy: 'Бұл күй WhatsPro сессиясынан тікелей алынды.',
@@ -160,6 +161,7 @@
       secretGenerateFailed: 'Браузер не смог выдать безопасное случайное значение',
       secretUniqueUnconfirmed: 'Уникальность ключа не подтверждена сервером — если при сохранении окажется дубликатом, создайте новый',
       secretDuplicate: 'Этот ключ уже используется в другом ресторане — создайте новый',
+      secretTooShort: 'Ключ должен быть не короче 8 символов — скопируйте Secret Key с hub.alemi.kz полностью или создайте новый',
       rotateAlemiSecret: 'Обновить ключ Alemi', rotateAlemiSecretTitle: 'Задать или заменить ключ Alemi API',
       rotateAlemiSecretCopy: 'Введите новый ключ. Текущее значение не показывается из соображений безопасности.', secretUpdated: 'Ключ Alemi обновлён',
       liveStatusCopy: 'Этот статус получен напрямую из сессии WhatsPro.',
@@ -535,6 +537,10 @@
     // ALEMI_SECRET_DUPLICATE must never reach the toast.
     var code = String((error && error.code) || '');
     if (code === 'ALEMI_SECRET_DUPLICATE' || (error && error.status === 409)) return t('secretDuplicate');
+    // The server rejects a too-short key with the shared field-validation code,
+    // so the field list is what tells the operator which input to fix.
+    var fields = (error && error.fields) || [];
+    if (code === 'TENANT_FIELDS_INVALID' && fields.indexOf('alemiSecret') !== -1) return t('secretTooShort');
     return (error && error.message) || t('actionFailed');
   }
 
