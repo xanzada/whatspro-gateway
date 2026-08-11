@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { redisClient } = require('../config/redis');
 const { normalizePhone } = require('./phoneUtils');
-const { parseScoredMembers } = require('./redisReply');
+const { parseScoredMembers, parseFieldMap } = require('./redisReply');
 
 const STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
@@ -228,15 +228,14 @@ function createChatStore(redis, options = {}) {
 
   async function getHistory(instanceId, rawPhone, limit = 1000) {
     const phone = normalizePhone(rawPhone);
-    const [rows, legacyRows, receiptPairs] = await Promise.all([
+    const [rows, legacyRows, receiptReply] = await Promise.all([
       command(['LRANGE', keys.history(instanceId, phone), String(-limit), '-1'], []),
       command(['LRANGE', keys.legacyHistory(instanceId, phone), String(-limit), '-1'], []),
       command(['HGETALL', keys.receipts(instanceId, phone)], [])
     ]);
     const receipts = new Map();
-    for (let i = 0; i < receiptPairs.length; i += 2) {
-      const stored = String(receiptPairs[i + 1] || '');
-      receipts.set(receiptPairs[i], stored.includes(':') ? stored.slice(stored.indexOf(':') + 1) : stored);
+    for (const [messageId, stored] of parseFieldMap(receiptReply)) {
+      receipts.set(messageId, stored.includes(':') ? stored.slice(stored.indexOf(':') + 1) : stored);
     }
     // chatwoot:history is the canonical operator-chat timeline. OpenBot keeps a
     // second, internal history for model context; merging both creates the exact

@@ -31,7 +31,10 @@ class FakeRedis {
       const row = value || { type: 'hash', value: new Map() };
       row.value.set(args[2], args[3]); this.data.set(key, row); return 1;
     }
-    if (command === 'HGETALL') return value?.type === 'hash' ? [...value.value].flat() : [];
+    // node-redis 6 resolves HGETALL to a plain object, not the RESP2 flat list.
+    // The fake returned the flat shape, so a reader that could only parse that
+    // passed here and silently read nothing in production.
+    if (command === 'HGETALL') return value?.type === 'hash' ? Object.fromEntries(value.value) : {};
     if (command === 'SET') {
       if (args.includes('NX') && value) return null;
       this.data.set(key, { type: 'string', value: args[2] });
@@ -405,6 +408,25 @@ test('expired archive membership is not authoritative and oversized media is rej
     store.storeMedia('acme', '77001234567', 'huge', 'A'.repeat(23 * 1024 * 1024), 'audio/ogg'),
     /OVERSIZED_MEDIA/
   );
+});
+
+test('a delivery receipt reaches the panel whichever shape the client returns HGETALL in', async () => {
+  const { parseFieldMap } = require('../services/redisReply');
+  const expected = [['out1', '2:delivered'], ['out2', '3:read']];
+
+  // The object shape is what node-redis 6 gives; the other two are RESP2 and the
+  // tuple variant. All three have to read the same, or the ticks stop moving.
+  assert.deepEqual([...parseFieldMap({ out1: '2:delivered', out2: '3:read' })], expected);
+  assert.deepEqual([...parseFieldMap(['out1', '2:delivered', 'out2', '3:read'])], expected);
+  assert.deepEqual([...parseFieldMap([['out1', '2:delivered'], ['out2', '3:read']])], expected);
+  assert.deepEqual([...parseFieldMap(null)], []);
+  assert.deepEqual([...parseFieldMap([])], []);
+
+  const redis = new FakeRedis();
+  const store = createChatStore(redis);
+  await store.appendMessage('acme', '77001234567', { id: 'out1', text: 'hello', role: 'operator' }, { state: 'operator' });
+  assert.equal(await store.updateMessageReceipt('acme', '77001234567', 'out1', 'delivered'), true);
+  assert.equal((await store.getHistory('acme', '77001234567'))[0].deliveryStatus, 'delivered');
 });
 
 test('receipts are monotonic and cannot recreate a deleted chat', async () => {

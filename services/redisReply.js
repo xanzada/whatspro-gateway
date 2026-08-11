@@ -41,4 +41,31 @@ async function* scanKeys(redis, pattern, count = 100) {
   }
 }
 
-module.exports = { parseScoredMembers, scanKeys };
+// HGETALL has the same shape problem as WITHSCORES, with the same silence.
+// node-redis 6 resolves it to a plain { field: value } object; RESP2 hands back a
+// flat [field, value, field, value] list, and some versions return tuples.
+// Reading an object as a flat list gives `.length === undefined`, so the loop body
+// never runs and the caller sees an empty map instead of an error — which is how
+// every outgoing message kept reporting 'sent' in the chat panel while the
+// receipts were being written to Redis correctly the whole time.
+function parseFieldMap(reply) {
+  const map = new Map();
+  if (!reply) return map;
+
+  if (!Array.isArray(reply) && typeof reply === 'object') {
+    for (const [field, value] of Object.entries(reply)) map.set(String(field), String(value ?? ''));
+    return map;
+  }
+  if (!Array.isArray(reply)) return map;
+
+  if (Array.isArray(reply[0])) {
+    for (const row of reply) map.set(String(row?.[0] ?? ''), String(row?.[1] ?? ''));
+    return map;
+  }
+  for (let i = 0; i < reply.length; i += 2) {
+    map.set(String(reply[i] ?? ''), String(reply[i + 1] ?? ''));
+  }
+  return map;
+}
+
+module.exports = { parseScoredMembers, scanKeys, parseFieldMap };
