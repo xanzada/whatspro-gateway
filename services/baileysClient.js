@@ -242,6 +242,9 @@ class BaileysClient extends EventEmitter {
         this._lastSeen = 0;
         this._user = null;
         this._messages = new Map();
+        // A second index on the bare message id. A receipt does not always carry
+        // the chat's jid (see _messageForKey), and the id is unique per send.
+        this._messagesById = new Map();
         this._unreadKeys = new Map();
         this._pushNames = new Map();
 
@@ -396,6 +399,7 @@ class BaileysClient extends EventEmitter {
         try { await this._sock?.end?.(undefined); } catch (_) {}
         this._sock = null;
         this._messages.clear();
+        this._messagesById.clear();
         this._unreadKeys.clear();
         return true;
     }
@@ -723,9 +727,14 @@ class BaileysClient extends EventEmitter {
 
     _cacheMessage(msg) {
         this._messages.set(msg.id._serialized, msg);
+        this._messagesById.set(String(msg.id.id), msg);
         if (this._messages.size > MESSAGE_CACHE_LIMIT) {
             const oldest = this._messages.keys().next().value;
+            const evicted = this._messages.get(oldest);
             this._messages.delete(oldest);
+            if (evicted && this._messagesById.get(String(evicted.id.id)) === evicted) {
+                this._messagesById.delete(String(evicted.id.id));
+            }
         }
     }
 
@@ -748,6 +757,14 @@ class BaileysClient extends EventEmitter {
         const serialized = `${fromMe ? 'true' : 'false'}_${remote}_${String(key.id)}`;
         const cached = this._messages.get(serialized);
         if (cached) return cached;
+        // A delivery or read receipt for a message we sent does not always name
+        // the chat: some stanzas arrive addressed to this account's own jid, and
+        // filing the ack off that would credit the operator's own number instead
+        // of the customer's — which is exactly how every outgoing message stayed
+        // on one tick while a receipts hash for our own number filled up. The id
+        // is unique per send, so the message cached when it was sent wins.
+        const byId = this._messagesById.get(String(key.id));
+        if (byId && Boolean(byId.fromMe) === fromMe) return byId;
         return this._buildMessage({ key, message: null, messageTimestamp: Math.floor(Date.now() / 1000) });
     }
 

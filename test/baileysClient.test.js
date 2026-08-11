@@ -344,6 +344,29 @@ test('a one-to-one delivery and read receipt moves the ticks, and never moves th
   });
 });
 
+test('an ack addressed to our own jid is still credited to the customer chat', async () => {
+  const fake = fakeBaileys();
+  const seen = [];
+
+  await withClient('own-jid-ack', fake, async client => {
+    client.on('message_ack', (msg, ack) => seen.push([msg.to, msg.id.remote, ack]));
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+
+    const sent = await client.sendMessage('77476884956@c.us', 'hi');
+    assert.equal(sent.to, '77476884956@s.whatsapp.net');
+
+    // Some receipt stanzas name this account rather than the chat. Reading the
+    // phone off that key files the ack under the operator's own number, so the
+    // panel never leaves one tick. The id is unique, so the sent message wins.
+    fake.sockets[0].emit('messages.update', [{
+      key: { remoteJid: '77000000000@s.whatsapp.net', fromMe: true, id: sent.id.id },
+      update: { status: 3 }
+    }]);
+
+    assert.deepEqual(seen, [['77476884956@s.whatsapp.net', '77476884956@s.whatsapp.net', 2]]);
+  });
+});
+
 test('an ack for a message this process never saw still resolves a phone', async () => {
   const fake = fakeBaileys();
   const acks = [];
