@@ -2,6 +2,20 @@
 
 Standalone WhatsApp Web API Gateway.
 
+## Transport
+
+Messages and calls both ride a single `@whiskeysockets/baileys` socket
+(`services/baileysClient.js`), so **one QR scan per tenant** registers everything —
+there is no separate call-watcher QR. The client reimplements the `whatsapp-web.js`
+`Client` surface, which keeps `services/whatsappManager.js` transport-agnostic.
+
+`WHATSPRO_TRANSPORT` (default `baileys`) and `WHATSPRO_WWEBJS_INSTANCES` switch a tenant
+back to the old `whatsapp-web.js`/Chromium path — a restart, no rebuild. That is why
+puppeteer and Chromium are still present in the image.
+
+For connecting a website/platform to the bot, see the contract in the companion repo:
+[Openbot-fastfood → docs/integration/site-integration.md](https://github.com/xanzada/Openbot-fastfood/blob/main/docs/integration/site-integration.md)
+
 ## Deploy
 
 1. Push this folder as a separate GitHub repo.
