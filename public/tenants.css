@@ -742,6 +742,10 @@ html[data-theme="light"] .field textarea { background: #edf3f0; }
 .copy-inline:hover { color: var(--accent); border-color: rgba(49, 198, 160, .35); }
 .copy-inline svg { width: 14px; height: 14px; }
 
+.secret-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.secret-actions .button { flex: 0 0 auto; }
+.secret-actions .button svg { width: 14px; height: 14px; }
+
 .toast-region { position: fixed; right: 22px; bottom: 22px; z-index: 300; display: grid; gap: 8px; pointer-events: none; }
 .toast { min-width: 270px; max-width: 390px; display: grid; grid-template-columns: 26px 1fr; align-items: center; gap: 9px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 11px; background: #151b21; box-shadow: var(--shadow); animation: toast-in .2s ease-out; }
 html[data-theme="light"] .toast { background: #f5f8f6; }

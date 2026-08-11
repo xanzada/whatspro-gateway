@@ -75,8 +75,12 @@
       configuration: 'Конфигурация', back: 'Артқа', address: 'Мекенжай', hours: 'Жұмыс уақыты',
       domain: 'Домен', source: 'Дереккөзі', lastCheck: 'Соңғы тексеру', liveStatus: 'Нақты күй',
       alemiApiUrl: 'Alemi API мекенжайы', alemiInstance: 'Alemi instance', alemiSecret: 'Alemi API кілті',
-      alemiSecretHint: 'Кілт тек сақтауға жіберіледі; кейін экранда қайта көрсетілмейді.',
+      alemiSecretHint: 'Кілт тек сақтауға жіберіледі; кейін экранда қайта көрсетілмейді. Сол мәнді hub.alemi.kz-тегі ресторанның Secret Key өрісіне қойыңыз.',
       alemiSecretStored: 'Кілт сақталған', alemiSecretMissing: 'Кілт енгізілмеген', alemiSecretWillUpdate: 'Жаңа кілт сақталады',
+      generateSecret: 'Генерациялау', copySecret: 'Көшіру', secretCopied: 'Кілт көшірілді',
+      secretGenerated: 'Кілт жасалды — көшіріп, hub.alemi.kz-ке қойыңыз',
+      secretEmptyToCopy: 'Алдымен кілт жасаңыз немесе енгізіңіз',
+      secretGenerateFailed: 'Браузер қауіпсіз кездейсоқ сан бере алмады',
       rotateAlemiSecret: 'Alemi кілтін жаңарту', rotateAlemiSecretTitle: 'Alemi API кілтін орнату немесе ауыстыру',
       rotateAlemiSecretCopy: 'Жаңа кілтті енгізіңіз. Қауіпсіздік үшін ағымдағы мән көрсетілмейді.', secretUpdated: 'Alemi кілті жаңартылды',
       liveStatusCopy: 'Бұл күй WhatsPro сессиясынан тікелей алынды.',
@@ -146,8 +150,12 @@
       configuration: 'Конфигурация', back: 'Назад', address: 'Адрес', hours: 'Часы работы',
       domain: 'Домен', source: 'Источник', lastCheck: 'Последняя проверка', liveStatus: 'Фактический статус',
       alemiApiUrl: 'Адрес Alemi API', alemiInstance: 'Alemi instance', alemiSecret: 'Ключ Alemi API',
-      alemiSecretHint: 'Ключ отправляется только на сохранение и больше не показывается на экране.',
+      alemiSecretHint: 'Ключ отправляется только на сохранение и больше не показывается на экране. Это же значение впишите в поле Secret Key ресторана на hub.alemi.kz.',
       alemiSecretStored: 'Ключ сохранён', alemiSecretMissing: 'Ключ не задан', alemiSecretWillUpdate: 'Будет сохранён новый ключ',
+      generateSecret: 'Сгенерировать', copySecret: 'Скопировать', secretCopied: 'Ключ скопирован',
+      secretGenerated: 'Ключ создан — скопируйте и впишите на hub.alemi.kz',
+      secretEmptyToCopy: 'Сначала создайте или введите ключ',
+      secretGenerateFailed: 'Браузер не смог выдать безопасное случайное число',
       rotateAlemiSecret: 'Обновить ключ Alemi', rotateAlemiSecretTitle: 'Задать или заменить ключ Alemi API',
       rotateAlemiSecretCopy: 'Введите новый ключ. Текущее значение не показывается из соображений безопасности.', secretUpdated: 'Ключ Alemi обновлён',
       liveStatusCopy: 'Этот статус получен напрямую из сессии WhatsPro.',
@@ -429,8 +437,9 @@
     $('#toast-region').appendChild(node);
     window.setTimeout(function () { node.remove(); }, bad ? 5200 : 3000);
   }
-  function copyText(value) {
+  function copyText(value, options) {
     var text = String(value || '');
+    var opts = options || {};
     var write = navigator.clipboard && navigator.clipboard.writeText
       ? navigator.clipboard.writeText(text)
       : new Promise(function (resolve, reject) {
@@ -447,7 +456,33 @@
         } catch (error) { reject(error); }
         finally { input.remove(); }
       });
-    return write.then(function () { toast(t('copyDone'), text); });
+    return write.then(function () {
+      toast(opts.title || t('copyDone'), opts.secret ? '' : text);
+    });
+  }
+
+  function generateNumericSecret(length) {
+    var size = length || 12;
+    var source = window.crypto || window.msCrypto;
+    if (!source || typeof source.getRandomValues !== 'function') return '';
+    var digits = '';
+    var buffer = new Uint8Array(size * 2);
+    while (digits.length < size) {
+      source.getRandomValues(buffer);
+      for (var i = 0; i < buffer.length && digits.length < size; i += 1) {
+        // Rejection sampling: 250..255 would bias the modulo, so drop those bytes.
+        if (buffer[i] < 250) digits += String(buffer[i] % 10);
+      }
+    }
+    return digits;
+  }
+
+  function secretActions(inputId) {
+    return '<div class="secret-actions">' +
+      '<button class="button ghost small" type="button" data-generate-secret="' + attr(inputId) + '">' +
+      icon('refresh') + '<span>' + escapeHtml(t('generateSecret')) + '</span></button>' +
+      '<button class="button ghost small" type="button" data-copy-input="' + attr(inputId) + '">' +
+      icon('copy') + '<span>' + escapeHtml(t('copySecret')) + '</span></button></div>';
   }
 
   function applyTheme() {
@@ -1001,7 +1036,8 @@
         '" inputmode="url" autocomplete="url"></div><div class="field"><label for="wizard-alemi-instance">' + t('alemiInstance') +
         '</label><input id="wizard-alemi-instance" name="alemiInstance" value="' + attr(data.alemiInstance) + '" autocomplete="off"></div>' +
         '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
-        attr(data.alemiSecret) + '" autocomplete="new-password"><small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
+        attr(data.alemiSecret) + '" autocomplete="new-password">' + secretActions('wizard-alemi-secret') +
+        '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
         ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
         '</textarea><small>' + t('promptHint') + '</small></div></div>';
@@ -1152,6 +1188,7 @@
     openModal(modalHeader(t('rotateAlemiSecretTitle'), t('rotateAlemiSecretCopy')) +
       '<div class="modal-body"><div class="field"><label for="alemi-secret-input">' + t('alemiSecret') +
       '</label><input id="alemi-secret-input" name="alemiSecret" type="password" autocomplete="new-password" autofocus>' +
+      secretActions('alemi-secret-input') +
       '<small>' + (detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
       '</small></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
       '</button><span class="spacer"></span><button class="button primary" data-save-alemi-secret data-instance="' + attr(instanceId) + '">' +
@@ -1237,6 +1274,30 @@
     var copy = event.target.closest('[data-copy-value]');
     if (copy) {
       copyText(copy.dataset.copyValue).catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      return;
+    }
+    var genSecret = event.target.closest('[data-generate-secret]');
+    if (genSecret) {
+      var genTarget = document.getElementById(genSecret.dataset.generateSecret);
+      if (genTarget) {
+        var fresh = generateNumericSecret(12);
+        if (!fresh) { toast(t('actionFailed'), t('secretGenerateFailed'), true); return; }
+        genTarget.type = 'text';
+        genTarget.value = fresh;
+        genTarget.dispatchEvent(new Event('input', { bubbles: true }));
+        genTarget.focus();
+        genTarget.select();
+        toast(t('secretGenerated'), '');
+      }
+      return;
+    }
+    var copyInput = event.target.closest('[data-copy-input]');
+    if (copyInput) {
+      var copySource = document.getElementById(copyInput.dataset.copyInput);
+      var secretValue = copySource ? String(copySource.value || '').trim() : '';
+      if (!secretValue) { toast(t('actionFailed'), t('secretEmptyToCopy'), true); return; }
+      copyText(secretValue, { title: t('secretCopied'), secret: true })
+        .catch(function (error) { toast(t('actionFailed'), error.message, true); });
       return;
     }
     var nav = event.target.closest('[data-view]');
