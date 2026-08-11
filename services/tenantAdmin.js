@@ -608,11 +608,35 @@ function presentableTenant(row) {
   };
 }
 
+// The runtime payload stays whole on purpose: OpenBot reads dozens of functional
+// columns out of it and an allow-list here would silently break a restaurant the
+// day somebody on the bot side starts reading one more field. So only credentials
+// the bot provably never consumes are removed. Kept deliberately, each verified
+// against Openbot-fastfood/src: whatspro_api_token (transport/whatspro.client.ts
+// signs every send with it), webhook_secret (services/tenantAuth.service.ts
+// authorizes the site webhook with it), crm_secret_token (services/
+// kanbanSync.service.ts sends it to the CRM webhook) and alemi_secret (the HMAC
+// key). kanban_secret is retired on the bot side — its one read is a diagnostic
+// note that never changes the outcome — and crm_webhook_secret is read nowhere at
+// all, so shipping either is disclosure without a purpose.
+const RUNTIME_REDACTED_COLUMNS = [
+  'kanban_secret',
+  'kanbanSecret',
+  'crm_webhook_secret',
+  'crmWebhookSecret'
+];
+
+function runtimeTenant(row, publicBase) {
+  const safe = withCurrentTransport(row, publicBase);
+  for (const column of RUNTIME_REDACTED_COLUMNS) delete safe[column];
+  return safe;
+}
+
 // OpenBot can discover tenants from the broad runtime list, but credentials are
 // fetched only from the master-scoped per-instance endpoint. This keeps a list
 // response or accidental list dump from containing every Alemi key at once.
 function runtimeListTenant(row) {
-  const safe = withCurrentTransport(row);
+  const safe = runtimeTenant(row);
   const present = Boolean(String(safe.alemi_secret || safe.alemiSecret || '').trim());
   delete safe.alemi_secret;
   delete safe.alemiSecret;
@@ -632,6 +656,7 @@ module.exports = {
   listRows,
   presentableTenant,
   runtimeListTenant,
+  runtimeTenant,
   rotateSecrets,
   setAlemiSecret,
   setActive,

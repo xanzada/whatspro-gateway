@@ -287,3 +287,80 @@ test('deploy config keeps shared Redis reachability, local durability and reprod
   assert.match(example, /^WHATSPRO_TENANT_DOMAIN_SUFFIX=alemi\.kz$/m);
   assert.match(example, /^OPENBOT_WEBHOOK_URL=https:\/\/openbot\.alemi\.kz\/whatspro-webhook$/m);
 });
+
+test('runtime config hands the bot every functional field but no credential it never reads', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFindRow = tenantStore.findRow;
+  const previousToken = process.env.WHATSPRO_API_TOKEN;
+  const previousPublicUrl = process.env.WHATSPRO_PUBLIC_URL;
+  process.env.WHATSPRO_API_TOKEN = 'runtime-config-master-token';
+  process.env.WHATSPRO_PUBLIC_URL = 'https://whatspro.example.test';
+  tenantStore.findRow = async instanceId => ({
+    instance_id: instanceId,
+    brand: 'Prestige',
+    domain: 'prestige.alemi.kz',
+    address: 'Абай 1',
+    work_hours: '09:00 - 03:00',
+    system_prompt: 'сен Prestige ботысың',
+    prompt_mode: 'custom',
+    active: true,
+    bot_enabled: true,
+    calls_disabled: true,
+    alemi_api_url: 'https://hub.alemi.kz',
+    alemi_instance: 'prestige-hub',
+    alemi_secret: 'alemi-hmac-key',
+    whatspro_api_token: 'wp-tenant-token',
+    webhook_secret: 'hook-site-secret',
+    crm_secret_token: 'crm-kanban-token',
+    kanban_secret: 'kanban-retired-secret',
+    crm_webhook_secret: 'crm-hook-secret'
+  });
+  t.after(() => {
+    tenantStore.findRow = originalFindRow;
+    if (previousToken === undefined) delete process.env.WHATSPRO_API_TOKEN;
+    else process.env.WHATSPRO_API_TOKEN = previousToken;
+    if (previousPublicUrl === undefined) delete process.env.WHATSPRO_PUBLIC_URL;
+    else process.env.WHATSPRO_PUBLIC_URL = previousPublicUrl;
+  });
+
+  const listener = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { listener.once('listening', resolve); listener.once('error', reject); });
+  t.after(() => new Promise(resolve => listener.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${listener.address().port}/api/wa/runtime-configs/prestige`, {
+    headers: { 'x-api-key': 'runtime-config-master-token' }
+  });
+  const raw = await response.text();
+  assert.equal(response.status, 200);
+  const config = JSON.parse(raw).config;
+
+  // The bot signs its Alemi calls with this and sends with the tenant token, so
+  // both must survive the redaction.
+  assert.equal(config.alemi_secret, 'alemi-hmac-key');
+  assert.equal(config.whatspro_api_token, 'wp-tenant-token');
+  assert.equal(config.webhook_secret, 'hook-site-secret');
+  assert.equal(config.crm_secret_token, 'crm-kanban-token');
+  for (const [field, value] of [
+    ['instance_id', 'prestige'],
+    ['brand', 'Prestige'],
+    ['domain', 'prestige.alemi.kz'],
+    ['address', 'Абай 1'],
+    ['work_hours', '09:00 - 03:00'],
+    ['system_prompt', 'сен Prestige ботысың'],
+    ['prompt_mode', 'custom'],
+    ['alemi_api_url', 'https://hub.alemi.kz'],
+    ['alemi_instance', 'prestige-hub'],
+    ['bot_enabled', true],
+    ['calls_disabled', true],
+    ['active', true],
+    ['whatspro_send_url', 'https://whatspro.example.test/api/send'],
+    ['whatspro_presence_url', 'https://whatspro.example.test/api/presence']
+  ]) {
+    assert.equal(config[field], value, `${field} is functional and must stay in the runtime payload`);
+  }
+
+  for (const dropped of ['kanban_secret', 'kanbanSecret', 'crm_webhook_secret', 'crmWebhookSecret']) {
+    assert.equal(dropped in config, false, `${dropped} is never read by the bot and must not be disclosed`);
+  }
+  assert.equal(raw.includes('kanban-retired-secret'), false);
+  assert.equal(raw.includes('crm-hook-secret'), false);
+});
