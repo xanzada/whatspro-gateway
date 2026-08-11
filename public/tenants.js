@@ -478,11 +478,10 @@
   }
 
   function secretActions(inputId) {
-    return '<div class="secret-actions">' +
-      '<button class="button ghost small" type="button" data-generate-secret="' + attr(inputId) + '">' +
+    return '<button class="button ghost small" type="button" data-generate-secret="' + attr(inputId) + '">' +
       icon('refresh') + '<span>' + escapeHtml(t('generateSecret')) + '</span></button>' +
       '<button class="button ghost small" type="button" data-copy-input="' + attr(inputId) + '">' +
-      icon('copy') + '<span>' + escapeHtml(t('copySecret')) + '</span></button></div>';
+      icon('copy') + '<span>' + escapeHtml(t('copySecret')) + '</span></button>';
   }
 
   function applyTheme() {
@@ -673,6 +672,15 @@
   function infoItem(label, value, id) {
     return '<div class="info-item"><span>' + escapeHtml(label) + '</span><strong' + (id ? ' id="' + id + '"' : '') + '>' + escapeHtml(value || '—') + '</strong></div>';
   }
+  function alemiSecretItem(instanceId, stored) {
+    return '<div class="info-item secret-item"><span>' + escapeHtml(t('alemiSecret')) + '</span>' +
+      '<div class="secret-row"><input id="detail-alemi-secret" name="alemiSecret" type="text" autocomplete="off" ' +
+      'placeholder="' + attr(stored ? t('alemiSecretStored') : t('alemiSecretMissing')) + '">' +
+      secretActions('detail-alemi-secret') +
+      '<button class="button primary small" type="button" data-save-alemi-secret data-instance="' + attr(instanceId) +
+      '" data-secret-input="detail-alemi-secret">' + escapeHtml(t('save')) + '</button></div>' +
+      '<small>' + escapeHtml(t('alemiSecretHint')) + '</small></div>';
+  }
   function renderDetail() {
     var tenant = report.tenants.find(function (item) { return item.instanceId === currentDetail; });
     if (!tenant) { currentDetail = ''; return renderRestaurants(); }
@@ -694,7 +702,8 @@
       infoItem(t('instance'), tenant.instanceId) + infoItem(t('domain'), detail.domain) + infoItem(t('address'), detail.address) +
       infoItem(t('hours'), detail.workHours) + infoItem(t('alemiApiUrl'), detail.alemiApiUrl) +
       infoItem(t('alemiInstance'), detail.alemiInstance) +
-      infoItem(t('alemiSecret'), detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') : t('alemiSecretMissing')) +
+      (tenant.virtual ? infoItem(t('alemiSecret'), detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') : t('alemiSecretMissing'))
+        : alemiSecretItem(tenant.instanceId, Boolean(detail.secrets && detail.secrets.alemiSecret))) +
       infoItem(t('source'), 'WhatsPro Platform') +
       '</div></div></section>' +
       '<section class="detail-section" id="section-whatsapp"><div class="detail-section-head"><strong>WhatsApp</strong><span>' + t('realTime') +
@@ -1035,8 +1044,9 @@
         '</label><input id="wizard-alemi-url" name="alemiApiUrl" type="url" value="' + attr(data.alemiApiUrl) +
         '" inputmode="url" autocomplete="url"></div><div class="field"><label for="wizard-alemi-instance">' + t('alemiInstance') +
         '</label><input id="wizard-alemi-instance" name="alemiInstance" value="' + attr(data.alemiInstance) + '" autocomplete="off"></div>' +
-        '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
-        attr(data.alemiSecret) + '" autocomplete="new-password">' + secretActions('wizard-alemi-secret') +
+        '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label>' +
+        '<div class="secret-row"><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
+        attr(data.alemiSecret) + '" autocomplete="new-password">' + secretActions('wizard-alemi-secret') + '</div>' +
         '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
         ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
@@ -1187,8 +1197,8 @@
     var detail = settings.get(instanceId) || {};
     openModal(modalHeader(t('rotateAlemiSecretTitle'), t('rotateAlemiSecretCopy')) +
       '<div class="modal-body"><div class="field"><label for="alemi-secret-input">' + t('alemiSecret') +
-      '</label><input id="alemi-secret-input" name="alemiSecret" type="password" autocomplete="new-password" autofocus>' +
-      secretActions('alemi-secret-input') +
+      '</label><div class="secret-row"><input id="alemi-secret-input" name="alemiSecret" type="password" autocomplete="new-password" autofocus>' +
+      secretActions('alemi-secret-input') + '</div>' +
       '<small>' + (detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
       '</small></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
       '</button><span class="spacer"></span><button class="button primary" data-save-alemi-secret data-instance="' + attr(instanceId) + '">' +
@@ -1294,9 +1304,9 @@
     var copyInput = event.target.closest('[data-copy-input]');
     if (copyInput) {
       var copySource = document.getElementById(copyInput.dataset.copyInput);
-      var secretValue = copySource ? String(copySource.value || '').trim() : '';
-      if (!secretValue) { toast(t('actionFailed'), t('secretEmptyToCopy'), true); return; }
-      copyText(secretValue, { title: t('secretCopied'), secret: true })
+      var copyValue = copySource ? String(copySource.value || '').trim() : '';
+      if (!copyValue) { toast(t('actionFailed'), t('secretEmptyToCopy'), true); return; }
+      copyText(copyValue, { title: t('secretCopied'), secret: true })
         .catch(function (error) { toast(t('actionFailed'), error.message, true); });
       return;
     }
@@ -1347,10 +1357,17 @@
     var saveAlemiSecret = event.target.closest('[data-save-alemi-secret]');
     if (saveAlemiSecret) {
       var secretId = saveAlemiSecret.dataset.instance;
-      var alemiSecretInput = $('[name="alemiSecret"]', modalRoot);
+      var inlineSecretId = saveAlemiSecret.dataset.secretInput;
+      var alemiSecretInput = inlineSecretId
+        ? document.getElementById(inlineSecretId)
+        : $('[name="alemiSecret"]', modalRoot);
       var secretValue = alemiSecretInput ? alemiSecretInput.value : '';
       if (!secretValue.trim()) {
-        if (alemiSecretInput) { alemiSecretInput.closest('.field').classList.add('invalid'); alemiSecretInput.focus(); }
+        if (alemiSecretInput) {
+          var invalidHost = alemiSecretInput.closest('.field') || alemiSecretInput.closest('.secret-item');
+          if (invalidHost) invalidHost.classList.add('invalid');
+          alemiSecretInput.focus();
+        }
         toast(t('requiredField'), t('alemiSecret'), true);
         return;
       }
@@ -1359,7 +1376,7 @@
       if (alemiSecretInput) alemiSecretInput.value = '';
       secretValue = '';
       secretRequest.then(function () {
-        closeModal();
+        if (!inlineSecretId) closeModal();
         toast(t('secretUpdated'), secretId);
         return loadData(true);
       }).catch(function (error) {

@@ -49,3 +49,37 @@ test('Each public UI keeps its own direct server route', () => {
   assert.match(server, /app\.get\('\/tenants'[\s\S]*?'tenants\.html'/);
   assert.match(server, /app\.get\(\['\/chat', '\/inbox'\]/);
 });
+
+test('The Alemi Secret Key row carries a generate and a copy control everywhere it is editable', () => {
+  const tenants = read('public/tenants.js');
+  const css = read('public/tenants.css');
+
+  // One helper renders both buttons, and it is used on all three editable inputs:
+  // the wizard step, the rotate-secret modal and the restaurant detail row.
+  assert.match(tenants, /data-generate-secret="' \+ attr\(inputId\)/);
+  assert.match(tenants, /data-copy-input="' \+ attr\(inputId\)/);
+  ['wizard-alemi-secret', 'alemi-secret-input', 'detail-alemi-secret'].forEach((inputId) => {
+    assert.match(tenants, new RegExp(`secretActions\\('${inputId}'\\)`), `${inputId} misses the secret controls`);
+  });
+  assert.match(tenants, /class="secret-row"/);
+  assert.match(css, /\.secret-row \{/);
+
+  // 12 digits, drawn from the CSPRNG with rejection sampling so no digit is favoured.
+  assert.match(tenants, /generateNumericSecret\(12\)/);
+  assert.match(tenants, /getRandomValues/);
+  assert.match(tenants, /buffer\[i\] < 250/);
+
+  // The key itself must never be echoed into a toast body.
+  assert.match(tenants, /copyText\(copyValue, \{ title: t\('secretCopied'\), secret: true \}\)/);
+  assert.match(tenants, /opts\.secret \? '' : text/);
+
+  // The detail row saves through the same write-only endpoint as the modal.
+  assert.match(tenants, /data-secret-input="detail-alemi-secret"/);
+  assert.match(tenants, /\/alemi-secret', \{ secret: secretValue \}/);
+
+  ['generateSecret', 'copySecret', 'secretCopied', 'secretGenerated', 'secretEmptyToCopy', 'secretGenerateFailed']
+    .forEach((key) => {
+      const hits = tenants.match(new RegExp(`${key}:`, 'g')) || [];
+      assert.equal(hits.length, 2, `${key} must be translated in both kk and ru`);
+    });
+});
