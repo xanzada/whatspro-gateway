@@ -1,9 +1,16 @@
 FROM node:20-bullseye-slim
 
+# Debian's `chromium` package installs /usr/bin/chromium. It has never installed
+# /usr/bin/chromium-browser, which PUPPETEER_EXECUTABLE_PATH pointed at for as
+# long as this file existed: whatsappManager.js probes the filesystem and passes
+# an explicit executablePath, so the Chromium rollback transport still worked and
+# the broken variable never showed up. Anything launching puppeteer without its
+# own path -- scripts/browser-qa.js, scripts/tenants-browser-qa.js -- got a
+# missing binary instead.
 ENV NODE_ENV=production \
     FFMPEG_PATH=/usr/bin/ffmpeg \
     PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     WHATSAPP_AUTH_PATH=/app/whatsapp_auth
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

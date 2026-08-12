@@ -182,3 +182,26 @@ test('the source keeps a rollback path to the Chromium transport', async () => {
     assert.match(source, /function loadWwebjs/);
     assert.ok(os.platform());
 });
+
+test('the rollback path keeps the pieces it needs to actually come up', async () => {
+    // Baileys has no stable release -- npm's `latest` is a release candidate --
+    // so the Chromium transport is kept as insurance against Baileys-specific
+    // breakage. Insurance rots quietly: a dependency dropped in a cleanup, a
+    // browser removed from the image, and the rollback is a rollback on paper
+    // only. Each assertion below is a thing whose removal would break it.
+    const root = path.join(__dirname, '..');
+    const manifest = JSON.parse(await fs.promises.readFile(path.join(root, 'package.json'), 'utf8'));
+    for (const dependency of ['whatsapp-web.js', 'puppeteer', '@wppconnect/wa-js']) {
+        assert.ok(manifest.dependencies?.[dependency], `${dependency} is part of the rollback path`);
+    }
+    assert.ok(manifest.scripts?.['verify:rollback'], 'the rollback must stay checkable from inside the container');
+
+    const dockerfile = await fs.promises.readFile(path.join(root, 'Dockerfile'), 'utf8');
+    assert.match(dockerfile, /^\s+chromium\s*\\?$/m, 'the image must still install a browser');
+    // Debian installs /usr/bin/chromium and has never shipped
+    // /usr/bin/chromium-browser. Pointing the variable at the latter is the bug
+    // this pins shut; anything launching puppeteer without an explicit path
+    // (scripts/browser-qa.js) depends on it being right.
+    assert.match(dockerfile, /PUPPETEER_EXECUTABLE_PATH=\/usr\/bin\/chromium(?![-\w])/);
+    assert.doesNotMatch(dockerfile, /PUPPETEER_EXECUTABLE_PATH=\/usr\/bin\/chromium-browser/);
+});
