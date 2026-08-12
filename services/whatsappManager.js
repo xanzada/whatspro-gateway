@@ -2656,8 +2656,12 @@ async function resolveCallPhone(client, call, knownPhone = '') {
             return mappedPhone;
         }
 
-        const normalizedKnownPhone = normalizePhoneFromCandidates([knownPhone]);
-        if (normalizedKnownPhone) {
+        // The hint may be a list: test mode can allow more than one number, and
+        // any of them could be the LID that failed to resolve above.
+        const knownPhones = [...new Set((Array.isArray(knownPhone) ? knownPhone : [knownPhone])
+            .map(candidate => normalizePhoneFromCandidates([candidate]))
+            .filter(Boolean))];
+        for (const normalizedKnownPhone of knownPhones) {
             const knownMappings = await withTimeout(
                 client.getContactLidAndPhone([`${normalizedKnownPhone}@c.us`]),
                 3000,
@@ -2721,7 +2725,7 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
 
         const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
         const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
-        const phone = await resolvePhone(client, call, policy.enabled ? policy.devPhone : '');
+        const phone = await resolvePhone(client, call, policy.enabled ? (policy.devPhones?.length ? policy.devPhones : policy.devPhone) : '');
         if (!isValidChatPhone(phone)) {
             console.warn(`[WHATSAPP CALL] ${instanceId}: caller phone could not be resolved. shape=${JSON.stringify(describeCallIdentityShape(call))}`);
             return { rejected, replied: false, phone: '', reason: 'bad_phone' };

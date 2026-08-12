@@ -21,7 +21,7 @@ test('strict test mode allows only the tenant developer phone', async () => {
   };
 
   const policy = await testMode.getTestModePolicy('prestige', dependencies);
-  assert.deepEqual(policy, { enabled: true, devPhone: '77769156184' });
+  assert.deepEqual(policy, { enabled: true, devPhone: '77769156184', devPhones: ['77769156184'] });
   assert.equal(testMode.allowsPhone(policy, '+7 776 915 61 84'), true);
   assert.equal(testMode.allowsPhone(policy, '+7 702 275 42 35'), false);
   assert.deepEqual(
@@ -36,8 +36,78 @@ test('test mode stays fail-closed when the developer phone is missing', async ()
     findRow: async () => ({ instance_id: 'prestige', dev_phone: '' })
   });
 
-  assert.deepEqual(policy, { enabled: true, devPhone: '' });
+  assert.deepEqual(policy, { enabled: true, devPhone: '', devPhones: [] });
   assert.equal(testMode.allowsPhone(policy, '77769156184'), false);
+});
+
+test('a dev_phone holding several numbers admits every one of them', async () => {
+  // Putting a QA number in dev_phone used to evict the owner's own number, and
+  // the usual "fix" for that was switching test mode off, which lets every
+  // stranger talk to the bot. Separators are mixed on purpose: this field is
+  // typed into a form by hand.
+  const policy = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'true' },
+    findRow: async () => ({ instance_id: 'prestige', dev_phone: '+7 776 915 61 84, 8(702)275-42-35; 77476884956' })
+  });
+
+  assert.deepEqual(policy.devPhones, ['77769156184', '77022754235', '77476884956']);
+  assert.equal(policy.devPhone, '77769156184', 'the first entry stays the one a UI or log line shows');
+  for (const phone of ['+7 776 915 61 84', '77022754235', '+7 747 688 49 56']) {
+    assert.equal(testMode.allowsPhone(policy, phone), true, `${phone} is on the list`);
+  }
+  assert.equal(testMode.allowsPhone(policy, '77010000000'), false);
+  assert.deepEqual(
+    testMode.filterAllowedPhones(policy, [{ phone: '77022754235' }, { phone: '77010000000' }]),
+    [{ phone: '77022754235' }]
+  );
+});
+
+test('a list keeps working when it is spelled with junk, duplicates or a bad entry', async () => {
+  const policy = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'true' },
+    findRow: async () => ({ instance_id: 'prestige', dev_phone: ' 77769156184,,  77769156184 | not-a-phone  77022754235 ' })
+  });
+
+  assert.deepEqual(policy.devPhones, ['77769156184', '77022754235']);
+  assert.equal(testMode.allowsPhone(policy, '77022754235'), true, 'a bad entry must not swallow the ones after it');
+});
+
+test('an env fallback list is honoured, and merged behind the tenant row', async () => {
+  const policy = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'true', TEST_MODE_ALLOWED_PHONE: '77022754235,77476884956' },
+    findRow: async () => ({ instance_id: 'prestige', dev_phone: '77769156184' })
+  });
+
+  assert.deepEqual(policy.devPhones, ['77769156184', '77022754235', '77476884956']);
+});
+
+test('a QA number in test_phones is admitted without disturbing dev_phone', async () => {
+  // dev_phone must stay a single number: OpenBot normalises that one field down
+  // to one phone for its developer alerts, so a list there would read as empty
+  // on that side. test_phones is the field OpenBot's inbound guard already uses.
+  const policy = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'true' },
+    findRow: async () => ({
+      instance_id: 'prestige',
+      dev_phone: '77769156184',
+      test_phones: '+7 702 275 42 35, 77476884956'
+    })
+  });
+
+  assert.equal(policy.devPhone, '77769156184', 'the owner number stays the primary one');
+  assert.deepEqual(policy.devPhones, ['77769156184', '77022754235', '77476884956']);
+  assert.equal(testMode.allowsPhone(policy, '77022754235'), true);
+  assert.equal(testMode.allowsPhone(policy, '77010000000'), false);
+});
+
+test('a policy built before devPhones existed is still enforced', () => {
+  // handleIncomingCall's callers pass a hand-made policy object in tests and in
+  // the call path; dropping to the single field must not open the gate.
+  const legacy = { enabled: true, devPhone: '77476884956' };
+  assert.equal(testMode.allowsPhone(legacy, '77476884956'), true);
+  assert.equal(testMode.allowsPhone(legacy, '77769156184'), false);
+  assert.equal(testMode.allowsPhone({ enabled: true, devPhone: '' }, '77476884956'), false);
+  assert.equal(testMode.allowsPhone({ enabled: true, devPhones: [] }, '77476884956'), false);
 });
 
 test('incoming storage is skipped before a foreign test-mode phone can create a chat', async () => {
@@ -79,6 +149,45 @@ test('a foreign test-mode phone is never forwarded to OpenBot', async () => {
     if (previousEnabled === undefined) delete process.env.TEST_MODE_ENABLED;
     else process.env.TEST_MODE_ENABLED = previousEnabled;
   }
+});
+
+test('an unresolved caller LID is checked against every allowed dev phone, not just the first', async () => {
+  whatsappTest.clearJidMap();
+  const rawLid = '123456789012345@lid';
+  const lookups = [];
+  const client = {
+    getContactLidAndPhone: async ids => {
+      lookups.push(ids[0]);
+      // The LID itself resolves to nothing, and the first allowed number is not
+      // the caller. Stopping there used to lose the second QA number entirely.
+      if (ids[0] === rawLid) return [{ lid: rawLid, pn: '' }];
+      if (ids[0] === '77022754235@c.us') return [{ lid: rawLid, pn: '77022754235@c.us' }];
+      return [];
+    },
+    getContactById: async () => null
+  };
+  const delivered = [];
+
+  const result = await whatsappTest.handleIncomingCall('prestige', client, {
+    from: rawLid,
+    reject: async () => {}
+  }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true }) },
+    rejectCall: confirmRejected,
+    getTestModePolicy: async () => ({
+      enabled: true,
+      devPhone: '77769156184',
+      devPhones: ['77769156184', '77022754235']
+    }),
+    deliverText: async (_client, _instanceId, phone) => {
+      delivered.push(phone);
+      return { success: true };
+    }
+  });
+
+  assert.deepEqual(result, { rejected: true, replied: true, phone: '77022754235' });
+  assert.deepEqual(lookups, [rawLid, '77769156184@c.us', '77022754235@c.us']);
+  assert.deepEqual(delivered, ['77022754235']);
 });
 
 test('call handling rejects everyone, replies only to the allowed phone via bot delivery', async () => {
