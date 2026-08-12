@@ -102,11 +102,33 @@ function muteKey(instanceId, phone) {
   return `mute:${instanceId}:${phone}`;
 }
 
-async function shouldSkipOpenBot(payload = {}) {
+/**
+ * A paused bot must actually stay quiet.
+ *
+ * `bot_enabled: false` is how an operator takes a restaurant off auto-reply
+ * without unlinking its WhatsApp session, and it was honoured everywhere except
+ * here -- the message was still POSTed to OpenBot, which answered it. The check
+ * lives on the forward only: the chat store still records everything, so the
+ * operator inbox keeps working while the bot sleeps.
+ *
+ * A row that predates the field, or one this gateway cannot read, is treated as
+ * enabled. Failing closed here would silence every tenant on a Redis blip.
+ */
+async function isBotEnabled(instanceId, dependencies = {}) {
+  const findRow = dependencies.findRow || require('./tenantStore').findRow;
+  const row = await findRow(instanceId).catch(() => null);
+  if (!row) return true;
+  const value = row.bot_enabled ?? row.botEnabled;
+  if (value === undefined || value === null || value === '') return true;
+  return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
+}
+
+async function shouldSkipOpenBot(payload = {}, dependencies = {}) {
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || !isValidChatPhone(phone)) return false;
-  if (!(await isPhoneAllowed(instanceId, phone))) return true;
+  if (!(await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone))) return true;
+  if (!(await isBotEnabled(instanceId, dependencies))) return true;
   if (!redisClient.isOpen) return false;
 
   const [operatorTtl, muteTtl] = await Promise.all([
@@ -303,5 +325,5 @@ module.exports = {
   processIncomingRecord,
   saveIncomingMessage,
   startIncomingWalWorker,
-  __test: { buildHistoryEntry, isNonConversationalPayload, saveIncomingMessage }
+  __test: { buildHistoryEntry, isBotEnabled, isNonConversationalPayload, saveIncomingMessage, shouldSkipOpenBot }
 };
