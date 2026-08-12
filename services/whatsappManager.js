@@ -1932,7 +1932,7 @@ async function getInstanceStatus(instanceId) {
         clients.delete(instanceId);
         setInstanceState(instanceId, 'disconnected', { reason: 'browser_page_closed' });
         scheduleRestart(instanceId, 3000, 'browser_page_closed');
-        return instanceStates.get(instanceId);
+        return { ...instanceStates.get(instanceId), hasStoredSession: storedSession, transport };
     }
 
     try {
@@ -1945,7 +1945,7 @@ async function getInstanceStatus(instanceId) {
             stateCheckFailures.delete(instanceId);
             resetRestartAttempts(instanceId);
             setInstanceState(instanceId, 'connected', { waState: state || 'CONNECTED' });
-            return { status: 'connected', waState: state || 'CONNECTED', hasStoredSession: storedSession };
+            return { status: 'connected', waState: state || 'CONNECTED', hasStoredSession: storedSession, transport };
         }
 
         // Reading a status must never destroy credentials. getState() returns
@@ -1962,10 +1962,10 @@ async function getInstanceStatus(instanceId) {
         if (status === 'disconnected') registerHealthFailure(instanceId, `state_${state || 'NULL'}`);
         else stateCheckFailures.delete(instanceId);
 
-        return { ...instanceStates.get(instanceId), hasStoredSession: storedSession };
+        return { ...instanceStates.get(instanceId), hasStoredSession: storedSession, transport };
     } catch (error) {
         registerHealthFailure(instanceId, error.message || 'state_check_failed');
-        return { ...(instanceStates.get(instanceId) || { status: 'starting' }), hasStoredSession: storedSession };
+        return { ...(instanceStates.get(instanceId) || { status: 'starting' }), hasStoredSession: storedSession, transport };
     }
 }
 

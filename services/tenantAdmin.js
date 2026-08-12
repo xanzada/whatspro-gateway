@@ -467,15 +467,49 @@ async function setCallsDisabled(instanceId, disabled) {
   return { instanceId, callsDisabled: Boolean(disabled) };
 }
 
-async function deleteTenant(instanceId) {
+// Deleting a restaurant has to take the restaurant's leftovers with it: the
+// WhatsApp pairing (a live login nobody would be watching), and every cache key
+// under its instance id. The order matters. Stopping the instance first is what
+// clears the session folder and the call-watcher credentials, and it needs the row
+// still present to resolve the tenant; the row is deleted last so a failure part
+// way through leaves a tenant that is merely stopped, which an operator can retry,
+// rather than a row-less session still answering WhatsApp.
+//
+// Session teardown and the cache purge are each allowed to fail without blocking
+// the delete - an operator asking for a tenant to be gone must not be stuck
+// because Redis is down - but what failed is reported back rather than swallowed.
+async function deleteTenant(instanceId, dependencies = {}) {
   const existing = await findRow(instanceId);
   if (!existing) {
     const error = new Error('TENANT_NOT_FOUND');
     error.statusCode = 404;
     throw error;
   }
+
+  const manager = dependencies.whatsappManager || require('./whatsappManager');
+  const purge = dependencies.tenantPurge || require('./tenantPurge');
+  const redis = dependencies.redisClient || require('../config/redis').redisClient;
+
+  const cascade = { sessionCleared: false, cacheKeysDeleted: 0, failures: [] };
+
+  try {
+    await manager.stopWhatsAppInstance(instanceId);
+    cascade.sessionCleared = true;
+  } catch (error) {
+    cascade.failures.push(`session:${error?.message || 'STOP_FAILED'}`);
+  }
+
+  try {
+    const purged = await purge.purgeTenantRedisKeys(redis, instanceId);
+    cascade.cacheKeysDeleted = purged.deleted;
+    const families = Object.keys(purged.families).sort().join(',');
+    console.log(`[TENANT DELETE] ${instanceId} cache purged: ${purged.deleted} key(s)${families ? ` [${families}]` : ''}`);
+  } catch (error) {
+    cascade.failures.push(`cache:${error?.message || 'PURGE_FAILED'}`);
+  }
+
   await tenantStore.deleteRow(instanceId);
-  return { instanceId, deleted: true };
+  return { instanceId, deleted: true, ...cascade };
 }
 
 // Cloning copies the settings a second branch shares and nothing that must stay

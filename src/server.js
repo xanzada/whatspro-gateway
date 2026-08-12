@@ -1395,12 +1395,12 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
 app.delete('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  // Deleting a restaurant removes its row and its session. Typing the name is
-  // what separates that from a mis-tap on a phone.
+  // Deleting a restaurant removes its row, its WhatsApp session and every cache
+  // key under its instance id (tenantAdmin.deleteTenant owns that cascade).
+  // Typing the name is what separates that from a mis-tap on a phone.
   if (String(req.body?.confirm || '') !== instanceId) return res.status(400).json({ error: 'CONFIRM_INSTANCE_ID_REQUIRED' });
   try {
     const result = await tenantAdmin.deleteTenant(instanceId);
-    await stopWhatsAppInstance(instanceId).catch(() => undefined);
     if (redisClient.isOpen) await redisClient.hDel(INSTANCE_STORE_KEY, instanceId).catch(() => undefined);
     res.json({ success: true, ...result });
   } catch (error) {
