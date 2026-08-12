@@ -364,3 +364,31 @@ test('runtime config hands the bot every functional field but no credential it n
   assert.equal(raw.includes('kanban-retired-secret'), false);
   assert.equal(raw.includes('crm-hook-secret'), false);
 });
+
+// A restaurant that has lost its WhatsApp pairing needs a person to pick up a
+// phone, and nothing about that is visible from `/health`. It has to show as
+// degraded and name the instance — but `ok` must stay true, because the
+// container healthcheck asserts it and restarting the gateway is never the fix
+// for a QR scan nobody has done yet.
+test('detailed health names the instances that need a QR scan without failing the healthcheck', async t => {
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/health/detailed`);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true, 'the container healthcheck asserts ok === true');
+  assert.ok(Array.isArray(body.checks.whatsapp.needsScan), 'the operator needs the instance ids, not just a count');
+  assert.equal(typeof body.checks.whatsapp.connected, 'number');
+  assert.ok(['healthy', 'degraded'].includes(body.mode));
+
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.match(source, /needsScan\.length === 0 \? 'healthy' : 'degraded'/,
+    'a tenant waiting on a scan must not be able to read as healthy');
+});

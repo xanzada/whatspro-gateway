@@ -430,19 +430,77 @@ test('only the phone unlinking the device is terminal; a 408 reconnects with bac
   assert.equal(__test.reconnectDelay(50), 60000, 'a phone left off must not spin at full speed');
 });
 
-test('a corrupt session is reported as auth_failure so the manager can reset it', async () => {
+// Reporting auth_failure makes the manager delete the credential folder, which
+// costs someone a walk to the restaurant's phone. A full disk can produce the
+// same 500 as a genuinely corrupt store, so one is not enough to spend that.
+test('a single rejected-credentials close retries instead of demanding a new QR', async () => {
   const fake = fakeBaileys();
   const failures = [];
 
-  await withClient('badsession', fake, async client => {
+  await withClient('badsession-once', fake, async client => {
     client.on('auth_failure', reason => failures.push(String(reason)));
     fake.sockets[0].emit('connection.update', {
       connection: 'close',
       lastDisconnect: { error: { output: { statusCode: 500 } } }
     });
 
-    assert.equal(failures.length, 1);
+    assert.deepEqual(failures, [], 'a transient 500 must not cost a physical phone scan');
+  });
+});
+
+test('credentials rejected twice are reported as auth_failure so the manager can reset them', async () => {
+  const fake = fakeBaileys();
+  const failures = [];
+
+  await withClient('badsession', fake, async client => {
+    client.on('auth_failure', reason => failures.push(String(reason)));
+    const close = () => fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 500 } } }
+    });
+
+    close();
+    close();
+
+    assert.equal(failures.length, 1, 'a store that really is unusable fails again within seconds');
     assert.match(failures[0], /bad_session/);
+  });
+});
+
+test('a socket that opens in between clears the rejected-credentials memory', async () => {
+  const fake = fakeBaileys();
+  const failures = [];
+
+  await withClient('badsession-recovered', fake, async client => {
+    client.on('auth_failure', reason => failures.push(String(reason)));
+    const close = () => fake.sockets[0].emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 500 } } }
+    });
+
+    close();
+    fake.sockets[0].emit('connection.update', { connection: 'open' });
+    close();
+
+    assert.deepEqual(failures, [], 'the pair has to be consecutive, not two blips a month apart');
+  });
+});
+
+test('the version lookup cannot hold the connect path open', async () => {
+  const fake = fakeBaileys({ fetchLatestBaileysVersion: () => new Promise(() => {}) });
+
+  await withClient('slowversion', fake, async () => {
+    assert.equal(fake.socketOptions.length, 1, 'the socket is built anyway');
+    assert.equal(fake.socketOptions[0].version, undefined, 'Baileys falls back to the version it shipped with');
+  }, { versionTimeoutMs: 30 });
+});
+
+test('a version lookup that throws is not fatal either', async () => {
+  const fake = fakeBaileys({ fetchLatestBaileysVersion: async () => { throw new Error('ENOTFOUND'); } });
+
+  await withClient('throwversion', fake, async () => {
+    assert.equal(fake.socketOptions.length, 1);
+    assert.equal(fake.socketOptions[0].version, undefined);
   });
 });
 

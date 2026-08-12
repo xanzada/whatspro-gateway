@@ -39,6 +39,22 @@ const WATCHDOG_MS = 30000;
 const MESSAGE_CACHE_LIMIT = 500;
 const UNREAD_KEYS_PER_CHAT = 20;
 
+// `auth_failure` is the one event that costs a human a physical phone scan: the
+// manager answers it by deleting the credential folder. Baileys raises
+// `badSession` (500) for a genuinely corrupt store, but the same code also
+// arrives after a write that could not complete — a full disk being the case
+// this deployment actually has to fear. So the first one is treated as a
+// reconnect and only a second one inside this window is believed. A truly
+// unusable store fails again within seconds, which costs nothing; a transient
+// one no longer costs a trip to the restaurant.
+const BAD_SESSION_GRACE_MS = 10 * 60 * 1000;
+
+// fetchLatestBaileysVersion() is a network call on the connect path. Without a
+// deadline a hung endpoint holds the socket in limbo: the watchdog fires,
+// schedules another connect, and the hung fetches pile up behind each other.
+// Baileys' own bundled version is a perfectly good fallback.
+const VERSION_FETCH_TIMEOUT_MS = 8000;
+
 function reconnectDelay(attempt) {
     return Math.min(RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1), RECONNECT_MAX_MS);
 }
@@ -240,6 +256,7 @@ class BaileysClient extends EventEmitter {
         this._timer = null;
         this._watchdog = null;
         this._lastSeen = 0;
+        this._badSessionAt = 0;
         this._user = null;
         this._messages = new Map();
         // A second index on the bare message id. A receipt does not always carry
@@ -363,9 +380,7 @@ class BaileysClient extends EventEmitter {
         const { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers } = baileys;
 
         const { state: authState, saveCreds } = await useMultiFileAuthState(this.authDir);
-        const { version } = typeof fetchLatestBaileysVersion === 'function'
-            ? await fetchLatestBaileysVersion().catch(() => ({ version: undefined }))
-            : { version: undefined };
+        const { version } = await this._latestVersion(fetchLatestBaileysVersion);
 
         const sock = makeWASocket({
             auth: authState,
@@ -386,6 +401,34 @@ class BaileysClient extends EventEmitter {
         if (typeof saveCreds === 'function') sock.ev.on('creds.update', saveCreds);
         this._wire(sock, isCurrent);
         return sock;
+    }
+
+    // Ask WhatsApp which client version to claim, but never let that question
+    // hold the connect path open. `undefined` makes Baileys use the version it
+    // shipped with, which is what a fetch failure already fell back to.
+    async _latestVersion(fetchLatestBaileysVersion) {
+        if (typeof fetchLatestBaileysVersion !== 'function') return { version: undefined };
+        const budget = Number(this.options.versionTimeoutMs) > 0
+            ? Number(this.options.versionTimeoutMs)
+            : VERSION_FETCH_TIMEOUT_MS;
+        let timer;
+        try {
+            return await Promise.race([
+                fetchLatestBaileysVersion(),
+                new Promise(resolve => {
+                    timer = setTimeout(() => {
+                        this._log('warn', 'version lookup timed out, using the bundled version');
+                        resolve({ version: undefined });
+                    }, budget);
+                    if (typeof timer?.unref === 'function') timer.unref();
+                })
+            ]);
+        } catch (error) {
+            this._log('warn', `version lookup failed (${error?.message || error}), using the bundled version`);
+            return { version: undefined };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
     }
 
     async destroy() {
@@ -456,6 +499,7 @@ class BaileysClient extends EventEmitter {
             this._connected = true;
             this._awaitingScan = false;
             this._loggedOut = false;
+            this._badSessionAt = 0;
             this._lastSeen = Date.now();
             this._user = sock?.user || this._user;
             this._log('log', 'socket open');
@@ -483,7 +527,15 @@ class BaileysClient extends EventEmitter {
         }
 
         if (DisconnectReason?.badSession !== undefined && code === DisconnectReason.badSession) {
-            this._log('warn', 'credentials are unusable, reporting auth_failure');
+            const previous = this._badSessionAt;
+            this._badSessionAt = Date.now();
+            if (!previous || this._badSessionAt - previous > BAD_SESSION_GRACE_MS) {
+                // Deleting credentials costs a physical QR scan, so the first one
+                // is not believed. See BAD_SESSION_GRACE_MS.
+                this._scheduleReconnect(`credentials rejected (${code}), retrying once before giving up on them`);
+                return;
+            }
+            this._log('warn', 'credentials rejected twice, reporting auth_failure');
             this._safeEmit('auth_failure', `bad_session (${code})`);
             return;
         }

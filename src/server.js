@@ -883,10 +883,19 @@ app.get('/health/detailed', async (req, res) => {
     instances.map(item => getInstanceStatus(item.instanceId).catch(() => ({ status: 'unknown' })))
   );
   const connected = sessions.filter(item => item?.status === 'connected').length;
+  // A tenant that has lost its pairing needs a person to walk to a phone, so it
+  // is the one WhatsApp condition that must not read as healthy. Reported by
+  // instance id, which is a name an operator can act on and not a secret.
+  // `ok` stays true on purpose: the container healthcheck asserts it, and
+  // restarting the gateway is never the fix for a QR scan nobody has done yet.
+  const needsScan = instances
+    .map((item, at) => ({ instanceId: item.instanceId, status: sessions[at]?.status }))
+    .filter(item => item.status === 'qr_required' || item.status === 'qr_ready')
+    .map(item => item.instanceId);
   res.json({
     ok: true,
     service: 'whatspro',
-    mode: redis.ready && openbot.ok ? 'healthy' : 'degraded',
+    mode: redis.ready && openbot.ok && needsScan.length === 0 ? 'healthy' : 'degraded',
     checks: {
       redis,
       tenantStorage: storage,
@@ -894,7 +903,8 @@ app.get('/health/detailed', async (req, res) => {
       inboundWal,
       whatsapp: {
         tenants: instances.length,
-        connected
+        connected,
+        needsScan
       }
     }
   });
