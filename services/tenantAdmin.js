@@ -678,6 +678,28 @@ function runtimeListTenant(row) {
   return safe;
 }
 
+// Reopening "Edit" refills every field a restaurant has, so a key that is stored
+// but never shown reads to an operator as a key that was lost, and the wizard
+// then demands it again. This is the one read that returns the value. It stays
+// out of presentableTenant and out of every list response, so the value travels
+// only when the panel asks for exactly one restaurant.
+async function revealAlemiSecret(instanceId) {
+  const instance = clean(instanceId, 64);
+  if (!instance) {
+    const error = new Error('BAD_INSTANCE_ID');
+    error.statusCode = 400;
+    throw error;
+  }
+  const row = await findRow(instance);
+  if (!row) {
+    const error = new Error('TENANT_NOT_FOUND');
+    error.statusCode = 404;
+    throw error;
+  }
+  const secret = storedAlemiSecret(row).trim();
+  return { instanceId: instance, secret, alemiSecretSet: Boolean(secret) };
+}
+
 module.exports = {
   OPERATOR_FIELDS,
   applySharedPrompt,
@@ -689,6 +711,7 @@ module.exports = {
   importTenants,
   listRows,
   presentableTenant,
+  revealAlemiSecret,
   runtimeListTenant,
   runtimeTenant,
   rotateSecrets,

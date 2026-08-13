@@ -1258,8 +1258,24 @@ app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) 
   }
 });
 
-// Alemi owns this credential, so it has a dedicated write-only endpoint. The
-// value is deliberately absent from both the response and all panel reads.
+// Editing a restaurant refills the form from the stored record, and the Alemi key
+// is part of that record, so it is read back here instead of appearing blank and
+// being mistaken for a key that was never saved. Deliberately narrow: a browser
+// session only (never an API token), one restaurant per call, never cached, and
+// still absent from every list and settings response.
+app.get('/api/wa/tenants/:instanceId/alemi-secret', requireUiSession, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  res.set('Cache-Control', 'no-store');
+  try {
+    return res.json({ success: true, ...(await tenantAdmin.revealAlemiSecret(instanceId)) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// Alemi owns this credential, so it is written through a dedicated endpoint. The
+// value is absent from every response except the single-restaurant read above.
 app.post('/api/wa/tenants/:instanceId/alemi-secret', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });

@@ -402,3 +402,68 @@ test('Excel import preserves existing keys and generates isolated keys for new t
   assert.match(records.get('new-point').webhook_secret, /^hook_[0-9a-f]{48}$/);
   assert.notEqual(records.get('new-point').whatspro_api_token, records.get('existing').whatspro_api_token);
 });
+
+// Reopening "Edit" refills every field from the stored record. A key that is held
+// but never handed back reads as a key that was lost, and the operator retypes a
+// credential that was already correct.
+test('reopening a restaurant hands back the Alemi key that is stored', async () => {
+  const tenantStore = require('../services/tenantStore');
+  const original = tenantStore.findRow;
+  tenantStore.findRow = async instanceId => (instanceId === 'prestige'
+    ? { instance_id: 'prestige', alemi_secret: '  Kz7-Prestige  ' }
+    : { instance_id: instanceId });
+  try {
+    const revealed = await tenantAdmin.revealAlemiSecret('prestige');
+    assert.equal(revealed.secret, 'Kz7-Prestige', 'the value is returned as stored, without the padding');
+    assert.equal(revealed.alemiSecretSet, true);
+    const empty = await tenantAdmin.revealAlemiSecret('qaclient');
+    assert.equal(empty.secret, '');
+    assert.equal(empty.alemiSecretSet, false, 'a restaurant with no key must not look like one that has it');
+  } finally {
+    tenantStore.findRow = original;
+  }
+});
+
+test('asking for the key of a restaurant that does not exist is a 404, not an empty key', async () => {
+  const tenantStore = require('../services/tenantStore');
+  const original = tenantStore.findRow;
+  tenantStore.findRow = async () => null;
+  try {
+    await assert.rejects(() => tenantAdmin.revealAlemiSecret('nobody'), error => {
+      assert.equal(error.message, 'TENANT_NOT_FOUND');
+      assert.equal(error.statusCode, 404);
+      return true;
+    });
+  } finally {
+    tenantStore.findRow = original;
+  }
+});
+
+// The whole reason the key looked lost: a save that never mentions it must leave
+// it exactly where it was.
+test('saving a restaurant without touching the key leaves the stored key alone', async () => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  const originalUpdate = tenantStore.updateRow;
+  const stored = {
+    instance_id: 'prestige',
+    brand: 'Crazy суши',
+    whatsapp_phone: '+77015550101',
+    admin_phone: '+77015550101',
+    address: 'Абая 1',
+    alemi_secret: 'Kz7-Prestige',
+    whatspro_api_token: 'wp_kept'
+  };
+  let written = null;
+  tenantStore.findRow = async () => ({ ...stored });
+  tenantStore.updateRow = async (instanceId, patch) => { written = patch; return patch; };
+  try {
+    await tenantAdmin.updateTenant('prestige', { address: 'Абая 2' });
+    assert.ok(written, 'the save reached the store');
+    assert.equal(written.address, 'Абая 2');
+    assert.equal('alemi_secret' in written, false, 'a save that never mentions the key must not write the column at all');
+  } finally {
+    tenantStore.findRow = originalFind;
+    tenantStore.updateRow = originalUpdate;
+  }
+});
