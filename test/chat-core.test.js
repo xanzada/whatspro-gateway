@@ -86,3 +86,10 @@ test('timestamps accept both seconds and ISO values', () => {
   assert.match(core.formatTime(1_700_000_000, 'ru'), /^\d{2}:\d{2}$/);
   assert.match(core.formatTime('2024-01-01T12:34:00Z', 'ru'), /^\d{2}:\d{2}$/);
 });
+
+test('SOS reason and urgency remain visible to the operator in both languages', () => {
+  const chat = { sos: true, sosUrgency: 'high', sosSummary: 'Клиент просит менеджера' };
+  assert.equal(core.sosLabel(chat, 'ru'), 'SOS · Срочно · Клиент просит менеджера');
+  assert.equal(core.sosLabel(chat, 'kk'), 'SOS · Шұғыл · Клиент просит менеджера');
+  assert.equal(core.sosUrgencyLabel('unknown', 'ru'), 'Обычная');
+});

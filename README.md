@@ -102,3 +102,17 @@ await forwardIncomingWhatsAppMessage({
 ```
 
 This repo already contains a copied `services/whatsappManager.js`; only the transport bridge should be different from the monolith.
+
+## Platform SPA SOS bridge
+
+WhatsPro keeps the full SOS case in the shared Redis used by Openbot and exposes
+only the unread count to Platform SPA through the signed
+`GET /platform/v1/instances/<instance>/sos-unread` contract.
+
+- `CHAT_BRIDGE_MASTER_KEY` must match Platform SPA and must remain outside Git.
+- `PLATFORM_HUB_ORIGIN` is the exact HTTPS Hub origin used for iframe
+  `frame-ancestors` and `postMessage` (for example, `https://hub.alemi.kz`).
+- Requests are instance-scoped HMAC signed, timestamp limited, replay protected,
+  and unknown or inactive instances fail closed.
+- The inbox keeps `summary` and `urgency` visible to the operator; opening an
+  unread SOS immediately posts the updated count to the parent Hub.

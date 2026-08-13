@@ -48,6 +48,8 @@ test('Each public UI keeps its own direct server route', () => {
   assert.match(server, /app\.get\('\/whatspro'[\s\S]*?'whatspro\.html'/);
   assert.match(server, /app\.get\('\/tenants'[\s\S]*?'tenants\.html'/);
   assert.match(server, /app\.get\(\['\/chat', '\/inbox'\]/);
+  assert.match(server, /app\.get\('\/embed'/);
+  assert.match(server, /app\.get\('\/platform\/v1\/instances\/:instanceId\/sos-unread'/);
 });
 
 test('The Alemi Secret Key row carries a generate and a copy control everywhere it is editable', () => {

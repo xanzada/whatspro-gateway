@@ -26,6 +26,7 @@ const { normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
+const { createSosRevision, verifyBridgeRequest } = require('../services/platformBridge');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { parseScoredMembers, scanKeys } = require('../services/redisReply');
@@ -447,6 +448,7 @@ async function renderChatHtml(req, res) {
     branding: tenant?.branding || { name: instance || 'WhatsPro' },
     chatToken: instance ? issueChatToken(instance) : '',
     apiBase: publicApiBase(req),
+    parentOrigin: platformHubOrigin(),
     endpoints: {
       inbox: '/api/chat/inbox',
       history: '/api/chat/history',
@@ -460,11 +462,33 @@ async function renderChatHtml(req, res) {
   const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
   res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
+  if (config.parentOrigin) res.set('Content-Security-Policy', `frame-ancestors ${config.parentOrigin}`);
   const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
   ? html.replace('<!--__CHAT_CONFIG__-->', script)
   : html.replace('</head>', `${script}</head>`);
 
 res.type('html').send(renderedHtml);
+}
+
+function platformHubOrigin() {
+  try {
+    const parsed = new URL(String(process.env.PLATFORM_HUB_ORIGIN || '').trim());
+    return parsed.protocol === 'https:' && parsed.pathname === '/' && !parsed.search && !parsed.hash
+      ? parsed.origin
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+function tenantUnavailable(tenant) {
+  if (!tenant) return true;
+  const values = [tenant.active, tenant.enabled, tenant.is_active];
+  return values.some(value =>
+    value === false ||
+    value === 0 ||
+    ['0', 'false', 'inactive', 'disabled'].includes(String(value ?? '').trim().toLowerCase())
+  );
 }
 
 async function saveInstance(instanceId, label = '') {
@@ -936,6 +960,14 @@ app.get('/connect', (req, res) => {
 
 app.get(['/chat', '/inbox'], (req, res, next) => {
   renderChatHtml(req, res).catch(next);
+});
+
+app.get('/embed', async (req, res, next) => {
+  const instance = String(req.query.instance || '').trim();
+  if (!isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const tenant = await tenantStore.findRow(instance).catch(() => null);
+  if (tenantUnavailable(tenant)) return res.status(404).json({ error: 'INSTANCE_NOT_FOUND' });
+  return renderChatHtml(req, res).catch(next);
 });
 
 app.get('/', (req, res) => {
@@ -1545,6 +1577,7 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
       sosExpiresAt: Number(sos?.sosExpiresAt || 0),
       sosKind: String(sos?.sosKind || ''),
       sosSummary: String(sos?.sosSummary || ''),
+      sosUrgency: String(sos?.sosUrgency || 'normal'),
       sosCaseId: String(sos?.sosCaseId || '')
     });
   });
@@ -1559,6 +1592,37 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   items.sort((a, b) => Number(b.lastAt || b.updatedAt || 0) - Number(a.lastAt || a.updatedAt || 0));
 
   res.json({ success: true, instanceId, items });
+});
+
+app.get('/platform/v1/instances/:instanceId/sos-unread', async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  const verified = verifyBridgeRequest({
+    instanceId,
+    headerInstance: req.headers['x-platform-instance'],
+    requestId: req.headers['x-request-id'],
+    timestamp: req.headers['x-request-timestamp'],
+    signature: req.headers['x-request-signature'],
+  }, { masterKey: process.env.CHAT_BRIDGE_MASTER_KEY });
+  if (!verified.ok) {
+    const status = verified.error === 'BRIDGE_NOT_CONFIGURED' ? 503 : 401;
+    return res.status(status).json({ error: verified.error });
+  }
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+  const tenant = await tenantStore.findRow(instanceId).catch(() => null);
+  if (tenantUnavailable(tenant)) {
+    return res.status(404).json({ error: 'INSTANCE_NOT_FOUND' });
+  }
+  const replayKey = `chatwoot:bridge-replay:${instanceId}:${verified.requestId}`;
+  const claimed = await redisClient.sendCommand(['SET', replayKey, '1', 'NX', 'EX', '600']).catch(() => null);
+  if (claimed !== 'OK') return res.status(409).json({ error: 'REQUEST_REPLAYED' });
+  const rows = await sosStore.list(instanceId, 1000);
+  res.set('Cache-Control', 'no-store');
+  return res.json({
+    schema_version: 1,
+    instance: instanceId,
+    sosUnread: rows.filter(row => row.sosUnread).length,
+    revision: createSosRevision(instanceId, rows),
+  });
 });
 
 app.get('/api/chat/events/:instanceId', requireChatUiOrApi, async (req, res) => {

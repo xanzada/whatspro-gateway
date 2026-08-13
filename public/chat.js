@@ -18,6 +18,7 @@
 
   var apiBase = safeApiBase(config.apiBase);
   var chatToken = String(config.chatToken || '');
+  var parentOrigin = String(config.parentOrigin || '');
   var endpoints = Object.assign({
     inbox: '/api/chat/inbox', history: '/api/chat/history', send: '/api/chat/send',
     media: '/api/chat/media', lock: '/api/chat/operator-lock', action: '/api/chat/action',
@@ -110,6 +111,20 @@
     return state.chats.find(function (chat) { return core.normalizePhone(chat.phone) === state.activePhone; }) || null;
   }
 
+  function postSosUnread() {
+    if (!parentOrigin || window.parent === window) return;
+    var count = state.chats.filter(function (chat) {
+      return core.chatColumn(chat) === 'sos' && chat.sosUnread;
+    }).length;
+    window.parent.postMessage({
+      schema_version: 1,
+      type: 'platform.chat.sos-unread',
+      instance: instanceId,
+      sos_unread: count,
+      revision: 'ui_' + Date.now()
+    }, parentOrigin);
+  }
+
   function contactName(chat) {
     return String(chat && (chat.contactName || chat.name || chat.displayName || chat.pushName) || '').trim();
   }
@@ -125,7 +140,7 @@
       if (!query) return true;
       var phone = String(chat.phone || '').replace(/\D/g, '');
       if (phoneQuery && phone.indexOf(phoneQuery) >= 0) return true;
-      return [contactName(chat), chat.lastText, chat.lastMessage].some(function (value) {
+      return [contactName(chat), chat.lastText, chat.lastMessage, chat.sosSummary].some(function (value) {
         return String(value || '').toLowerCase().indexOf(query) >= 0;
       });
     });
@@ -159,12 +174,12 @@
       var tabState = core.chatState(chat);
       var column = core.chatColumn(chat);
       var name = contactName(chat) || t('unknown');
-      var badge = column === 'sos' ? t('sosBadge') : tabState === 'new' ? t('newBadge') : tabState === 'operator' ? t('operatorBadge') : tabState === 'archive' ? t('archiveBadge') : '';
+      var badge = column === 'sos' ? 'SOS · ' + core.sosUrgencyLabel(chat.sosUrgency, state.lang) : tabState === 'new' ? t('newBadge') : tabState === 'operator' ? t('operatorBadge') : tabState === 'archive' ? t('archiveBadge') : '';
       var sosPulse = column === 'sos' && chat.sosUnread ? '<span class="sos-pulse" aria-label="SOS"></span>' : '';
       return '<button type="button" class="contact-item ' + tabState + (column === 'sos' ? ' sos' : '') + (phone === state.activePhone ? ' active' : '') + '" data-phone="' + core.escapeHtml(phone) + '">' +
         '<span class="contact-avatar"><i class="fa-solid fa-user"></i>' + sosPulse + '</span><span class="contact-copy">' +
         '<span class="contact-name truncate">' + core.escapeHtml(name) + '</span><span class="contact-phone truncate">+' + core.escapeHtml(phone) + '</span>' +
-        '<span class="contact-snippet truncate">' + core.escapeHtml(chat.lastText || chat.lastMessage || t('noMessages')) + '</span></span>' +
+        '<span class="contact-snippet truncate">' + core.escapeHtml(column === 'sos' && chat.sosSummary ? chat.sosSummary : chat.lastText || chat.lastMessage || t('noMessages')) + '</span></span>' +
         '<span class="contact-meta"><span class="contact-time">' + core.escapeHtml(core.formatTime(chat.lastAt || chat.updatedAt, state.lang)) + '</span>' +
         (badge ? '<span class="badge ' + (column === 'sos' ? 'sos-badge' : '') + '">' + core.escapeHtml(badge) + '</span>' : '') + '</span></button>';
     }).join('');
@@ -191,7 +206,7 @@
       el.archiveBtn.hidden = true; el.deleteBtn.hidden = true;
     } else {
       el.activeName.textContent = contactName(chat) || '+' + state.activePhone;
-      el.activeMeta.textContent = contactName(chat) ? '+' + state.activePhone : (core.chatState(chat) === 'archive' ? t('archived') : 'WhatsApp');
+      el.activeMeta.textContent = core.sosLabel(chat, state.lang) || (contactName(chat) ? '+' + state.activePhone : (core.chatState(chat) === 'archive' ? t('archived') : 'WhatsApp'));
       el.archiveBtn.hidden = false; el.deleteBtn.hidden = false;
       var archived = core.chatState(chat) === 'archive';
       el.archiveBtn.title = archived ? t('restore') : t('archive');
@@ -418,7 +433,7 @@
         if (state.pendingViews[phone] && core.chatState(chat) !== 'new') delete state.pendingViews[phone];
       });
       chats = core.applyPendingViews(chats, Object.keys(state.pendingViews));
-      var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt]; }));
+      var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt, chat.sosSummary, chat.sosUrgency]; }));
       state.chats = chats;
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
       if (state.activePhone && (!currentChat() || (state.activeTab === 'sos' && core.chatColumn(currentChat()) !== 'sos'))) closeChat();
@@ -494,7 +509,7 @@
     if (!phone) return;
     state.activePhone = phone; state.history = []; state.historySignature = ''; state.lockUntil = 0;
     var chat = currentChat();
-    if (chat && chat.sosUnread) chat.sosUnread = false;
+    if (chat && chat.sosUnread) { chat.sosUnread = false; postSosUnread(); }
     if (chat && core.chatState(chat) === 'new') {
       state.pendingViews[phone] = Date.now();
       chat.state = 'all'; chat.unread = false;

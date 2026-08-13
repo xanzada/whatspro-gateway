@@ -27,6 +27,20 @@
     return chat && chat.sos === true && Number(chat.sosExpiresAt || 0) > Date.now() ? 'sos' : chatState(chat);
   }
 
+  function sosUrgencyLabel(urgency, lang) {
+    var value = String(urgency || 'normal').toLowerCase();
+    var labels = lang === 'ru'
+      ? { low: 'Низкая', normal: 'Обычная', high: 'Срочно' }
+      : { low: 'Төмен', normal: 'Қалыпты', high: 'Шұғыл' };
+    return labels[value] || labels.normal;
+  }
+
+  function sosLabel(chat, lang) {
+    if (!chat || chat.sos !== true) return '';
+    var summary = String(chat.sosSummary || '').trim().replace(/\s+/g, ' ').slice(0, 180);
+    return ['SOS', sosUrgencyLabel(chat.sosUrgency, lang), summary].filter(Boolean).join(' · ');
+  }
+
   function applyPendingViews(chats, phones) {
     var pending = new Set((Array.isArray(phones) ? phones : []).map(normalizePhone).filter(Boolean));
     return (Array.isArray(chats) ? chats : []).map(function (chat) {
@@ -117,6 +131,8 @@
     messageParts: messageParts,
     normalizePhone: normalizePhone,
     receiptState: receiptState,
-    roleOf: roleOf
+    roleOf: roleOf,
+    sosLabel: sosLabel,
+    sosUrgencyLabel: sosUrgencyLabel
   };
 }));

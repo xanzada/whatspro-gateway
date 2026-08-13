@@ -47,7 +47,7 @@ const NOW = 1_785_000_000_000;
 const PHONE = '77015550101';
 const MARKER = JSON.stringify({
   caseId: 'oc_1', signalId: 'sig_1', kind: 'human_request',
-  summary: 'Оператор қажет', startedAt: NOW - 60_000, expiresAt: NOW + 3_600_000,
+  summary: 'Оператор қажет', urgency: 'high', startedAt: NOW - 60_000, expiresAt: NOW + 3_600_000,
 });
 
 test('an active SOS survives a listing and reaches the operator', async () => {
@@ -67,6 +67,7 @@ test('an active SOS survives a listing and reaches the operator', async () => {
   assert.equal(rows[0].sosUnread, true, 'the light is on until the operator opens it');
   assert.equal(rows[0].sosExpiresAt, NOW + 3_600_000, 'the score must survive as a real number');
   assert.equal(rows[0].sosSummary, 'Оператор қажет');
+  assert.equal(rows[0].sosUrgency, 'high');
   assert.equal(redis.log.includes('ZREM'), false, 'a live SOS must never be removed from the index');
 });
 

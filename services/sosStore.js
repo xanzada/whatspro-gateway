@@ -51,6 +51,9 @@ function createSosStore(redis, options = {}) {
         sosExpiresAt: expiresAt,
         sosKind: String(marker.kind || ''),
         sosSummary: String(marker.summary || ''),
+        sosUrgency: ['low', 'normal', 'high'].includes(String(marker.urgency || '').toLowerCase())
+          ? String(marker.urgency).toLowerCase()
+          : 'normal',
         sosCaseId: String(marker.caseId || ''),
         sosSignalId: String(marker.signalId || '')
       });
