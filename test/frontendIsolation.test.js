@@ -73,6 +73,10 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   });
   assert.match(tenants, /class="secret-row"/);
   assert.match(css, /\.secret-row \{/);
+  ['detail-alemi-secret', 'wizard-alemi-secret', 'alemi-secret-input'].forEach((inputId) => {
+    assert.match(tenants, new RegExp(`id="${inputId}"[^>]*type="password"|type="password"[^>]*id="${inputId}"`),
+      `${inputId} must keep the credential visually hidden`);
+  });
 
   // 12 mixed-charset characters, drawn from the CSPRNG with rejection sampling.
   assert.match(tenants, /generateMixedSecret\(SECRET_LENGTH\)/);

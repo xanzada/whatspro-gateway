@@ -40,6 +40,13 @@ async function nextDataEvent(response, timeoutMs = 1000) {
 }
 
 test('three same-instance SSE viewers receive one event within one second', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalConfig = tenantStore.getTenantChatConfig;
+  tenantStore.getTenantChatConfig = async instance => tenantStore.sanitizeTenantConfig(
+    instance === 'tenant-live' ? { instance_id: instance, brand: 'Tenant Live' } : null,
+    instance
+  );
+  t.after(() => { tenantStore.getTenantChatConfig = originalConfig; });
   const server = app.listen(0, '127.0.0.1');
   const controllers = [new AbortController(), new AbortController(), new AbortController()];
   await new Promise((resolve, reject) => {

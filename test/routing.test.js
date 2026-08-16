@@ -152,6 +152,11 @@ test('tenant onboarding configures Alemi per restaurant without exposing its key
   assert.match(ui, /https:\/\/hub\.alemi\.kz/);
   assert.match(ui, /ale(mi)?SecretSet/);
   assert.doesNotMatch(ui, /localStorage\.setItem\([^,]*(?:alemi|secret)/i);
+  assert.doesNotMatch(server, /app\.get\('\/api\/wa\/tenants\/:instanceId\/alemi-secret'/,
+    'a saved tenant key must have no plaintext read endpoint');
+  const editFlow = ui.slice(ui.indexOf('function openEdit('), ui.indexOf('function openDuplicate('));
+  assert.doesNotMatch(editFlow, /api\('GET',[^\n]+alemi-secret/);
+  assert.match(editFlow, /alemiSecret:\s*''/);
 
   const listRoute = server.slice(server.indexOf("app.get('/api/wa/runtime-configs'"), server.indexOf("app.get('/api/wa/runtime-configs/:instanceId'"));
   assert.match(listRoute, /runtimeListTenant/);
