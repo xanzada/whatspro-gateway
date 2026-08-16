@@ -403,8 +403,19 @@ test('Excel import preserves existing keys and generates isolated keys for new t
   assert.notEqual(records.get('new-point').whatspro_api_token, records.get('existing').whatspro_api_token);
 });
 
-test('Alemi secrets have no plaintext read service', () => {
-  assert.equal(tenantAdmin.revealAlemiSecret, undefined);
+test('an Alemi secret can be revealed only for the exact requested tenant', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  tenantStore.findRow = async instanceId => instanceId === 'prestige'
+    ? { instance_id: 'prestige', alemi_secret: 'prestige-visible-key' }
+    : null;
+  t.after(() => { tenantStore.findRow = originalFind; });
+
+  assert.deepEqual(await tenantAdmin.revealAlemiSecret('prestige'), {
+    instanceId: 'prestige',
+    secret: 'prestige-visible-key'
+  });
+  await assert.rejects(() => tenantAdmin.revealAlemiSecret('missing'), error => error.statusCode === 404);
 });
 
 // The whole reason the key looked lost: a save that never mentions it must leave
