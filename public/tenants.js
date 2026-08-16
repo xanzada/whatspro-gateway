@@ -75,7 +75,7 @@
       configuration: 'Конфигурация', back: 'Артқа', address: 'Мекенжай', hours: 'Жұмыс уақыты',
       domain: 'Домен', source: 'Дереккөзі', lastCheck: 'Соңғы тексеру', liveStatus: 'Нақты күй',
       alemiApiUrl: 'Alemi API мекенжайы', alemiInstance: 'Alemi instance', alemiSecret: 'Alemi API кілті',
-      alemiSecretHint: 'Кілт тек сақтауға жіберіледі; кейін экранда қайта көрсетілмейді. Сол мәнді hub.alemi.kz-тегі ресторанның Secret Key өрісіне қойыңыз.',
+      alemiSecretHint: 'Кілт тек әкімшіге көрсетіледі. Осы мән hub.alemi.kz-тегі ресторанның Secret Key өрісімен бірдей болуы керек.',
       alemiSecretStored: 'Кілт сақталған', alemiSecretMissing: 'Кілт енгізілмеген', alemiSecretWillUpdate: 'Жаңа кілт сақталады',
       generateSecret: 'Генерациялау', copySecret: 'Көшіру', secretCopied: 'Кілт көшірілді',
       secretGenerated: '12 таңбалы кілт жасалды — көшіріп, hub.alemi.kz-ке қойыңыз',
@@ -85,7 +85,7 @@
       secretDuplicate: 'Бұл кілт басқа ресторанда қолданылып тұр — жаңасын жасаңыз',
       secretTooShort: 'Кілт кемінде 8 таңба болуы керек — hub.alemi.kz-тегі Secret Key-ді толық көшіріңіз немесе жаңасын жасаңыз',
       rotateAlemiSecret: 'Alemi кілтін жаңарту', rotateAlemiSecretTitle: 'Alemi API кілтін орнату немесе ауыстыру',
-      rotateAlemiSecretCopy: 'Жаңа кілтті енгізіңіз. Қауіпсіздік үшін ағымдағы мән көрсетілмейді.', secretUpdated: 'Alemi кілті жаңартылды',
+      rotateAlemiSecretCopy: 'Ағымдағы кілт көрсетілді. Өзгертсеңіз, дәл осы мәнді hub.alemi.kz-тегі ресторанға да қойыңыз.', secretUpdated: 'Alemi кілті жаңартылды',
       liveStatusCopy: 'Бұл күй WhatsPro сессиясынан тікелей алынды.',
       qrTitle: 'WhatsApp-ты байланыстыру', qrCopy: 'Телефоныңызда WhatsApp → Байланыстырылған құрылғылар → Құрылғыны байланыстыру бөлімін ашып, осы кодты сканерлеңіз.',
       qrWaiting: 'QR дайын — телефонмен сканерлеңіз', qrConnected: 'WhatsApp сәтті қосылды', qrStart: 'Сессия іске қосылуда…',
@@ -153,7 +153,7 @@
       configuration: 'Конфигурация', back: 'Назад', address: 'Адрес', hours: 'Часы работы',
       domain: 'Домен', source: 'Источник', lastCheck: 'Последняя проверка', liveStatus: 'Фактический статус',
       alemiApiUrl: 'Адрес Alemi API', alemiInstance: 'Alemi instance', alemiSecret: 'Ключ Alemi API',
-      alemiSecretHint: 'Ключ отправляется только на сохранение и больше не показывается на экране. Это же значение впишите в поле Secret Key ресторана на hub.alemi.kz.',
+      alemiSecretHint: 'Ключ показывается только администратору. Значение должно совпадать с Secret Key ресторана на hub.alemi.kz.',
       alemiSecretStored: 'Ключ сохранён', alemiSecretMissing: 'Ключ не задан', alemiSecretWillUpdate: 'Будет сохранён новый ключ',
       generateSecret: 'Сгенерировать', copySecret: 'Скопировать', secretCopied: 'Ключ скопирован',
       secretGenerated: 'Ключ из 12 символов создан — скопируйте и впишите на hub.alemi.kz',
@@ -163,7 +163,7 @@
       secretDuplicate: 'Этот ключ уже используется в другом ресторане — создайте новый',
       secretTooShort: 'Ключ должен быть не короче 8 символов — скопируйте Secret Key с hub.alemi.kz полностью или создайте новый',
       rotateAlemiSecret: 'Обновить ключ Alemi', rotateAlemiSecretTitle: 'Задать или заменить ключ Alemi API',
-      rotateAlemiSecretCopy: 'Введите новый ключ. Текущее значение не показывается из соображений безопасности.', secretUpdated: 'Ключ Alemi обновлён',
+      rotateAlemiSecretCopy: 'Текущий ключ показан. Если измените его, укажите то же значение у ресторана на hub.alemi.kz.', secretUpdated: 'Ключ Alemi обновлён',
       liveStatusCopy: 'Этот статус получен напрямую из сессии WhatsPro.',
       qrTitle: 'Подключить WhatsApp', qrCopy: 'Откройте WhatsApp → Связанные устройства → Привязка устройства и отсканируйте этот код.',
       qrWaiting: 'QR готов — отсканируйте телефоном', qrConnected: 'WhatsApp успешно подключён', qrStart: 'Сессия запускается…',
@@ -741,7 +741,7 @@
   }
   function alemiSecretItem(instanceId, stored) {
     return '<div class="info-item secret-item"><span>' + escapeHtml(t('alemiSecret')) + '</span>' +
-      '<div class="secret-row"><input id="detail-alemi-secret" name="alemiSecret" type="password" autocomplete="new-password" ' +
+      '<div class="secret-row"><input id="detail-alemi-secret" name="alemiSecret" type="text" autocomplete="off" ' +
       'placeholder="' + attr(stored ? t('alemiSecretStored') : t('alemiSecretMissing')) + '">' +
       secretActions('detail-alemi-secret') +
       '<button class="button primary small" type="button" data-save-alemi-secret data-instance="' + attr(instanceId) +
@@ -1113,7 +1113,7 @@
         '" inputmode="url" autocomplete="url"></div><div class="field"><label for="wizard-alemi-instance">' + t('alemiInstance') +
         '</label><input id="wizard-alemi-instance" name="alemiInstance" value="' + attr(data.alemiInstance) + '" autocomplete="off"></div>' +
         '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label>' +
-        '<div class="secret-row"><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
+        '<div class="secret-row"><input id="wizard-alemi-secret" name="alemiSecret" type="text" value="' +
         attr(data.alemiSecret) + '" autocomplete="off" spellcheck="false">' + secretActions('wizard-alemi-secret') + '</div>' +
         '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
@@ -1237,17 +1237,23 @@
       return ensureInstance(instanceId, data.brand).then(function () { return loadData(true); });
     }).catch(function (error) { toast(t('actionFailed'), secretErrorMessage(error), true); });
   }
+  function loadAlemiSecret(instanceId) {
+    return api('GET', '/api/wa/tenants/' + encodeURIComponent(instanceId) + '/alemi-secret')
+      .then(function (result) { return String((result && result.secret) || ''); });
+  }
   function openEdit(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
     if (!tenant || tenant.virtual) return;
     var detail = settings.get(instanceId) || {};
-    openWizard(Object.assign({}, detail, {
-      instanceId: instanceId,
-      brand: tenant.brand,
-      startNow: true,
-      alemiSecret: '',
-      alemiSecretSet: Boolean(detail.secrets && detail.secrets.alemiSecret)
-    }));
+    loadAlemiSecret(instanceId).then(function (secret) {
+      openWizard(Object.assign({}, detail, {
+        instanceId: instanceId,
+        brand: tenant.brand,
+        startNow: true,
+        alemiSecret: secret,
+        alemiSecretSet: Boolean(secret) || Boolean(detail.secrets && detail.secrets.alemiSecret)
+      }));
+    }).catch(function (error) { toast(t('actionFailed'), error.message, true); });
   }
   function openDuplicate(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
@@ -1269,14 +1275,16 @@
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
     if (!tenant || tenant.virtual) return;
     var detail = settings.get(instanceId) || {};
-    openModal(modalHeader(t('rotateAlemiSecretTitle'), t('rotateAlemiSecretCopy')) +
-      '<div class="modal-body"><div class="field"><label for="alemi-secret-input">' + t('alemiSecret') +
-      '</label><div class="secret-row"><input id="alemi-secret-input" name="alemiSecret" type="password" autocomplete="new-password" autofocus>' +
-      secretActions('alemi-secret-input') + '</div>' +
-      '<small>' + (detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
-      '</small></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
-      '</button><span class="spacer"></span><button class="button primary" data-save-alemi-secret data-instance="' + attr(instanceId) + '">' +
-      t('save') + '</button></div>');
+    loadAlemiSecret(instanceId).then(function (secret) {
+      openModal(modalHeader(t('rotateAlemiSecretTitle'), t('rotateAlemiSecretCopy')) +
+        '<div class="modal-body"><div class="field"><label for="alemi-secret-input">' + t('alemiSecret') +
+        '</label><div class="secret-row"><input id="alemi-secret-input" name="alemiSecret" type="text" value="' + attr(secret) +
+        '" autocomplete="off" autofocus>' + secretActions('alemi-secret-input') + '</div>' +
+        '<small>' + (detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
+        '</small></div></div><div class="modal-footer"><button class="button ghost" data-modal-close>' + t('cancel') +
+        '</button><span class="spacer"></span><button class="button primary" data-save-alemi-secret data-instance="' + attr(instanceId) + '">' +
+        t('save') + '</button></div>');
+    }).catch(function (error) { toast(t('actionFailed'), error.message, true); });
   }
   function openDelete(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
@@ -1339,6 +1347,11 @@
     openMenuId = '';
     render();
     viewEl.focus({ preventScroll: true });
+    loadAlemiSecret(instanceId).then(function (secret) {
+      if (currentDetail !== instanceId) return;
+      var input = $('#detail-alemi-secret');
+      if (input) input.value = secret;
+    }).catch(function (error) { toast(t('actionFailed'), error.message, true); });
   }
   function changeView(name) {
     currentDetail = '';

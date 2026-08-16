@@ -573,8 +573,8 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
   return { instanceId: fields.instance_id, clonedFrom: sourceInstanceId, created: true };
 }
 
-// Alemi issues this key. WhatsPro only accepts a prepared replacement and never
-// generates, echoes or logs it; the boolean response is enough for the panel.
+// Alemi issues this key. WhatsPro accepts a prepared replacement and never logs
+// it. The separate read service is used only by the authenticated owner panel.
 async function setAlemiSecret(instanceId, value) {
   const existing = await findRow(instanceId);
   if (!existing) {
@@ -586,6 +586,16 @@ async function setAlemiSecret(instanceId, value) {
   await assertAlemiSecretUnique(secret, instanceId);
   await tenantStore.updateRow(instanceId, { alemi_secret: secret });
   return { instanceId, alemiSecretSet: true };
+}
+
+async function revealAlemiSecret(instanceId) {
+  const existing = await findRow(instanceId);
+  if (!existing) {
+    const error = new Error('TENANT_NOT_FOUND');
+    error.statusCode = 404;
+    throw error;
+  }
+  return { instanceId, secret: storedAlemiSecret(existing) };
 }
 
 async function rotateSecrets(instanceId, options = {}) {
@@ -705,6 +715,7 @@ module.exports = {
   reconcileTransportUrls,
   runtimeListTenant,
   runtimeTenant,
+  revealAlemiSecret,
   rotateSecrets,
   setAlemiSecret,
   setActive,

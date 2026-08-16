@@ -1268,8 +1268,23 @@ app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) 
   }
 });
 
-// Alemi owns this credential, so it is written through a dedicated endpoint. The
-// value is absent from every response and cannot be read back from the browser.
+// The owner deliberately keeps the Alemi credential visible in the restaurant
+// editor. Reading is stricter than writing: only a signed admin UI session can
+// reveal one exact instance, and the response must never enter a browser cache.
+app.get('/api/wa/tenants/:instanceId/alemi-secret', requireUiSession, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+  try {
+    res.json({ success: true, ...(await tenantAdmin.revealAlemiSecret(instanceId)) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// Writes stay on their dedicated exact-instance endpoint and never echo the
+// submitted value in the response.
 app.post('/api/wa/tenants/:instanceId/alemi-secret', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -2164,7 +2179,7 @@ module.exports = {
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope,
-    issueConnectToken, readConnectToken,
+    issueConnectToken, readConnectToken, signSession,
     recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR
   }
 };
