@@ -154,16 +154,23 @@ async function listRows() {
 
 // The panel never sends a secret and never sees one it did not just create, so
 // this is the only place a token's value is decided.
-function platformFields(publicBase) {
+function transportFields(publicBase) {
   const base = String(publicBase || process.env.WHATSPRO_PUBLIC_URL || '').replace(/\/+$/, '');
+  if (!base) return {};
+  return {
+    whatspro_base_url: base,
+    whatspro_send_url: `${base}/api/send`,
+    whatspro_presence_url: `${base}/api/presence`
+  };
+}
+
+function platformFields(publicBase) {
   return {
     whatspro_api_token: generateSecret('wp'),
     webhook_secret: generateSecret('hook'),
     kanban_secret: generateSecret('kanban'),
     crm_secret_token: generateSecret('crm'),
-    whatspro_base_url: base,
-    whatspro_send_url: base ? `${base}/api/send` : '',
-    whatspro_presence_url: base ? `${base}/api/presence` : '',
+    ...transportFields(publicBase),
     dev_phone: normalizePhoneField(process.env.WHATSPRO_DEVELOPER_PHONE || '')
   };
 }
@@ -174,14 +181,7 @@ function platformFields(publicBase) {
 // the tenants kept working in the panel while every outbound message 404'd. The
 // stored columns remain the fallback for a deployment that sets no public URL.
 function withCurrentTransport(row, publicBase) {
-  const base = String(publicBase || process.env.WHATSPRO_PUBLIC_URL || '').replace(/\/+$/, '');
-  if (!base) return { ...(row || {}) };
-  return {
-    ...(row || {}),
-    whatspro_base_url: base,
-    whatspro_send_url: `${base}/api/send`,
-    whatspro_presence_url: `${base}/api/presence`
-  };
+  return { ...(row || {}), ...transportFields(publicBase) };
 }
 
 // Typing a name in Kazakh and an id in Latin is the same decision made twice, so
@@ -358,11 +358,24 @@ async function updateTenant(instanceId, input, options = {}) {
   // it predates the tooling.
   const platform = platformFields(options.publicBase);
   for (const key of Object.keys(platform)) {
-    if (!String(existing[key] ?? '').trim() && platform[key]) payload[key] = platform[key];
+    if (key.startsWith('whatspro_') && key.endsWith('_url')) payload[key] = platform[key];
+    else if (!String(existing[key] ?? '').trim() && platform[key]) payload[key] = platform[key];
   }
 
   await tenantStore.updateRow(instanceId, payload);
   return { instanceId, updated: true };
+}
+
+async function reconcileTransportUrls(publicBase) {
+  const transport = transportFields(publicBase);
+  if (!transport.whatspro_base_url) return { updated: 0, instances: [] };
+  const rows = await listRows();
+  const targets = rows.filter(row => {
+    const instanceId = clean(row.instance_id, 64);
+    return instanceId && Object.entries(transport).some(([key, value]) => String(row[key] || '').trim() !== value);
+  });
+  await Promise.all(targets.map(row => tenantStore.updateRow(clean(row.instance_id, 64), transport)));
+  return { updated: targets.length, instances: targets.map(row => clean(row.instance_id, 64)) };
 }
 
 function workbookInput(row = {}) {
@@ -678,28 +691,6 @@ function runtimeListTenant(row) {
   return safe;
 }
 
-// Reopening "Edit" refills every field a restaurant has, so a key that is stored
-// but never shown reads to an operator as a key that was lost, and the wizard
-// then demands it again. This is the one read that returns the value. It stays
-// out of presentableTenant and out of every list response, so the value travels
-// only when the panel asks for exactly one restaurant.
-async function revealAlemiSecret(instanceId) {
-  const instance = clean(instanceId, 64);
-  if (!instance) {
-    const error = new Error('BAD_INSTANCE_ID');
-    error.statusCode = 400;
-    throw error;
-  }
-  const row = await findRow(instance);
-  if (!row) {
-    const error = new Error('TENANT_NOT_FOUND');
-    error.statusCode = 404;
-    throw error;
-  }
-  const secret = storedAlemiSecret(row).trim();
-  return { instanceId: instance, secret, alemiSecretSet: Boolean(secret) };
-}
-
 module.exports = {
   OPERATOR_FIELDS,
   applySharedPrompt,
@@ -711,7 +702,7 @@ module.exports = {
   importTenants,
   listRows,
   presentableTenant,
-  revealAlemiSecret,
+  reconcileTransportUrls,
   runtimeListTenant,
   runtimeTenant,
   rotateSecrets,

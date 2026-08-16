@@ -3,7 +3,12 @@
 
   function $(id) { return document.getElementById(id); }
 
-  var instanceId = new URLSearchParams(location.search).get('instance') || 'prestige';
+  var instanceId = String(new URLSearchParams(location.search).get('instance') || '').trim();
+  if (!/^[A-Za-z0-9_-]{2,64}$/.test(instanceId)) {
+    $('cw-instance').textContent = '—';
+    show('Ресторан instance көрсетілмеген. /tenants бетінен қайта ашыңыз.');
+    return;
+  }
   $('cw-instance').textContent = instanceId;
 
   var lastQr = null;

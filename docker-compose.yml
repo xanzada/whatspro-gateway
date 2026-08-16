@@ -4,13 +4,10 @@ services:
   whatspro:
     build: .
     restart: unless-stopped
-    depends_on:
-      redis_local:
-        condition: service_healthy
     env_file:
       - .env
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis_local:6379}
+      - REDIS_URL=${REDIS_URL:?REDIS_URL must point to the shared OpenBot Redis}
       - NODE_ENV=production
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
@@ -38,28 +35,11 @@ services:
         reservations:
           memory: 512M
 
-  redis_local:
-    image: redis:7-alpine
-    restart: always
-    # Chat media lives in Redis as base64 with a 24h TTL, so an unbounded Redis
-    # eats the host. Cap it and drop the oldest TTL-bearing media first.
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-ttl"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    volumes:
-      - whatspro_redis_data:/data
-
   backup:
     build:
       context: .
       dockerfile: backup/Dockerfile
     restart: unless-stopped
-    depends_on:
-      redis_local:
-        condition: service_healthy
     environment:
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
       BACKUP_SOURCE_NAME: whatspro
@@ -68,7 +48,7 @@ services:
       BACKUP_SSH_PRIVATE_KEY_B64: ${BACKUP_SSH_PRIVATE_KEY_B64:-}
       BACKUP_AGE_RECIPIENT_B64: ${BACKUP_AGE_RECIPIENT_B64:-}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-900}
-      REDIS_URL: ${BACKUP_REDIS_URL:-redis://redis_local:6379}
+      REDIS_URL: ${BACKUP_REDIS_URL:-${REDIS_URL:?REDIS_URL must point to the shared OpenBot Redis}}
     volumes:
       - whatsapp_auth:/source/whatsapp_auth:ro
       - backup_state:/work
@@ -84,7 +64,6 @@ services:
 
 volumes:
   whatsapp_auth:
-  whatspro_redis_data:
   backup_state:
 
 networks:

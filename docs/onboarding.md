@@ -87,17 +87,17 @@ H="x-api-key: $WHATSPRO_API_TOKEN"
 B=https://whatspro.alemi.kz
 
 curl -H "$H" $B/api/wa/tenants                     # бәрінің дайындығы
-curl -H "$H" $B/api/wa/tenants/prestige            # біреуінің егжей-тегжейі
-curl -H "$H" $B/api/wa/tenants/prestige/settings   # өрістері (кілтсіз)
+curl -H "$H" $B/api/wa/tenants/restaurant-id            # біреуінің егжей-тегжейі
+curl -H "$H" $B/api/wa/tenants/restaurant-id/settings   # өрістері (кілтсіз)
 
 curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants \
   -d "{\"brand\":\"Crazy суши\",\"whatsappPhone\":\"77015550101\",\"alemiApiUrl\":\"https://hub.alemi.kz\",\"alemiInstance\":\"crazy-sushi\",\"alemiSecret\":\"$ALEMI_SECRET\"}"
 
-curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/prestige/active -d '{"active":false}'
-curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/prestige/clone  -d '{"brand":"Екінші филиал","whatsappPhone":"77015550202"}'
-curl -H "$H" -X POST $B/api/wa/tenants/prestige/rotate
-curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/prestige/alemi-secret -d "{\"secret\":\"$ALEMI_SECRET\"}"
-curl -H "$H" -H 'Content-Type: application/json' -X DELETE $B/api/wa/tenants/prestige -d '{"confirm":"prestige"}'
+curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/restaurant-id/active -d '{"active":false}'
+curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/restaurant-id/clone  -d '{"brand":"Екінші филиал","whatsappPhone":"77015550202"}'
+curl -H "$H" -X POST $B/api/wa/tenants/restaurant-id/rotate
+curl -H "$H" -H 'Content-Type: application/json' -X POST $B/api/wa/tenants/restaurant-id/alemi-secret -d "{\"secret\":\"$ALEMI_SECRET\"}"
+curl -H "$H" -H 'Content-Type: application/json' -X DELETE $B/api/wa/tenants/restaurant-id -d '{"confirm":"restaurant-id"}'
 ```
 
 Нысанның өз токені бұл жерге жарамайды — тізім барлық нысанды көрсететін

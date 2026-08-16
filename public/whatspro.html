@@ -644,7 +644,7 @@
             <form class="control-panel" id="instance-form">
                 <div class="field">
               <label for="instance">WhatsPro instance ID</label>
-                    <input id="instance" autocomplete="off" placeholder="prestige" required pattern="[A-Za-z0-9_-]{2,64}">
+                    <input id="instance" autocomplete="off" placeholder="restaurant-id" required pattern="[A-Za-z0-9_-]{2,64}">
                 </div>
                 <div class="field">
                     <label for="label">Атауы</label>
@@ -1255,7 +1255,7 @@
                         <div class="request-fields">
                             <div class="field">
                                 <label>instance</label>
-                                <input data-field="instanceId" value="${escapeHtml(instance)}" placeholder="prestige" ${canEdit ? '' : 'disabled'}>
+                                <input data-field="instanceId" value="${escapeHtml(instance)}" placeholder="restaurant-id" ${canEdit ? '' : 'disabled'}>
                             </div>
                             <div class="field">
                                 <label>Атауы</label>

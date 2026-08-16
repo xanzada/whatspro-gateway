@@ -741,7 +741,7 @@
   }
   function alemiSecretItem(instanceId, stored) {
     return '<div class="info-item secret-item"><span>' + escapeHtml(t('alemiSecret')) + '</span>' +
-      '<div class="secret-row"><input id="detail-alemi-secret" name="alemiSecret" type="text" autocomplete="off" ' +
+      '<div class="secret-row"><input id="detail-alemi-secret" name="alemiSecret" type="password" autocomplete="new-password" ' +
       'placeholder="' + attr(stored ? t('alemiSecretStored') : t('alemiSecretMissing')) + '">' +
       secretActions('detail-alemi-secret') +
       '<button class="button primary small" type="button" data-save-alemi-secret data-instance="' + attr(instanceId) +
@@ -1089,8 +1089,8 @@
       brand: existing.brand || '', address: existing.address || '', whatsappPhone: existing.whatsappPhone || '',
       workHours: existing.workHours || defaults.workHours, domain: existing.domain || '',
       systemPrompt: existing.systemPrompt || '', alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
-      alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: existing.alemiSecret || '',
-      alemiSecretSet: Boolean(existing.alemiSecret) || Boolean(existing.secrets && existing.secrets.alemiSecret),
+      alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: '',
+      alemiSecretSet: Boolean(existing.alemiSecretSet) || Boolean(existing.secrets && existing.secrets.alemiSecret),
       startNow: existing.startNow !== false
     } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '',
       alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: '', alemiSecret: '', alemiSecretSet: false, startNow: true };
@@ -1113,7 +1113,7 @@
         '" inputmode="url" autocomplete="url"></div><div class="field"><label for="wizard-alemi-instance">' + t('alemiInstance') +
         '</label><input id="wizard-alemi-instance" name="alemiInstance" value="' + attr(data.alemiInstance) + '" autocomplete="off"></div>' +
         '<div class="field full"><label for="wizard-alemi-secret">' + t('alemiSecret') + '</label>' +
-        '<div class="secret-row"><input id="wizard-alemi-secret" name="alemiSecret" type="text" value="' +
+        '<div class="secret-row"><input id="wizard-alemi-secret" name="alemiSecret" type="password" value="' +
         attr(data.alemiSecret) + '" autocomplete="off" spellcheck="false">' + secretActions('wizard-alemi-secret') + '</div>' +
         '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
@@ -1241,17 +1241,13 @@
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });
     if (!tenant || tenant.virtual) return;
     var detail = settings.get(instanceId) || {};
-    // Every other field is refilled from the stored record, so the Alemi key is
-    // refilled the same way. An empty box here reads as a key that was never
-    // saved, and the operator retypes a credential that was already correct.
-    api('GET', '/api/wa/tenants/' + encodeURIComponent(instanceId) + '/alemi-secret')
-      .then(function (result) { return String((result && result.secret) || ''); })
-      .catch(function () { return ''; })
-      .then(function (secret) {
-        openWizard(Object.assign({}, detail, {
-          instanceId: instanceId, brand: tenant.brand, startNow: true, alemiSecret: secret
-        }));
-      });
+    openWizard(Object.assign({}, detail, {
+      instanceId: instanceId,
+      brand: tenant.brand,
+      startNow: true,
+      alemiSecret: '',
+      alemiSecretSet: Boolean(detail.secrets && detail.secrets.alemiSecret)
+    }));
   }
   function openDuplicate(instanceId) {
     var tenant = report.tenants.find(function (item) { return item.instanceId === instanceId; });

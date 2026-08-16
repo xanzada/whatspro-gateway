@@ -42,8 +42,8 @@ function instancePatterns(instanceId) {
   return [`*:${instanceId}`, `*:${instanceId}:*`];
 }
 
-// The family is everything before the instance id: `history:prestige:7776...`
-// reports as `history`, `menu_context:v2:prestige:kk` as `menu_context:v2`. Used
+// The family is everything before the instance id: `history:restaurant-a:7776...`
+// reports as `history`, `menu_context:v2:restaurant-a:kk` as `menu_context:v2`. Used
 // for the audit line, so an operator can see what was removed without the log
 // carrying customer phone numbers, order ids or note text in the key tails.
 function keyFamily(key, instanceId) {

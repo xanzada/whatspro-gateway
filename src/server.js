@@ -440,12 +440,13 @@ function publicApiBase(req) {
 
 async function renderChatHtml(req, res) {
   const instance = String(req.query.instance || '').trim();
-  if (instance && !isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  const tenant = instance ? await tenantStore.getTenantChatConfig(instance) : null;
+  if (!isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const tenant = await tenantStore.getTenantChatConfig(instance);
+  if (!tenant?.found) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
   const config = {
     instance,
-    branding: tenant?.branding || { name: instance || 'WhatsPro' },
-    chatToken: instance ? issueChatToken(instance) : '',
+    branding: tenant.branding,
+    chatToken: issueChatToken(instance),
     apiBase: publicApiBase(req),
     endpoints: {
       inbox: '/api/chat/inbox',
@@ -926,8 +927,16 @@ app.get('/tenants', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'tenants.html'));
 });
 
-app.get('/call-watcher', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'callwatcher.html'));
+app.get('/call-watcher', async (req, res, next) => {
+  try {
+    const instance = String(req.query.instance || '').trim();
+    if (!isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+    const tenant = await tenantStore.getTenantChatConfig(instance);
+    if (!tenant?.found) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+    return res.sendFile(path.join(PUBLIC_DIR, 'callwatcher.html'));
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get('/connect', (req, res) => {
@@ -1139,10 +1148,11 @@ app.get('/api/wa/platform-storage', requireUiOrApi, async (req, res) => {
   }
 });
 
-app.get('/api/wa/runtime-configs', requireMasterApi, async (_req, res) => {
+app.get('/api/wa/runtime-configs', requireMasterApi, async (req, res) => {
   try {
     const configs = await tenantStore.listTenantRecords();
-    res.json({ success: true, configs: configs.map(tenantAdmin.runtimeListTenant) });
+    const publicBase = publicApiBase(req);
+    res.json({ success: true, configs: configs.map(config => tenantAdmin.runtimeListTenant(config, publicBase)) });
   } catch (error) {
     res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
   }
@@ -1152,7 +1162,7 @@ app.get('/api/wa/runtime-configs/:instanceId', requireMasterApi, async (req, res
   try {
     const config = await tenantStore.findRow(req.params.instanceId);
     if (!config) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
-    res.json({ success: true, config: tenantAdmin.runtimeTenant(config) });
+    res.json({ success: true, config: tenantAdmin.runtimeTenant(config, publicApiBase(req)) });
   } catch (error) {
     res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
   }
@@ -1258,24 +1268,8 @@ app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) 
   }
 });
 
-// Editing a restaurant refills the form from the stored record, and the Alemi key
-// is part of that record, so it is read back here instead of appearing blank and
-// being mistaken for a key that was never saved. Deliberately narrow: a browser
-// session only (never an API token), one restaurant per call, never cached, and
-// still absent from every list and settings response.
-app.get('/api/wa/tenants/:instanceId/alemi-secret', requireUiSession, async (req, res) => {
-  const instanceId = String(req.params.instanceId || '').trim();
-  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  res.set('Cache-Control', 'no-store');
-  try {
-    return res.json({ success: true, ...(await tenantAdmin.revealAlemiSecret(instanceId)) });
-  } catch (error) {
-    return adminError(res, error);
-  }
-});
-
 // Alemi owns this credential, so it is written through a dedicated endpoint. The
-// value is absent from every response except the single-restaurant read above.
+// value is absent from every response and cannot be read back from the browser.
 app.post('/api/wa/tenants/:instanceId/alemi-secret', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -2066,6 +2060,9 @@ async function boot() {
   await connectRedis();
   await tenantStore.listTenantRecords().catch(error => {
     console.warn('[TENANT SNAPSHOT] startup warm-up failed:', error.message);
+  });
+  await tenantAdmin.reconcileTransportUrls().catch(error => {
+    console.warn('[TENANT TRANSPORT] startup reconciliation failed:', error.message);
   });
   startIncomingWalWorker();
   await sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] initial sweep failed:', error.message));

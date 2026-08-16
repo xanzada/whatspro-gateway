@@ -6,7 +6,8 @@
 
   var params = new URLSearchParams(window.location.search);
   var config = window.__CHAT_CONFIG__ || {};
-  var instanceId = String(params.get('instance') || config.instance || 'prestige').trim();
+  var instanceId = String(params.get('instance') || config.instance || '').trim();
+  if (!/^[A-Za-z0-9_-]{2,64}$/.test(instanceId)) throw new Error('BAD_INSTANCE_ID');
   var branding = config.branding || {};
 
   function safeApiBase(value) {

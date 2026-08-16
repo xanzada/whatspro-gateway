@@ -47,7 +47,7 @@ Content-Type: application/json
 
 ```json
 {
-  "instanceId": "prestige",
+  "instanceId": "restaurant-id",
   "phone": "7776884956",
   "text": "Сәлем"
 }
@@ -57,7 +57,7 @@ Media:
 
 ```json
 {
-  "instanceId": "prestige",
+  "instanceId": "restaurant-id",
   "phone": "7776884956",
   "text": "Чек",
   "media": {
