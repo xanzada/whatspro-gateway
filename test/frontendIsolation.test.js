@@ -74,9 +74,15 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   assert.match(tenants, /class="secret-row"/);
   assert.match(css, /\.secret-row \{/);
   ['detail-alemi-secret', 'wizard-alemi-secret', 'alemi-secret-input'].forEach((inputId) => {
-    assert.match(tenants, new RegExp(`id="${inputId}"[^>]*type="password"|type="password"[^>]*id="${inputId}"`),
-      `${inputId} must keep the credential visually hidden`);
+    assert.match(tenants, new RegExp(`id="${inputId}"[^>]*type="text"|type="text"[^>]*id="${inputId}"`),
+      `${inputId} must show the credential to the authenticated operator`);
   });
+
+  // Reading is a deliberate owner UX: the exact tenant key is fetched only
+  // after an authenticated operator opens details/edit/rotate.
+  assert.match(tenants, /function loadAlemiSecret\(instanceId\)/);
+  assert.match(tenants, /api\('GET', '\/api\/wa\/tenants\/' \+ encodeURIComponent\(instanceId\) \+ '\/alemi-secret'\)/);
+  assert.match(tenants, /openDetails[\s\S]*?loadAlemiSecret\(instanceId\)/);
 
   // 12 mixed-charset characters, drawn from the CSPRNG with rejection sampling.
   assert.match(tenants, /generateMixedSecret\(SECRET_LENGTH\)/);
