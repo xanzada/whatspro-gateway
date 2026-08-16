@@ -1089,7 +1089,7 @@
       brand: existing.brand || '', address: existing.address || '', whatsappPhone: existing.whatsappPhone || '',
       workHours: existing.workHours || defaults.workHours, domain: existing.domain || '',
       systemPrompt: existing.systemPrompt || '', alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
-      alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: '',
+      alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: String(existing.alemiSecret || ''),
       alemiSecretSet: Boolean(existing.alemiSecretSet) || Boolean(existing.secrets && existing.secrets.alemiSecret),
       startNow: existing.startNow !== false
     } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '',
