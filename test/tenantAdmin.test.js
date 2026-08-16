@@ -443,9 +443,9 @@ test('editing a legacy tenant rewrites every WhatsPro transport URL to the curre
   const stored = {
     instance_id: 'legacy-tenant', brand: 'Legacy', alemi_api_url: 'https://hub.alemi.kz',
     alemi_instance: 'legacy-hub', alemi_secret: 'legacy-secret',
-    whatspro_base_url: 'https://whatspro.bekaba.com',
-    whatspro_send_url: 'https://whatspro.bekaba.com/api/send',
-    whatspro_presence_url: 'https://whatspro.bekaba.com/api/presence'
+    whatspro_base_url: 'https://legacy-whatspro.example.invalid',
+    whatspro_send_url: 'https://legacy-whatspro.example.invalid/api/send',
+    whatspro_presence_url: 'https://legacy-whatspro.example.invalid/api/presence'
   };
   let written;
   tenantStore.findRow = async () => ({ ...stored });
@@ -469,7 +469,7 @@ test('startup transport reconciliation backfills all stale tenant rows', async (
   const originalUpdate = tenantStore.updateRow;
   const writes = [];
   tenantStore.listTenantRecords = async () => [
-    { instance_id: 'tenant-a', whatspro_base_url: 'https://whatspro.bekaba.com' },
+    { instance_id: 'tenant-a', whatspro_base_url: 'https://legacy-whatspro.example.invalid' },
     { instance_id: 'tenant-b', whatspro_base_url: 'https://whatspro.alemi.kz', whatspro_send_url: 'https://whatspro.alemi.kz/api/send', whatspro_presence_url: 'https://whatspro.alemi.kz/api/presence' }
   ];
   tenantStore.updateRow = async (instanceId, patch) => { writes.push([instanceId, patch]); };
