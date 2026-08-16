@@ -403,40 +403,8 @@ test('Excel import preserves existing keys and generates isolated keys for new t
   assert.notEqual(records.get('new-point').whatspro_api_token, records.get('existing').whatspro_api_token);
 });
 
-// Reopening "Edit" refills every field from the stored record. A key that is held
-// but never handed back reads as a key that was lost, and the operator retypes a
-// credential that was already correct.
-test('reopening a restaurant hands back the Alemi key that is stored', async () => {
-  const tenantStore = require('../services/tenantStore');
-  const original = tenantStore.findRow;
-  tenantStore.findRow = async instanceId => (instanceId === 'prestige'
-    ? { instance_id: 'prestige', alemi_secret: '  Kz7-Prestige  ' }
-    : { instance_id: instanceId });
-  try {
-    const revealed = await tenantAdmin.revealAlemiSecret('prestige');
-    assert.equal(revealed.secret, 'Kz7-Prestige', 'the value is returned as stored, without the padding');
-    assert.equal(revealed.alemiSecretSet, true);
-    const empty = await tenantAdmin.revealAlemiSecret('qaclient');
-    assert.equal(empty.secret, '');
-    assert.equal(empty.alemiSecretSet, false, 'a restaurant with no key must not look like one that has it');
-  } finally {
-    tenantStore.findRow = original;
-  }
-});
-
-test('asking for the key of a restaurant that does not exist is a 404, not an empty key', async () => {
-  const tenantStore = require('../services/tenantStore');
-  const original = tenantStore.findRow;
-  tenantStore.findRow = async () => null;
-  try {
-    await assert.rejects(() => tenantAdmin.revealAlemiSecret('nobody'), error => {
-      assert.equal(error.message, 'TENANT_NOT_FOUND');
-      assert.equal(error.statusCode, 404);
-      return true;
-    });
-  } finally {
-    tenantStore.findRow = original;
-  }
+test('Alemi secrets have no plaintext read service', () => {
+  assert.equal(tenantAdmin.revealAlemiSecret, undefined);
 });
 
 // The whole reason the key looked lost: a save that never mentions it must leave
@@ -464,6 +432,54 @@ test('saving a restaurant without touching the key leaves the stored key alone',
     assert.equal('alemi_secret' in written, false, 'a save that never mentions the key must not write the column at all');
   } finally {
     tenantStore.findRow = originalFind;
+    tenantStore.updateRow = originalUpdate;
+  }
+});
+
+test('editing a legacy tenant rewrites every WhatsPro transport URL to the current gateway', async () => {
+  const tenantStore = require('../services/tenantStore');
+  const originalFind = tenantStore.findRow;
+  const originalUpdate = tenantStore.updateRow;
+  const stored = {
+    instance_id: 'legacy-tenant', brand: 'Legacy', alemi_api_url: 'https://hub.alemi.kz',
+    alemi_instance: 'legacy-hub', alemi_secret: 'legacy-secret',
+    whatspro_base_url: 'https://whatspro.bekaba.com',
+    whatspro_send_url: 'https://whatspro.bekaba.com/api/send',
+    whatspro_presence_url: 'https://whatspro.bekaba.com/api/presence'
+  };
+  let written;
+  tenantStore.findRow = async () => ({ ...stored });
+  tenantStore.updateRow = async (_instanceId, patch) => { written = patch; return patch; };
+  try {
+    await tenantAdmin.updateTenant('legacy-tenant', { address: 'new address' }, {
+      publicBase: 'https://whatspro.alemi.kz/'
+    });
+    assert.equal(written.whatspro_base_url, 'https://whatspro.alemi.kz');
+    assert.equal(written.whatspro_send_url, 'https://whatspro.alemi.kz/api/send');
+    assert.equal(written.whatspro_presence_url, 'https://whatspro.alemi.kz/api/presence');
+  } finally {
+    tenantStore.findRow = originalFind;
+    tenantStore.updateRow = originalUpdate;
+  }
+});
+
+test('startup transport reconciliation backfills all stale tenant rows', async () => {
+  const tenantStore = require('../services/tenantStore');
+  const originalList = tenantStore.listTenantRecords;
+  const originalUpdate = tenantStore.updateRow;
+  const writes = [];
+  tenantStore.listTenantRecords = async () => [
+    { instance_id: 'tenant-a', whatspro_base_url: 'https://whatspro.bekaba.com' },
+    { instance_id: 'tenant-b', whatspro_base_url: 'https://whatspro.alemi.kz', whatspro_send_url: 'https://whatspro.alemi.kz/api/send', whatspro_presence_url: 'https://whatspro.alemi.kz/api/presence' }
+  ];
+  tenantStore.updateRow = async (instanceId, patch) => { writes.push([instanceId, patch]); };
+  try {
+    const result = await tenantAdmin.reconcileTransportUrls('https://whatspro.alemi.kz');
+    assert.deepEqual(result, { updated: 1, instances: ['tenant-a'] });
+    assert.equal(writes[0][0], 'tenant-a');
+    assert.equal(writes[0][1].whatspro_send_url, 'https://whatspro.alemi.kz/api/send');
+  } finally {
+    tenantStore.listTenantRecords = originalList;
     tenantStore.updateRow = originalUpdate;
   }
 });
