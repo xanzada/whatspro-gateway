@@ -293,9 +293,9 @@ test('the bot is told where this gateway lives now, not where it lived when the 
   // reads is recomputed instead of remembered.
   const stale = {
     instance_id: 'prestige',
-    whatspro_base_url: 'https://whatspro.bekaba.com',
-    whatspro_send_url: 'https://whatspro.bekaba.com/api/send',
-    whatspro_presence_url: 'https://whatspro.bekaba.com/api/presence',
+    whatspro_base_url: 'https://legacy-gateway.example.invalid',
+    whatspro_send_url: 'https://legacy-gateway.example.invalid/api/send',
+    whatspro_presence_url: 'https://legacy-gateway.example.invalid/api/presence',
     alemi_secret: 'alemi_supersecret'
   };
 
@@ -312,7 +312,7 @@ test('the bot is told where this gateway lives now, not where it lived when the 
   withEnv({ WHATSPRO_PUBLIC_URL: undefined }, () => {
     assert.equal(
       tenantAdmin.withCurrentTransport(stale).whatspro_send_url,
-      'https://whatspro.bekaba.com/api/send',
+      'https://legacy-gateway.example.invalid/api/send',
       'with no public URL configured the stored value is better than an empty one'
     );
   });
