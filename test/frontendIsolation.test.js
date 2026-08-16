@@ -83,6 +83,8 @@ test('The Alemi Secret Key row carries a generate and a copy control everywhere 
   assert.match(tenants, /function loadAlemiSecret\(instanceId\)/);
   assert.match(tenants, /api\('GET', '\/api\/wa\/tenants\/' \+ encodeURIComponent\(instanceId\) \+ '\/alemi-secret'\)/);
   assert.match(tenants, /openDetails[\s\S]*?loadAlemiSecret\(instanceId\)/);
+  assert.match(tenants, /alemiSecret:\s*String\(existing\.alemiSecret\s*\|\|\s*''\)/,
+    'the wizard must preserve the key loaded for the exact restaurant');
 
   // 12 mixed-charset characters, drawn from the CSPRNG with rejection sampling.
   assert.match(tenants, /generateMixedSecret\(SECRET_LENGTH\)/);
