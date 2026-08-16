@@ -5,6 +5,13 @@ const http = require('node:http');
 const { app, __test: serverHelpers } = require('../src/server');
 
 test('chat routes and static assets serve the new operator UI', async t => {
+  const tenantStore = require('../services/tenantStore');
+  const originalConfig = tenantStore.getTenantChatConfig;
+  tenantStore.getTenantChatConfig = async instance => tenantStore.sanitizeTenantConfig(
+    instance === 'prestige' ? { instance_id: instance, brand: 'Prestige' } : null,
+    instance
+  );
+  t.after(() => { tenantStore.getTenantChatConfig = originalConfig; });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -57,6 +64,8 @@ test('chat routes and static assets serve the new operator UI', async t => {
 
   const invalidTenant = await fetch(base + '/chat.html?instance=%28bad%2Ceq%2Cfilter%29');
   assert.equal(invalidTenant.status, 400);
+  const unknownTenant = await fetch(base + '/chat.html?instance=missing-tenant');
+  assert.equal(unknownTenant.status, 404);
 
   const previousUser = process.env.WHATSPRO_USER;
   const previousPassword = process.env.WHATSPRO_PASSWORD;
@@ -275,14 +284,13 @@ test('chat header uses tenant brand config and archived chats keep the composer 
 });
 
 
-test('deploy config keeps shared Redis reachability, local durability and reproducible installs', async () => {
+test('deploy config requires the shared Redis and does not start a stale tenant store', async () => {
   const fs = require('node:fs/promises');
   const path = require('node:path');
   const compose = await fs.readFile(path.join(__dirname, '..', 'docker-compose.yml'), 'utf8');
-  assert.match(compose, /REDIS_URL=\$\{REDIS_URL:-redis:\/\/redis_local:6379\}/);
-  assert.match(compose, /--appendonly["']?,?\s*["']yes/);
-  assert.match(compose, /--appendfsync["']?,?\s*["']everysec/);
-  const whatsproService = compose.slice(compose.indexOf('\n  whatspro:'), compose.indexOf('\n  redis_local:'));
+  assert.match(compose, /REDIS_URL=\$\{REDIS_URL:\?[^}]+\}/);
+  assert.doesNotMatch(compose, /redis_local|whatspro_redis_data/);
+  const whatsproService = compose.slice(compose.indexOf('\n  whatspro:'), compose.indexOf('\n  backup:'));
   assert.match(whatsproService, /networks:\s*\r?\n\s*- default\s*\r?\n\s*- dokploy-network/);
   assert.match(whatsproService, /\/health\/detailed/);
 
