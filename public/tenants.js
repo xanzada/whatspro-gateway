@@ -924,8 +924,8 @@
     qrTimer = 0;
     qrInstanceId = '';
     pendingImportFile = null;
-    // Wizard state may hold a just-entered write-only key. Drop its event
-    // closure as soon as the modal closes so it cannot linger in page state.
+    // Wizard state may hold the visible owner key. Drop its event closure as
+    // soon as the modal closes so it cannot linger in page state.
     modalRoot.onclick = null;
     modalRoot.innerHTML = '';
     document.body.style.overflow = '';

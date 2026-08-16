@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const tenantStore = require('./tenantStore');
 
 // Platform transport keys remain generated here. The Alemi credential is the
-// exception: Alemi issues it, so onboarding accepts a prepared write-only value
-// and never invents or returns one.
+// exception: Alemi issues it, so onboarding accepts a prepared value and never
+// invents one. Only the signed owner UI may read one exact tenant value back.
 
 const ALEMI_DEFAULT_API_URL = 'https://hub.alemi.kz';
 const OPERATOR_FIELDS = ['instanceId', 'brand', 'whatsappPhone', 'domain', 'address', 'workHours', 'adminPhone', 'promptMode', 'systemPrompt', 'active', 'botEnabled', 'callsDisabled', 'alemiApiUrl', 'alemiInstance', 'alemiSecret'];
