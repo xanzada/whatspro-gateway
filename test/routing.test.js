@@ -48,6 +48,13 @@ test('chat routes and static assets serve the new operator UI', async t => {
   const protectedApi = await fetch(base + '/api/chat/inbox/prestige');
   assert.equal(protectedApi.status, 401);
 
+  for (const route of ['/chat.html', '/chat', '/inbox']) {
+    const response = await fetch(base + route);
+    const body = await response.text();
+    assert.equal(response.status, 400, `${route} must fail closed without an exact instance`);
+    assert.doesNotMatch(body, /prestige/i, `${route} must not expose a default tenant`);
+  }
+
   const invalidTenant = await fetch(base + '/chat.html?instance=%28bad%2Ceq%2Cfilter%29');
   assert.equal(invalidTenant.status, 400);
 

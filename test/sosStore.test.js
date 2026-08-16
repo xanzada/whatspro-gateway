@@ -70,6 +70,29 @@ test('an active SOS survives a listing and reaches the operator', async () => {
   assert.equal(redis.log.includes('ZREM'), false, 'a live SOS must never be removed from the index');
 });
 
+test('the same customer phone has isolated SOS state in two tenants', async () => {
+  const alphaMarker = JSON.stringify({ ...JSON.parse(MARKER), summary: 'alpha only' });
+  const betaMarker = JSON.stringify({ ...JSON.parse(MARKER), summary: 'beta only' });
+  const redis = createRedis({
+    strings: {
+      [`chatwoot:sos:tenant-alpha:${PHONE}`]: alphaMarker,
+      [`chatwoot:sos-unread:tenant-alpha:${PHONE}`]: 'alpha-signal',
+      [`chatwoot:sos:tenant-beta:${PHONE}`]: betaMarker,
+    },
+    zsets: {
+      'chatwoot:sos:tenant-alpha': { [PHONE]: NOW + 3_600_000 },
+      'chatwoot:sos:tenant-beta': { [PHONE]: NOW + 3_600_000 },
+    },
+  });
+  const store = createSosStore(redis, { now: () => NOW });
+
+  const [alpha, beta] = await Promise.all([store.list('tenant-alpha'), store.list('tenant-beta')]);
+  assert.equal(alpha[0].sosSummary, 'alpha only');
+  assert.equal(alpha[0].sosUnread, true);
+  assert.equal(beta[0].sosSummary, 'beta only');
+  assert.equal(beta[0].sosUnread, false);
+});
+
 test('the sixty-minute window is what the score carries', async () => {
   const redis = createRedis({
     strings: { [`chatwoot:sos:prestige:${PHONE}`]: MARKER },

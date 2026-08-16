@@ -50,6 +50,16 @@ test('Each public UI keeps its own direct server route', () => {
   assert.match(server, /app\.get\(\['\/chat', '\/inbox'\]/);
 });
 
+test('tenant UIs never fall back to a prestige restaurant', () => {
+  const chat = read('public/chat.js');
+  const callWatcher = read('public/callwatcher.js');
+  const whatspro = read('public/whatspro.html');
+
+  assert.doesNotMatch(chat, /\|\|\s*['"]prestige['"]/);
+  assert.doesNotMatch(callWatcher, /\|\|\s*['"]prestige['"]/);
+  assert.doesNotMatch(whatspro, /placeholder="prestige"/);
+});
+
 test('The Alemi Secret Key row carries a generate and a copy control everywhere it is editable', () => {
   const tenants = read('public/tenants.js');
   const css = read('public/tenants.css');
