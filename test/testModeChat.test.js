@@ -30,6 +30,22 @@ test('strict test mode allows only the tenant developer phone', async () => {
   );
 });
 
+test('test mode is open for every LID only when disabled and exact-match only when enabled', async () => {
+  const lid = '63037268607157@lid';
+  const disabled = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'false' },
+    findRow: async () => ({ instance_id: 'prestige', dev_phone: '' })
+  });
+  assert.equal(testMode.allowsPhone(disabled, lid), true);
+
+  const enabled = await testMode.getTestModePolicy('prestige', {
+    env: { TEST_MODE_ENABLED: 'true' },
+    findRow: async () => ({ instance_id: 'prestige', dev_phone: lid })
+  });
+  assert.equal(testMode.allowsPhone(enabled, lid), true);
+  assert.equal(testMode.allowsPhone(enabled, '99999999999999@lid'), false);
+});
+
 test('test mode stays fail-closed when the developer phone is missing', async () => {
   const policy = await testMode.getTestModePolicy('prestige', {
     env: { TEST_MODE_ENABLED: 'true' },
