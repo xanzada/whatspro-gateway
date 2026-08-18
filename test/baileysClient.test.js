@@ -183,6 +183,36 @@ test('an inbound text arrives in the wwebjs shape the manager reads', async () =
   });
 });
 
+test('Baileys preserves saved-contact provenance without replaying synced history', async () => {
+  const fake = fakeBaileys();
+  const seen = [];
+
+  await withClient('saved-contact', fake, async client => {
+    client.on('message', msg => seen.push(msg));
+    fake.sockets[0].emit('messaging-history.set', {
+      contacts: [
+        { id: '77476884956@s.whatsapp.net', name: 'Досым', notify: 'Аружан' },
+        { id: '77001112233@s.whatsapp.net', notify: 'Тек push name' }
+      ],
+      messages: [textMessage({ key: { remoteJid: '79999999999@s.whatsapp.net', fromMe: false, id: 'OLD' } })]
+    });
+    assert.equal(seen.length, 0, 'history messages stay suppressed');
+
+    fake.sockets[0].emit('messages.upsert', { type: 'notify', messages: [textMessage()] });
+    const saved = await seen[0].getContact();
+    assert.equal(saved.name, 'Досым');
+    assert.equal(saved.pushname, 'Аружан');
+    assert.equal(saved.isMyContact, true);
+
+    fake.sockets[0].emit('messages.upsert', {
+      type: 'notify',
+      messages: [textMessage({ key: { remoteJid: '77001112233@s.whatsapp.net', fromMe: false, id: 'MSG-2' }, pushName: 'Тек push name' })]
+    });
+    const unsaved = await seen[1].getContact();
+    assert.equal(unsaved.isMyContact, false, 'a public push name is not an address-book entry');
+  });
+});
+
 test('an inbound image carries the media node the CDN-decrypt path needs', async () => {
   const fake = fakeBaileys();
   const seen = [];
