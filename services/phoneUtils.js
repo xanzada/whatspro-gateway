@@ -22,8 +22,11 @@ function extractPhoneCandidate(rawValue) {
     const raw = String(rawValue || '').trim();
     if (!raw || isGroupOrStatusJid(raw)) return '';
 
-    // @lid is a linked-device technical identifier, so its digits are not trusted as a phone number.
-    if (LID_JID_RE.test(raw)) return '';
+    if (LID_JID_RE.test(raw)) {
+        const match = raw.match(/^(\d+)/);
+        if (match) return `${match[1]}@lid`;
+        return '';
+    }
 
     const phoneLikeMatch =
         raw.match(/(?:\+?7|8)[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{2}[\s().-]*\d{2}/) ||
@@ -33,7 +36,13 @@ function extractPhoneCandidate(rawValue) {
 }
 
 function normalizePhone(value) {
-    return normalizeKazakhstanPhone(extractPhoneCandidate(value));
+    const candidate = extractPhoneCandidate(value);
+    if (String(candidate).endsWith('@lid')) return candidate;
+    return normalizeKazakhstanPhone(candidate);
+}
+
+function isValidChatPhone(phone) {
+    return /^(\d{10,15}|\d+@lid)$/.test(String(phone || ''));
 }
 
 function normalizePhoneFromCandidates(candidates = []) {
@@ -75,6 +84,7 @@ function toWhatsAppChatId(value, jidLookup = null) {
 
 module.exports = {
     isGroupOrStatusJid,
+    isValidChatPhone,
     normalizePhone,
     normalizePhoneFromCandidates,
     getPhoneCandidatesFromWebhook,

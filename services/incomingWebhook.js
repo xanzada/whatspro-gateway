@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { redisClient } = require('../config/redis');
-const { normalizePhoneFromCandidates } = require('./phoneUtils');
+const { isValidChatPhone, normalizePhoneFromCandidates } = require('./phoneUtils');
 const { chatStore } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 const { isPhoneAllowed } = require('./testModePolicy');
@@ -32,10 +32,6 @@ function getOpenBotWebhookToken() {
 function normalizeInstanceId(value = '') {
   const instanceId = String(value || '').trim();
   return /^[a-zA-Z0-9_-]{2,64}$/.test(instanceId) ? instanceId : '';
-}
-
-function isValidChatPhone(phone) {
-  return /^\d{10,15}$/.test(String(phone || ''));
 }
 
 function isGroupOrStatusPayload(payload = {}) {

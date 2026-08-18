@@ -22,7 +22,7 @@ const {
 } = require('../services/whatsappManager');
 const qrcode = require('qrcode');
 const { callWatcherStatus } = require('../services/callWatcher');
-const { normalizePhone } = require('../services/phoneUtils');
+const { isValidChatPhone, normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
@@ -581,10 +581,6 @@ function entryPreview(entry) {
   const text = String(entry.text || entry.body || '').trim();
   if (text) return text;
   return entry.hasMedia ? '[Media file]' : '';
-}
-
-function isValidChatPhone(phone) {
-  return /^\d{10,15}$/.test(String(phone || ''));
 }
 
 function normalizeChatEntry(entry) {

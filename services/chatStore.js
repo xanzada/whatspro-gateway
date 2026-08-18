@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { redisClient } = require('../config/redis');
-const { normalizePhone } = require('./phoneUtils');
+const { isValidChatPhone, normalizePhone } = require('./phoneUtils');
 const { parseScoredMembers, parseFieldMap } = require('./redisReply');
 
 const STANDARD_TTL_SECONDS = 24 * 60 * 60;
@@ -32,7 +32,7 @@ function parseJson(raw) {
 }
 
 function isPhone(phone) {
-  return /^\d{10,15}$/.test(String(phone || ''));
+  return isValidChatPhone(phone);
 }
 
 function encodeMedia(data, mimeType = 'audio/ogg') {

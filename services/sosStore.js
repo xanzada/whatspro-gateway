@@ -1,7 +1,7 @@
 'use strict';
 
 const { redisClient } = require('../config/redis');
-const { normalizePhone } = require('./phoneUtils');
+const { isValidChatPhone, normalizePhone } = require('./phoneUtils');
 const { parseScoredMembers } = require('./redisReply');
 
 const SOS_TTL_SECONDS = 60 * 60;
@@ -14,7 +14,7 @@ const keys = {
 function parseJson(value) {
   try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {}; } catch { return {}; }
 }
-function validPhone(value) { return /^\d{10,15}$/.test(String(value || '')); }
+function validPhone(value) { return isValidChatPhone(value); }
 
 function createSosStore(redis, options = {}) {
   const now = options.now || Date.now;

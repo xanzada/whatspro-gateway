@@ -23,7 +23,7 @@ function enabledFrom(env = process.env) {
  * semicolons, newlines and plain spaces all work, and a junk entry between two
  * good ones costs nothing.
  */
-const PHONE_RUN_RE = /(?:\+?7|8)[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{2}[\s().-]*\d{2}|\d{10,15}/g;
+const PHONE_RUN_RE = /\d+@lid|(?:\+?7|8)[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{2}[\s().-]*\d{2}|\d{10,15}/gi;
 
 function splitPhoneList(value) {
   const matches = String(value ?? '').match(PHONE_RUN_RE) || [];

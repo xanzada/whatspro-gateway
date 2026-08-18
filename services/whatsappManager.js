@@ -24,7 +24,7 @@ const { redisClient } = require('../config/redis');
 const fs = require('fs');
 const path = require('path');
 
-const { isGroupOrStatusJid, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
+const { isGroupOrStatusJid, isValidChatPhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
@@ -52,10 +52,6 @@ const mediaRecoveryMisses = new Set();
 
 let activeMediaDownloads = 0;
 let baileysMediaDownloaderPromise;
-
-function isValidChatPhone(phone) {
-    return /^\d{10,15}$/.test(String(phone || ''));
-}
 
 function chatMediaKey(instanceId, messageId) {
     return `chatwoot:media:${instanceId}:${messageId}`;
