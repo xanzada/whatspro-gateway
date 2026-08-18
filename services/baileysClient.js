@@ -264,6 +264,7 @@ class BaileysClient extends EventEmitter {
         this._messagesById = new Map();
         this._unreadKeys = new Map();
         this._pushNames = new Map();
+        this._contacts = new Map();
 
         // whatsapp-web.js exposes a puppeteer page. Every page-dependent branch
         // in the manager is guarded with `if (!page)`, so leaving this undefined
@@ -444,6 +445,7 @@ class BaileysClient extends EventEmitter {
         this._messages.clear();
         this._messagesById.clear();
         this._unreadKeys.clear();
+        this._contacts.clear();
         return true;
     }
 
@@ -472,6 +474,8 @@ class BaileysClient extends EventEmitter {
         sock.ev.on('connection.update', guard(update => this._onConnectionUpdate(update, sock)));
         sock.ev.on('messages.upsert', guard(payload => this._onMessagesUpsert(payload)));
         sock.ev.on('messages.update', guard(updates => this._onMessagesUpdate(updates)));
+        sock.ev.on('contacts.upsert', guard(contacts => this._rememberContacts(contacts)));
+        sock.ev.on('contacts.update', guard(contacts => this._rememberContacts(contacts)));
         // A one-to-one chat reports delivery and read on the receipt stream, not
         // as a status on messages.update, so the panel stayed on a single tick
         // forever when only the latter was wired.
@@ -479,7 +483,23 @@ class BaileysClient extends EventEmitter {
         sock.ev.on('call', guard(events => this._onCall(events, sock)));
         // A history chunk is dropped on the floor rather than trusted: the flags
         // above should prevent one, and a webhook replay is unrecoverable.
-        sock.ev.on('messaging-history.set', guard(() => {}));
+        sock.ev.on('messaging-history.set', guard(payload => this._rememberContacts(payload?.contacts)));
+    }
+
+    _rememberContacts(contacts) {
+        for (const contact of Array.isArray(contacts) ? contacts : []) {
+            const jid = stripDevice(contact?.id || contact?.jid || '');
+            if (!jid || isGroupJid(jid)) continue;
+            const previous = this._contacts.get(jid) || {};
+            const next = { ...previous, ...contact, id: jid };
+            // `name` is the owner's local address-book label. `notify` is only
+            // the sender's public push name and must never classify a stranger
+            // as a saved/private contact.
+            if (Object.prototype.hasOwnProperty.call(contact, 'name') && !String(contact.name || '').trim()) {
+                delete next.name;
+            }
+            this._contacts.set(jid, next);
+        }
     }
 
     _onConnectionUpdate(update, sock) {
@@ -850,9 +870,6 @@ class BaileysClient extends EventEmitter {
         return { mimetype, data: bytes.toString('base64'), filename, filesize: bytes.length };
     }
 
-    // Baileys has no address book: there is no synced contact list on a linked
-    // device, so `name` / `shortName` / `pushname` can only come from pushName
-    // and isMyContact is always false.
     _contactFromMessage(msg) {
         const jid = msg.fromMe ? msg.to : (msg.author || msg.from);
         const pushName = msg._data?.notifyName || this._pushNames.get(jid) || '';
@@ -862,6 +879,9 @@ class BaileysClient extends EventEmitter {
     _contactShape(jid, pushName, isMe = false) {
         const normalized = stripDevice(jid || '');
         const user = userOf(normalized);
+        const saved = this._contacts.get(normalized) || {};
+        const localName = String(saved.name || '').trim();
+        const publicName = String(saved.notify || pushName || '').trim();
         return {
             id: {
                 _serialized: normalized,
@@ -869,10 +889,10 @@ class BaileysClient extends EventEmitter {
                 server: normalized.split('@')[1] || 's.whatsapp.net'
             },
             number: user,
-            name: pushName || '',
-            shortName: pushName || '',
-            pushname: pushName || '',
-            isMyContact: false,
+            name: localName || publicName,
+            shortName: localName || publicName,
+            pushname: publicName,
+            isMyContact: Boolean(localName),
             isWAContact: Boolean(normalized),
             isMe: Boolean(isMe),
             isUser: !isGroupJid(normalized),

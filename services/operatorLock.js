@@ -1,10 +1,14 @@
 const { redisClient } = require('../config/redis');
 const { normalizePhone } = require('./phoneUtils');
 
-const OPERATOR_ACTIVE_SECONDS = Number(process.env.OPERATOR_ACTIVE_SECONDS || 60);
+const OPERATOR_ACTIVE_SECONDS = Number(process.env.OPERATOR_ACTIVE_SECONDS || 40);
 
 function operatorActiveKey(instanceId, phone) {
   return `operator_active:${instanceId}:${phone}`;
+}
+
+function operatorActiveCommand(instanceId, phone, source) {
+  return ['SET', operatorActiveKey(instanceId, phone), source, 'EX', String(OPERATOR_ACTIVE_SECONDS)];
 }
 
 async function markOperatorActive(instanceId, phone, source = 'operator') {
@@ -13,12 +17,16 @@ async function markOperatorActive(instanceId, phone, source = 'operator') {
 
   if (!safeInstanceId || !safePhone || !redisClient.isOpen) return false;
 
-  await redisClient.sendCommand(['SET', operatorActiveKey(safeInstanceId, safePhone), source, 'EX', String(OPERATOR_ACTIVE_SECONDS)]);
+  // SET with EX is intentionally issued on every human message. Redis replaces
+  // the old expiry, so an operator who continues typing gets a fresh 40-second
+  // handoff window instead of racing the first message's timer.
+  await redisClient.sendCommand(operatorActiveCommand(safeInstanceId, safePhone, source));
   return true;
 }
 
 module.exports = {
   OPERATOR_ACTIVE_SECONDS,
   markOperatorActive,
-  operatorActiveKey
+  operatorActiveKey,
+  __test: { operatorActiveCommand }
 };

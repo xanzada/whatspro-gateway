@@ -24,7 +24,7 @@ const { redisClient } = require('../config/redis');
 const fs = require('fs');
 const path = require('path');
 
-const { isGroupOrStatusJid, isValidChatPhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
+const { isGroupOrStatusJid, isValidChatPhone, normalizePhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
@@ -1209,17 +1209,32 @@ async function releaseBotSending(marker) {
 
 async function getOutgoingPhoneFromMessage(client, msg) {
     const candidates = [
-        msg?.to,
-        msg?._data?.to,
         msg?.id?.remote,
         msg?._data?.id?.remote,
+        msg?.to,
+        msg?._data?.to,
         msg?._data?.from,
         msg?.from
-    ];
+    ].filter(value => value && !isGroupOrStatusJid(value));
 
-    let phone = normalizePhoneFromCandidates(candidates);
-    if (!phone && typeof getPhoneFromLid === 'function') {
-        phone = await getPhoneFromLid(client, candidates);
+    const ownPhone = normalizePhoneFromCandidates([
+        client?.info?.wid?._serialized,
+        client?.info?.wid?.user,
+        client?.user?.id,
+        client?._user?.id
+    ]);
+    const peerCandidates = candidates.filter(value => {
+        const normalized = normalizePhone(value);
+        return !ownPhone || !normalized || normalized !== ownPhone;
+    });
+
+    // Resolve an opaque LID before accepting it as the canonical chat id. A
+    // linked-device stanza may otherwise be filed under the LID (or, worse,
+    // under the account's own phone) while the bot-send marker lives under the
+    // customer's PN, making an automated answer look like a human operator.
+    let phone = await getPhoneFromLid(client, peerCandidates);
+    if (!phone) {
+        phone = normalizePhoneFromCandidates(peerCandidates);
     }
     if (!phone) {
         phone = await getContactPhoneFromMessage(msg);
@@ -3080,6 +3095,7 @@ module.exports = {
         isQualifiedDocument,
         isChatMediaCandidate,
         deliveryStatusFromAck,
+        getOutgoingPhoneFromMessage,
         MAX_MEDIA_BYTES,
         MAX_IMAGE_BYTES,
         MAX_MEDIA_BASE64_LENGTH,
