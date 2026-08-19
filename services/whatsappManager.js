@@ -1668,8 +1668,16 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             ];
 
             cleanNumber = normalizePhoneFromCandidates(possibleJids);
-            if (!cleanNumber && typeof getPhoneFromLid === 'function') {
-                cleanNumber = await getPhoneFromLid(client, possibleJids);
+            // A @lid identifier is not a phone number. The hub resolves orders by
+            // phone only, so forwarding the lid made every order lookup fail with
+            // ALEMI_ORDER_CONTEXT_PHONE_REQUIRED, and a guest who had just sent a
+            // payment receipt was told the database was unavailable. The lid has to
+            // be swapped for the real number here too, not only when nothing was
+            // found at all: normalizePhoneFromCandidates returns the lid itself as a
+            // valid value, which left the resolver below unreachable dead code.
+            if ((!cleanNumber || /@lid$/i.test(cleanNumber)) && typeof getPhoneFromLid === 'function') {
+                const resolvedPhone = await getPhoneFromLid(client, possibleJids);
+                if (resolvedPhone) cleanNumber = resolvedPhone;
             }
             if (typeof getContactInfoFromMessage === 'function') {
                 contactInfo = await getContactInfoFromMessage(msg);
