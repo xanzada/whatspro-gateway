@@ -112,3 +112,21 @@ test('a resolved SOS chat leaves the sos column and stays with the operator', ()
   // ...and an operator chat with a client reply still stays put (sticky state).
   assert.equal(core.chatColumn({ sos: false, state: 'operator', unread: true }), 'operator');
 });
+
+test('sos window semantics: expiry lands untouched chats in the merged column, handled ones in operator', () => {
+  const core = require('../public/chat-core.js');
+  const past = Date.now() - 1000;
+  const future = Date.now() + 60000;
+  // During the window the chat is pinned to SOS, whatever the stored state is.
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: future, state: 'new', unread: true }), 'sos');
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: future, state: 'all' }), 'sos');
+  // Window expired, operator never wrote -> falls to the merged Бәрі column.
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: past, state: 'new', unread: true }), 'all');
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: past, state: 'all' }), 'all');
+  // Window expired, operator had replied -> Оператор column.
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: past, state: 'operator' }), 'operator');
+  // Closed while sos was active (marker cleared by the close action) -> Архив.
+  assert.equal(core.chatColumn({ sos: false, sosExpiresAt: 0, state: 'archive' }), 'archive');
+  // Archived chat must never bounce back to Бәрі on a client reply (sticky).
+  assert.equal(core.chatColumn({ sos: false, state: 'archive', unread: true }), 'archive');
+});

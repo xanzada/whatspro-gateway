@@ -1847,7 +1847,10 @@ app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, 
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
   await chatStore.applyAction(instanceId, phone, action);
   if (action === 'view') await sosStore.acknowledge(instanceId, phone);
-  if (action === 'delete') await sosStore.clear(instanceId, phone);
+  // 'close' resolves the escalation the same way 'delete' does: an archived
+  // chat must not stay pinned in the SOS column for the rest of the marker TTL
+  // (operator request, 2026-08-20).
+  if (action === 'delete' || action === 'close') await sosStore.clear(instanceId, phone);
   await publishChatEvent({ type: action === 'view' ? 'sos.acknowledged' : 'chat.action', instanceId, phone, action }).catch(() => {});
   return res.json({ success: true, instanceId, phone, action });
 });
