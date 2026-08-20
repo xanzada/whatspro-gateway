@@ -139,3 +139,14 @@ test('normalizePhone keeps the @lid suffix so ghost chats stay resolvable', () =
   assert.equal(core.normalizePhone('224043110273161@LID'), '224043110273161@lid');
   assert.equal(core.normalizePhone('+7 (747) 688-49-56'), '77476884956');
 });
+
+test('renderChatHtml cache-busts the panel bundles with a build version', () => {
+  // Operators keep the panel open for days; without a version stamp a stale
+  // cached chat.js keeps old bugs alive after the fix was already deployed.
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.match(src, /CHAT_ASSET_VERSION = String\(Date\.now\(\)\)/);
+  assert.match(src, /src="\/chat-core\.js\?v=\$\{CHAT_ASSET_VERSION\}"/);
+  assert.match(src, /src="\/chat\.js\?v=\$\{CHAT_ASSET_VERSION\}"/);
+});

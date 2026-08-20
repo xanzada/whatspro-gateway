@@ -35,8 +35,10 @@ test('chat routes and static assets serve the new operator UI', async t => {
     const html = await response.text();
     assert.equal(response.status, 200, route);
     assert.match(response.headers.get('content-type') || '', /text\/html/);
-    assert.match(html, /<script src="\/chat-core\.js"><\/script>/);
-    assert.match(html, /<script src="\/chat\.js"><\/script>/);
+    // Bundles are cache-busted with the build version so a long-open panel can
+    // never strand already-shipped fixes (live complaint 2026-08-21).
+    assert.match(html, /<script src="\/chat-core\.js\?v=\d+"><\/script>/);
+    assert.match(html, /<script src="\/chat\.js\?v=\d+"><\/script>/);
     assert.doesNotMatch(html, /Загрузка Chatwoot/i);
   }
 

@@ -438,6 +438,12 @@ function publicApiBase(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
+// Cache-bust the panel's static bundles with the process start time: operators
+// keep the panel open for days, and a stale chat.js stranded already-shipped
+// fixes (live complaint 2026-08-21: buttons and PDF "still broken" long after
+// the server was fixed - the tab simply never reloaded the code).
+const CHAT_ASSET_VERSION = String(Date.now());
+
 async function renderChatHtml(req, res) {
   const instance = String(req.query.instance || '').trim();
   if (!isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -458,7 +464,9 @@ async function renderChatHtml(req, res) {
       events: '/api/chat/events'
     }
   };
-  const html = await fs.readFile(CHAT_HTML_PATH, 'utf8');
+  const html = (await fs.readFile(CHAT_HTML_PATH, 'utf8'))
+    .replace('src="/chat-core.js"', `src="/chat-core.js?v=${CHAT_ASSET_VERSION}"`)
+    .replace('src="/chat.js"', `src="/chat.js?v=${CHAT_ASSET_VERSION}"`);
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
   res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
   const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
