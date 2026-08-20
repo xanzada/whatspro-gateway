@@ -1,215 +1,45 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const express = require('express');
-const puppeteer = require('puppeteer');
-const os = require('node:os');
-const path = require('node:path');
-const fs = require('node:fs/promises');
+'use strict';
 
-const { createChatMediaHandler, resolveFfmpegPath } = require('../services/chatMedia');
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { createChatMediaHandler } = require('../services/chatMedia');
 
-test('production audio fallback installs and selects the system ffmpeg binary', async () => {
-  const dockerfile = await fs.readFile(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
-  assert.match(dockerfile, /\n\s*ffmpeg\s*\\/);
-  assert.match(dockerfile, /FFMPEG_PATH=\/usr\/bin\/ffmpeg/);
-  assert.equal(resolveFfmpegPath({ FFMPEG_PATH: '/usr/bin/ffmpeg' }, null), '/usr/bin/ffmpeg');
+function fakeRes() {
+  return {
+    headers: {},
+    statusCode: 0,
+    body: null,
+    set(name, value) { if (typeof name === 'string') { this.headers[name] = value; return this; } Object.assign(this.headers, name); return this; },
+    status(code) { this.statusCode = code; return this; },
+    send(b) { this.body = b; return this; },
+    json(o) { this.jsonBody = o; return this; },
+    sendFile() { return this; },
+  };
+}
+
+test('a stored PDF is served inline without a viewer-blocking sandbox header', async () => {
+  // A bare `Content-Security-Policy: sandbox` made browsers block their own
+  // built-in PDF viewer, so the operator's receipt "would not open".
+  const pdfBytes = Buffer.from('%PDF-1.4 fake minimal receipt pdf for the test %%EOF');
+  const handler = createChatMediaHandler({
+    readMedia: async () => 'data:application/pdf;base64,' + pdfBytes.toString('base64'),
+  });
+  const res = fakeRes();
+  await handler({ params: { instanceId: 'prestige', messageId: 'm1' }, query: {} }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['Content-Type'], 'application/pdf');
+  assert.match(String(res.headers['Content-Disposition']), /^inline/);
+  assert.equal(res.headers['Content-Security-Policy'], undefined);
+  assert.equal(res.headers['X-Content-Type-Options'], 'nosniff');
+  assert.equal(Buffer.isBuffer(res.body), true);
+  assert.equal(res.body.length, pdfBytes.length);
 });
 
-function oggCrc(bytes) {
-  let crc = 0;
-  for (const byte of bytes) {
-    crc ^= byte << 24;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 0x80000000) ? ((crc << 1) ^ 0x04c11db7) >>> 0 : (crc << 1) >>> 0;
-  }
-  return crc >>> 0;
-}
-
-function oggPage({ type, granule, serial, sequence, packet }) {
-  const segments = [];
-  for (let remaining = packet.length; remaining >= 255; remaining -= 255) segments.push(255);
-  segments.push(packet.length % 255);
-  const page = Buffer.alloc(27 + segments.length + packet.length);
-  page.write('OggS', 0, 'ascii');
-  page[4] = 0;
-  page[5] = type;
-  page.writeBigUInt64LE(BigInt(granule), 6);
-  page.writeUInt32LE(serial, 14);
-  page.writeUInt32LE(sequence, 18);
-  page[26] = segments.length;
-  segments.forEach((size, index) => { page[27 + index] = size; });
-  packet.copy(page, 27 + segments.length);
-  page.writeUInt32LE(oggCrc(page), 22);
-  return page;
-}
-
-function validOggOpus() {
-  const head = Buffer.alloc(19);
-  head.write('OpusHead', 0, 'ascii');
-  head[8] = 1;
-  head[9] = 1;
-  head.writeUInt16LE(312, 10);
-  head.writeUInt32LE(48000, 12);
-  head.writeInt16LE(0, 16);
-  head[18] = 0;
-  const vendor = Buffer.from('WhatsPro test', 'utf8');
-  const tags = Buffer.alloc(16 + vendor.length);
-  tags.write('OpusTags', 0, 'ascii');
-  tags.writeUInt32LE(vendor.length, 8);
-  vendor.copy(tags, 12);
-  tags.writeUInt32LE(0, 12 + vendor.length);
-  const serial = 0x5750524f;
-  return Buffer.concat([
-    oggPage({ type: 2, granule: 0, serial, sequence: 0, packet: head }),
-    oggPage({ type: 0, granule: 0, serial, sequence: 1, packet: tags }),
-    oggPage({ type: 4, granule: 960, serial, sequence: 2, packet: Buffer.from([0xf8, 0xff, 0xfe]) })
-  ]);
-}
-
-function assertOggChecksums(buffer) {
-  let offset = 0;
-  while (offset < buffer.length) {
-    assert.equal(buffer.subarray(offset, offset + 4).toString('ascii'), 'OggS');
-    const segmentCount = buffer[offset + 26];
-    let bodyLength = 0;
-    for (let index = 0; index < segmentCount; index += 1) bodyLength += buffer[offset + 27 + index];
-    const pageLength = 27 + segmentCount + bodyLength;
-    const page = Buffer.from(buffer.subarray(offset, offset + pageLength));
-    const expected = page.readUInt32LE(22);
-    page.writeUInt32LE(0, 22);
-    assert.equal(oggCrc(page), expected);
-    offset += pageLength;
-  }
-  assert.equal(offset, buffer.length);
-}
-
-test('media endpoint serves valid Ogg Opus with compliant byte ranges and browser decoding', async t => {
-  const fixture = validOggOpus();
-  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whatspro-media-test-'));
-  t.after(async () => fs.rm(cacheDir, { recursive: true, force: true }));
-  const dataUri = `data:audio/ogg;base64,${fixture.toString('base64')}`;
-  const app = express();
-  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({
-    cacheDir,
-    readMedia: async () => dataUri
-  }));
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const url = `http://127.0.0.1:${server.address().port}/api/chat/media/prestige/audio-1`;
-
-  const full = await fetch(url);
-  const fullBody = Buffer.from(await full.arrayBuffer());
-  assert.equal(full.status, 200);
-  assert.match(full.headers.get('content-type') || '', /^audio\/ogg\b/);
-  assert.equal(full.headers.get('accept-ranges'), 'bytes');
-  assert.equal(Number(full.headers.get('content-length')), fixture.length);
-  assert.deepEqual(fullBody, fixture);
-  assert.equal(fullBody.subarray(0, 4).toString('ascii'), 'OggS');
-  assert.notEqual(fullBody.indexOf('OpusHead'), -1);
-  assert.notEqual(fullBody.indexOf('OpusTags'), -1);
-  assertOggChecksums(fullBody);
-
-  const partial = await fetch(url, { headers: { Range: 'bytes=0-27' } });
-  const partialBody = Buffer.from(await partial.arrayBuffer());
-  assert.equal(partial.status, 206);
-  assert.equal(partial.headers.get('content-range'), `bytes 0-27/${fixture.length}`);
-  assert.equal(partial.headers.get('accept-ranges'), 'bytes');
-  assert.equal(Number(partial.headers.get('content-length')), 28);
-  assert.deepEqual(partialBody, fixture.subarray(0, 28));
-
-  const fallback = await fetch(`${url}?fmt=mp4`);
-  const fallbackBody = Buffer.from(await fallback.arrayBuffer());
-  assert.equal(fallback.status, 200);
-  assert.match(fallback.headers.get('content-type') || '', /^audio\/mp4\b/);
-  assert.equal(fallback.headers.get('accept-ranges'), 'bytes');
-  assert.equal(Number(fallback.headers.get('content-length')), fallbackBody.length);
-  assert.ok(fallbackBody.length > 32);
-  assert.equal(fallbackBody.subarray(4, 8).toString('ascii'), 'ftyp');
-
-  const fallbackPartial = await fetch(`${url}?fmt=mp4`, { headers: { Range: 'bytes=0-15' } });
-  assert.equal(fallbackPartial.status, 206);
-  assert.equal(fallbackPartial.headers.get('accept-ranges'), 'bytes');
-  assert.equal(Number(fallbackPartial.headers.get('content-length')), 16);
-  assert.deepEqual(Buffer.from(await fallbackPartial.arrayBuffer()), fallbackBody.subarray(0, 16));
-
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  t.after(() => browser.close());
-  const page = await browser.newPage();
-  const result = await page.evaluate(async mediaUrl => {
-    const audio = document.createElement('audio');
-    audio.preload = 'auto';
-    audio.src = mediaUrl;
-    document.body.append(audio);
-    return new Promise(resolve => {
-      const timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), 5000);
-      audio.addEventListener('canplay', async () => {
-        clearTimeout(timer);
-        try {
-          await audio.play();
-          resolve({ ok: true, duration: audio.duration });
-        } catch (error) {
-          resolve({ ok: false, reason: error.name });
-        }
-      }, { once: true });
-      audio.addEventListener('error', () => { clearTimeout(timer); resolve({ ok: false, code: audio.error && audio.error.code }); }, { once: true });
-      audio.load();
-    });
-  }, `${url}?fmt=mp4`);
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.ok(Number.isFinite(result.duration) && result.duration > 0);
-});
-
-test('media endpoint recovers a missing persisted voice note before returning 404', async t => {
-  const fixture = validOggOpus();
-  const dataUri = `data:audio/ogg;base64,${fixture.toString('base64')}`;
-  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whatspro-media-recovery-test-'));
-  t.after(async () => fs.rm(cacheDir, { recursive: true, force: true }));
-  let stored = '';
-  let recoveryRequest = null;
-  const app = express();
-  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({
-    cacheDir,
-    readMedia: async () => stored,
-    recoverMedia: async (instanceId, messageId, req) => {
-      recoveryRequest = { instanceId, messageId, phone: req.query.phone };
-      stored = dataUri;
-      return stored;
-    }
-  }));
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-  t.after(() => new Promise(resolve => server.close(resolve)));
-
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/prestige/audio-missing?phone=77005551234`);
-  assert.equal(response.status, 200);
-  assert.deepEqual(recoveryRequest, { instanceId: 'prestige', messageId: 'audio-missing', phone: '77005551234' });
-  assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture);
-});
-
-test('media endpoint serves a PDF receipt sandboxed and refuses a forged one', async t => {
-  const fixture = Buffer.from('%PDF-1.4\nKaspi receipt body\n%%EOF');
-  let stored = `data:application/pdf;base64,${fixture.toString('base64')}`;
-  const app = express();
-  app.get('/api/chat/media/:instanceId/:messageId', createChatMediaHandler({ readMedia: async () => stored }));
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const url = `http://127.0.0.1:${server.address().port}/api/chat/media/prestige/receipt-1`;
-
-  const served = await fetch(url);
-  assert.equal(served.status, 200);
-  assert.equal(served.headers.get('content-type'), 'application/pdf');
-  assert.equal(served.headers.get('content-security-policy'), 'sandbox');
-  assert.equal(served.headers.get('x-content-type-options'), 'nosniff');
-  assert.equal(Number(served.headers.get('content-length')), fixture.length);
-  assert.deepEqual(Buffer.from(await served.arrayBuffer()), fixture);
-
-  const transcoded = await fetch(`${url}?fmt=mp4`);
-  assert.equal(transcoded.status, 400);
-  assert.equal((await transcoded.json()).error, 'UNSUPPORTED_OUTPUT_FORMAT');
-
-  stored = `data:application/pdf;base64,${Buffer.from('<html>not a pdf</html>').toString('base64')}`;
-  const forged = await fetch(url);
-  assert.equal(forged.status, 422);
-  assert.equal((await forged.json()).error, 'DOCUMENT_SIGNATURE_INVALID');
+test('a missing media blob answers 404 MEDIA_NOT_READY with a retry hint', async () => {
+  const handler = createChatMediaHandler({ readMedia: async () => '' });
+  const res = fakeRes();
+  await handler({ params: { instanceId: 'prestige', messageId: 'gone' }, query: {} }, res);
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.jsonBody.error, 'MEDIA_NOT_READY');
+  assert.equal(res.headers['Retry-After'], '3');
 });

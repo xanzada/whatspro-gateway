@@ -130,7 +130,10 @@ test('SSE has no per-viewer replacement/cap and background polling failures are 
 
   const clientSource = await fs.readFile(path.join(__dirname, '..', 'public', 'chat.js'), 'utf8');
   assert.match(clientSource, /requestError\.status = response\.status/);
-  assert.match(clientSource, /console\.error\('Auth failed for instance', instanceId/);
+  // A stale 24h chat token triggers exactly one reload to mint a fresh token
+  // instead of a dead console error (operator report, 2026-08-20).
+  assert.match(clientSource, /handleAuthFailure\(\)/);
+  assert.match(clientSource, /sessionStorage\.setItem\('chatAuthReloadAt'/);
   assert.match(clientSource, /console\.error\('Inbox load failed for instance', instanceId/);
   assert.match(clientSource, /console\.error\('History load failed for instance', instanceId/);
 });

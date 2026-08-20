@@ -234,9 +234,11 @@ function createChatMediaHandler({ readMedia, recoverMedia, cacheDir = DEFAULT_CA
         const pdf = decodeDocumentDataUri(mediaData);
         res.set({
           'Cache-Control': 'private, max-age=3600',
-          // A PDF can carry scripts and this is the operator's own origin, so the
-          // built-in viewer is sandboxed rather than trusted with the receipt.
-          'Content-Security-Policy': 'sandbox',
+          // No CSP sandbox here: a bare sandbox directive makes the browser block
+          // its own built-in PDF viewer, so the receipt simply "would not open"
+          // (operator report, 2026-08-20). PDF viewer JavaScript runs inside the
+          // viewer process, never with this origin's privileges; nosniff +
+          // inline keep the response a plain document.
           'Content-Disposition': 'inline; filename="document.pdf"',
           'Content-Length': String(pdf.buffer.length),
           'Content-Type': pdf.mimeType,

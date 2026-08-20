@@ -80,6 +80,19 @@
   function headers(extra) {
     return Object.assign({}, chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}, extra || {});
   }
+
+  // The chat token lives 24h; a panel left open longer used to strand every
+  // control at once - archive/delete buttons, refreshes, PDF links all failed
+  // with a bare 401. One reload mints a fresh token (the page render issues
+  // it); the sessionStorage guard keeps a genuinely broken session from
+  // cycling forever (operator report, 2026-08-20).
+  function handleAuthFailure() {
+    var last = 0;
+    try { last = Number(sessionStorage.getItem('chatAuthReloadAt') || 0); } catch (_) {}
+    if (Date.now() - last < 60000) return;
+    try { sessionStorage.setItem('chatAuthReloadAt', String(Date.now())); } catch (_) {}
+    location.reload();
+  }
   function endpoint(name, suffix) { return apiBase + endpoints[name] + (suffix || ''); }
 
   async function requestJson(url, options) {
@@ -421,12 +434,23 @@
       chats = core.applyPendingViews(chats, Object.keys(state.pendingViews));
       var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt]; }));
       state.chats = chats;
+      state.inboxRetried = false;
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
       if (state.activePhone && (!currentChat() || (state.activeTab === 'sos' && core.chatColumn(currentChat()) !== 'sos'))) closeChat();
     } catch (error) {
-      if (error && (error.status === 401 || error.status === 403)) console.error('Auth failed for instance', instanceId, 'inbox', error);
-      else console.error('Inbox load failed for instance', instanceId, error);
-      if (force) el.contactList.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loadFailed')) + '</p></div>';
+      if (error && (error.status === 401 || error.status === 403)) { handleAuthFailure(); return; }
+      console.error('Inbox load failed for instance', instanceId, error);
+      if (force) {
+        // Transient failures (deploy restarts) used to stick on "load failed"
+        // until a manual refresh. Retry once quietly, then show the error.
+        if (!state.inboxRetried) {
+          state.inboxRetried = true;
+          setTimeout(function () { loadInbox(true); }, 2500);
+          return;
+        }
+        state.inboxRetried = false;
+        el.contactList.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loadFailed')) + '</p></div>';
+      }
     } finally {
       state.inboxBusy = false;
       if (state.inboxDirty) { state.inboxDirty = false; loadInbox(true); }
@@ -446,8 +470,8 @@
       state.history = history;
       if (force || signature !== state.historySignature) { state.historySignature = signature; renderHistory(forceScroll); }
     } catch (error) {
-      if (error && (error.status === 401 || error.status === 403)) console.error('Auth failed for instance', instanceId, 'history', error);
-      else console.error('History load failed for instance', instanceId, error);
+      if (error && (error.status === 401 || error.status === 403)) { handleAuthFailure(); return; }
+      console.error('History load failed for instance', instanceId, error);
       if (requestedPhone === state.activePhone) el.messages.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('loadFailed')) + '</p></div>';
     } finally {
       state.historyBusy = false;
@@ -526,7 +550,10 @@
       showToast(t(action === 'close' ? 'archiveDone' : action === 'restore' ? 'restoreDone' : 'deleteDone'));
       state.activeTab = action === 'close' ? 'archive' : action === 'restore' ? 'all' : state.activeTab;
       closeChat(); await loadInbox(true);
-    } catch (error) { showToast(error.message, true); }
+    } catch (error) {
+      if (error && (error.status === 401 || error.status === 403)) { handleAuthFailure(); return; }
+      showToast(error.message, true);
+    }
     finally { state.actionBusy = false; updateComposer(); }
   }
 
@@ -554,7 +581,10 @@
       setLock(lockResult && (lockResult.expiresAt || lockResult.ttl) ? lockResult : { ttl: 60 });
       state.historySignature = ''; state.inboxSignature = '';
       await Promise.all([loadHistory(true, false), loadInbox(true), loadLock()]);
-    } catch (error) { el.messageInput.value = text; showToast(t('sendFailed'), true); }
+    } catch (error) {
+      if (error && (error.status === 401 || error.status === 403)) { handleAuthFailure(); return; }
+      el.messageInput.value = text; showToast(t('sendFailed'), true);
+    }
     finally { state.sending = false; updateComposer(); }
   }
 

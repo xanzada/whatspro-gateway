@@ -106,7 +106,9 @@ test('a mime-less Kaspi PDF survives ingestion, storage, serving and rendering',
   const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat/media/${instanceId}/${messageId}`);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'application/pdf');
-  assert.equal(response.headers.get('content-security-policy'), 'sandbox');
+  // No CSP sandbox header: a bare sandbox directive makes the browser block
+  // its own built-in PDF viewer - the receipt "would not open" (2026-08-20).
+  assert.equal(response.headers.get('content-security-policy'), null);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   const delivered = Buffer.from(await response.arrayBuffer());
   assert.deepEqual(delivered, pdf, 'the operator receives the exact bytes the customer sent');
