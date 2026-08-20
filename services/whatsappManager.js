@@ -1179,6 +1179,11 @@ async function getContactPhoneFromMessage(msg) {
 async function wasBotSending(instanceId, phone) {
     if (!phone) return false;
 
+    // Same canonicalization as markBotSending (see the note there).
+    if (String(phone).endsWith('@lid')) {
+        const resolved = await resolveLidPhone(instanceId, phone).catch(() => '');
+        if (resolved && !String(resolved).endsWith('@lid')) phone = resolved;
+    }
     const key = `bot_sending:${instanceId}:${phone}`;
     const localMarker = takeLocalBotSend(key);
     const localMatch = localMarker.matched;
@@ -2006,9 +2011,18 @@ async function getInstanceStatus(instanceId) {
 }
 
 async function markBotSending(instanceId, phone, chatId) {
-    const cleanPhone = normalizePhoneFromCandidates([phone, chatId]);
+    let cleanPhone = normalizePhoneFromCandidates([phone, chatId]);
     if (!cleanPhone) return null;
 
+    // The marker must live under the canonical phone: the message_create event
+    // resolves the stanza LID to the real number, so a marker keyed by the raw
+    // LID never matches and the bot reply gets misread as a human operator
+    // reply (live bug, 2026-08-21: greeting labeled ОПЕРАТОР + chat jumped to
+    // the Оператор column).
+    if (cleanPhone.endsWith('@lid')) {
+        const resolved = await resolveLidPhone(instanceId, cleanPhone).catch(() => '');
+        if (resolved && !resolved.endsWith('@lid')) cleanPhone = resolved;
+    }
     const key = `bot_sending:${instanceId}:${cleanPhone}`;
     let redisMarked = false;
     if (redisClient.isOpen) {

@@ -1960,7 +1960,10 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
 
   // 1-ӨЗГЕРІС: Міндетті түрде телефонды нормализациялау (RC-7 шешімі)
   // Бұл 8707, +7707 форматтарының барлығын таза 7707... форматына әкеледі.
-  const cleanPhone = normalizePhone(phone);
+  // A linked-device LID resolves to the canonical phone first, so the send,
+  // the bot-send marker and the stored history entry all share one identity
+  // (the raw LID made the bot reply look like a human operator, 2026-08-21).
+  const cleanPhone = await resolveChatPhoneParam(instanceId, phone);
   if (!isValidChatPhone(cleanPhone)) return res.status(400).json({ error: 'INVALID_PHONE_FORMAT' });
   if (requestId && !isValidSendRequestId(requestId)) return res.status(400).json({ error: 'BAD_REQUEST_ID' });
 

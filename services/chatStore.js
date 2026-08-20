@@ -501,6 +501,8 @@ module.exports = {
   chatStore,
   appendMessage: chatStore.appendMessage,
   appendMessageOnce: chatStore.appendMessageOnce,
+  rememberLidPhone: chatStore.rememberLidPhone,
+  resolveLidPhone: chatStore.resolveLidPhone,
   updateMessageReceipt: chatStore.updateMessageReceipt,
   storeMedia: chatStore.storeMedia,
   readMedia: chatStore.readMedia,
