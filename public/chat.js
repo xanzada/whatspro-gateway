@@ -28,7 +28,7 @@
   var dictionary = {
     kk: {
       title: 'Оператор чаты', operator: 'Оператор', search: 'Аты, телефоны немесе хабар бойынша іздеу',
-      tabs: { sos: 'SOS', new: 'Жаңа', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
+      tabs: { sos: 'SOS', all: 'Бәрі', operator: 'Опер', archive: 'Архив' },
       select: 'Чатты таңдаңыз', selectHint: 'Толық хат алмасу тарихы осы жерде шығады.',
       noChats: 'Бұл бөлімде чаттар жоқ', noResults: 'Ештеңе табылмады', noMessages: 'Хабарламалар жоқ',
       loading: 'Жүктелуде…', loadFailed: 'Жүктеу мүмкін болмады', reply: 'Жауап жазу…', archived: 'Чат архивте',
@@ -43,7 +43,7 @@
     },
     ru: {
       title: 'Чат оператора', operator: 'Оператор', search: 'Поиск по имени, телефону или сообщению',
-      tabs: { sos: 'SOS', new: 'Новые', all: 'Все', operator: 'Опер', archive: 'Архив' },
+      tabs: { sos: 'SOS', all: 'Все', operator: 'Опер', archive: 'Архив' },
       select: 'Выберите чат', selectHint: 'Здесь появится полная история сообщений.',
       noChats: 'В этом разделе нет чатов', noResults: 'Ничего не найдено', noMessages: 'Нет сообщений',
       loading: 'Загрузка…', loadFailed: 'Не удалось загрузить', reply: 'Написать ответ…', archived: 'Чат в архиве',
@@ -68,7 +68,7 @@
 
   var state = {
     lang: localStorage.getItem('operator_chat_lang') === 'ru' ? 'ru' : 'kk',
-    chats: [], activeTab: 'new', activePhone: '', history: [],
+    chats: [], activeTab: 'all', activePhone: '', history: [],
     inboxBusy: false, historyBusy: false, inboxDirty: false, historyDirty: false, actionBusy: false, sending: false,
     inboxSignature: '', historySignature: '', lockUntil: 0,
     pollTimer: 0, lockTimer: 0, reconnectTimer: 0, eventAbort: null, eventFailures: 0,
@@ -136,7 +136,7 @@
     var counts = { sos: 0, new: 0, all: 0, operator: 0, archive: 0 };
     var sosUnread = 0;
     state.chats.forEach(function (chat) { var key = core.chatColumn(chat); if (counts[key] != null) counts[key] += 1; if (key === 'sos' && chat.sosUnread) sosUnread += 1; });
-    el.tabs.innerHTML = ['sos', 'new', 'all', 'operator', 'archive'].map(function (key) {
+    el.tabs.innerHTML = ['sos', 'all', 'operator', 'archive'].map(function (key) {
       return '<button class="tab' + (key === 'sos' && sosUnread ? ' has-sos-alert' : '') + '" type="button" role="tab" aria-selected="' + (state.activeTab === key) + '" data-tab="' + key + '">' +
         core.escapeHtml(t('tabs')[key]) + (counts[key] ? ' · ' + counts[key] : '') + '</button>';
     }).join('');

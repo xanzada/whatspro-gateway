@@ -86,3 +86,15 @@ test('timestamps accept both seconds and ISO values', () => {
   assert.match(core.formatTime(1_700_000_000, 'ru'), /^\d{2}:\d{2}$/);
   assert.match(core.formatTime('2024-01-01T12:34:00Z', 'ru'), /^\d{2}:\d{2}$/);
 });
+
+
+test('new and all merge into one column; sos still wins', () => {
+  // The operator panel used to bounce a card from "Оператор" back to "Жаңа" on
+  // every client reply. Columns are merged now: fresh chats live in "Бәрі",
+  // while chatState is untouched so the unread badge keeps working inside it.
+  assert.equal(core.chatColumn({ state: 'new', unread: true }), 'all');
+  assert.equal(core.chatColumn({ state: 'all' }), 'all');
+  assert.equal(core.chatColumn({ state: 'operator' }), 'operator');
+  assert.equal(core.chatColumn({ state: 'new', sos: true, sosExpiresAt: Date.now() + 60000 }), 'sos');
+  assert.equal(core.chatState({ state: 'new', unread: true }), 'new', 'chatState unchanged: unread badge source');
+});

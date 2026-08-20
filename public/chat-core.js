@@ -24,7 +24,13 @@
   }
 
   function chatColumn(chat) {
-    return chat && chat.sos === true && Number(chat.sosExpiresAt || 0) > Date.now() ? 'sos' : chatState(chat);
+    if (chat && chat.sos === true && Number(chat.sosExpiresAt || 0) > Date.now()) return 'sos';
+    var column = chatState(chat);
+    // "Zhana" and "Baru" used to be two columns answering one question - what
+    // needs the operator's eyes - and every client reply bounced the card
+    // between them. One merged column now holds both; the unread badge still
+    // marks what is fresh inside it (operator request, 2026-08-20).
+    return column === 'new' ? 'all' : column;
   }
 
   function applyPendingViews(chats, phones) {

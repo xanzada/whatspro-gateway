@@ -192,7 +192,16 @@ async function saveIncomingMessage(payload, dependencies = {}) {
   const timestamp = rawTimestamp > 0 ? (rawTimestamp < 1e12 ? rawTimestamp * 1000 : rawTimestamp) : Date.now();
   const entry = buildHistoryEntry(payload, instanceId, phone, timestamp);
 
-  const state = entry.direction === 'incoming' ? 'new' : undefined;
+  // A chat the operator has taken over (or an archived one) must not jump back
+  // to "new" on every client reply: the client answering the operator IS the
+  // operator conversation. The unread badge still comes from the unread flag;
+  // the column stays where the operator put it (live complaint, 2026-08-20).
+  const currentState = entry.direction === 'incoming' && typeof store.getState === 'function'
+    ? await store.getState(instanceId, phone).catch(() => '')
+    : '';
+  const state = entry.direction === 'incoming'
+    ? (currentState === 'operator' || currentState === 'archive' ? undefined : 'new')
+    : undefined;
   const stored = await store.appendMessageOnce(instanceId, phone, entry, { state, preserveStateOnDuplicate: true });
   if (stored.stale || !stored.inserted) return { skipped: true, reason: stored.stale ? 'stale_message' : 'duplicate_message', instanceId, phone, timestamp };
   await publishEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state }).catch(() => {});
