@@ -179,7 +179,16 @@ async function saveIncomingMessage(payload, dependencies = {}) {
   const store = dependencies.store || chatStore;
   const publishEvent = dependencies.publishEvent || publishChatEvent;
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
-  const phone = getPayloadPhone(payload);
+  const rawPhone = getPayloadPhone(payload);
+  // A linked-device LID must resolve to the real phone before anything is
+  // stored: a chat filed under the LID is a ghost whose history never loads in
+  // the panel (live bug, 2026-08-21). The mapping is persisted by the
+  // transport's resolver, so this stays fast and offline-safe.
+  const resolveLid = dependencies.resolveLidPhone
+    || ((id, value) => (typeof chatStore.resolveLidPhone === 'function' ? chatStore.resolveLidPhone(id, value) : Promise.resolve('')));
+  const phone = rawPhone && /@lid$/i.test(rawPhone)
+    ? (await resolveLid(instanceId, rawPhone).catch(() => '')) || rawPhone
+    : rawPhone;
   if (!instanceId || isGroupOrStatusPayload(payload) || !isValidChatPhone(phone)) return { skipped: true, reason: 'missing_instance_or_phone' };
   if (isNonConversationalPayload(payload)) return { skipped: true, reason: 'non_conversational' };
   const allowed = await (dependencies.isPhoneAllowed || isPhoneAllowed)(instanceId, phone);

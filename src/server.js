@@ -512,6 +512,14 @@ async function deleteScanRequest(requestId) {
   await redisClient.hDel(SCAN_REQUESTS_KEY, requestId);
 }
 
+// Ghost guard: a linked-device LID (or its digits form, which the panel
+// produces) resolves to the real phone through the persisted lid map, so an
+// old ghost chat merges into the real conversation instead of failing to load
+// with BAD_PHONE (live bug, 2026-08-21).
+function resolveChatPhoneParam(instanceId, rawPhone) {
+  return chatStore.resolveLidPhone(instanceId, rawPhone).catch(() => normalizePhone(rawPhone));
+}
+
 function chatHistoryKey(instanceId, phone) {
   return `chatwoot:history:${instanceId}:${phone}`;
 }
@@ -1512,8 +1520,14 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   const candidates = [];
   const seen = new Set();
 
+  for (const row of sosRows) {
+    row.phone = await chatStore.resolveLidPhone(instanceId, row.phone).catch(() => row.phone);
+  }
   for (const row of [...sosRows.map(row => ({ phone: row.phone, updatedAt: row.sosCreatedAt || 0 })), ...inboxRows, ...legacyHistoryKeys]) {
-    const phone = normalizePhone(row.phone);
+    // A linked-device LID resolves to the real phone before the dedupe check,
+    // so a ghost LID chat merges into the real conversation instead of
+    // haunting the panel as a second, unloadable entry (live bug, 2026-08-21).
+    const phone = await chatStore.resolveLidPhone(instanceId, row.phone).catch(() => normalizePhone(row.phone));
     if (!isValidChatPhone(phone) || !allowsPhone(testModePolicy, phone) || seen.has(phone)) continue;
     seen.add(phone);
     candidates.push({ phone, updatedAt: Number(row.updatedAt) || 0 });
@@ -1667,7 +1681,7 @@ app.get('/api/chat/inbox-legacy/:instanceId', requireChatUiOrApi, async (req, re
 
 app.get('/api/chat/history/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
-  const phone = normalizePhone(req.params.phone || '');
+  const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_PHONE' });
   if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
@@ -1705,7 +1719,7 @@ app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (r
 });
 app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
-    const phone = String(req.params.phone || '').replace(/\D/g, '');
+    const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
     const requestId = String(req.body?.requestId || '');
 
@@ -1829,7 +1843,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
 });
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
-  const phone = normalizePhone(req.params.phone || '');
+  const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
   if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
   const ttl = redisClient.isOpen ? await redisClient.sendCommand(['TTL', operatorActiveKey(instanceId, phone)]).catch(() => 0) : 0;
@@ -1839,7 +1853,7 @@ app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async 
 
 app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
-  const phone = normalizePhone(req.params.phone || '');
+  const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   const action = String(req.body?.action || '').trim().toLowerCase();
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
   if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });

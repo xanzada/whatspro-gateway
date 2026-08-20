@@ -28,7 +28,7 @@ const { isGroupOrStatusJid, isValidChatPhone, normalizePhone, normalizePhoneFrom
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { sosStore } = require('./sosStore');
-const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
+const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES, rememberLidPhone, resolveLidPhone } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
 
@@ -1300,7 +1300,7 @@ async function getContactInfoFromMessage(msg) {
     }
 }
 
-async function getPhoneFromLid(client, values = []) {
+async function getPhoneFromLid(client, values = [], instanceId = '') {
     if (typeof client.getContactLidAndPhone !== 'function') return '';
 
     const lid = values.find(value => typeof value === 'string' && value.endsWith('@lid'));
@@ -1313,7 +1313,12 @@ async function getPhoneFromLid(client, values = []) {
             result?.[0]?.phone
         ]);
 
-        if (phone) console.log(`✅ [LID RESOLVER] ${lid} -> ${phone}@c.us`);
+        if (phone) {
+            console.log(`✅ [LID RESOLVER] ${lid} -> ${phone}@c.us`);
+            // Persist the mapping: later messages and every panel read path
+            // resolve this lid even when the live lookup times out.
+            if (instanceId) rememberLidPhone(instanceId, lid, phone).catch(() => {});
+        }
         return phone;
     } catch (error) {
         console.warn(`⚠️ [LID RESOLVER] ${lid} -> phone табылмады:`, error.message);
@@ -1680,8 +1685,16 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             // found at all: normalizePhoneFromCandidates returns the lid itself as a
             // valid value, which left the resolver below unreachable dead code.
             if ((!cleanNumber || /@lid$/i.test(cleanNumber)) && typeof getPhoneFromLid === 'function') {
-                const resolvedPhone = await getPhoneFromLid(client, possibleJids);
+                const resolvedPhone = await getPhoneFromLid(client, possibleJids, instanceId);
                 if (resolvedPhone) cleanNumber = resolvedPhone;
+            }
+            // A live LID lookup can time out; a previously resolved mapping
+            // still files the chat under the real phone instead of spawning a
+            // ghost chat whose history never loads in the panel (2026-08-21).
+            if (!cleanNumber || /@lid$/i.test(cleanNumber)) {
+                const lidCandidate = cleanNumber || possibleJids.map(String).find(value => /@lid$/i.test(value)) || '';
+                const cached = await resolveLidPhone(instanceId, lidCandidate).catch(() => '');
+                if (cached && !/@lid$/i.test(cached)) cleanNumber = cached;
             }
             if (typeof getContactInfoFromMessage === 'function') {
                 contactInfo = await getContactInfoFromMessage(msg);

@@ -12,7 +12,12 @@
   }
 
   function normalizePhone(value) {
-    return String(value || '').replace(/\D/g, '');
+    // Keep the @lid suffix: without it the panel asks the server for a
+    // digits-only LID, which is not a phone, and history fails to load
+    // (ghost-chat bug, 2026-08-21).
+    var raw = String(value || '').trim();
+    if (/@lid$/i.test(raw)) return raw.toLowerCase();
+    return raw.replace(/\D/g, '');
   }
 
   function chatState(chat) {

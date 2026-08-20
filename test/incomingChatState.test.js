@@ -42,3 +42,22 @@ test('a store without getState keeps the legacy new behavior', async () => {
   await __test.saveIncomingMessage({ ...base, messageId: 'lg-1' }, deps(store));
   assert.equal(calls[0].state, 'new');
 });
+
+test('an inbound message from a linked-device LID files under the resolved real phone', async () => {
+  // Live bug 2026-08-21: a chat keyed by the raw LID is a ghost whose history
+  // never loads in the panel (BAD_PHONE). The persisted lid map resolves it
+  // before anything is stored.
+  const store = fakeStore('all');
+  const depsWithMap = { ...deps(store), resolveLidPhone: async (id, value) => value === '224043110273161@lid' ? '77476884956' : '' };
+  const result = await __test.saveIncomingMessage({ ...base, phone: '224043110273161@lid', messageId: 'lid-1' }, depsWithMap);
+  assert.equal(result.saved, true);
+  assert.equal(store.calls[0].phone, '77476884956');
+});
+
+test('an unmapped LID keeps its own identity instead of vanishing', async () => {
+  const store = fakeStore('all');
+  const depsNoMap = { ...deps(store), resolveLidPhone: async () => '' };
+  const result = await __test.saveIncomingMessage({ ...base, phone: '224043110273161@lid', messageId: 'lid-2' }, depsNoMap);
+  assert.equal(result.saved, true);
+  assert.equal(store.calls[0].phone, '224043110273161@lid');
+});

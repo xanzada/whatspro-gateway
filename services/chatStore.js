@@ -5,6 +5,7 @@ const { parseScoredMembers, parseFieldMap } = require('./redisReply');
 
 const STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const LID_MAP_TTL_SECONDS = 30 * 24 * 60 * 60;
 const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
 const CHAT_STATES = new Set(['new', 'all', 'operator', 'archive']);
@@ -24,7 +25,8 @@ const keys = {
   receipts: (instanceId, phone) => `chatwoot:receipts:${instanceId}:${phone}`,
   expiry: instanceId => `chatwoot:expiry:${instanceId}`,
   operator: (instanceId, phone) => `operator_active:${instanceId}:${phone}`,
-  mute: (instanceId, phone) => `mute:${instanceId}:${phone}`
+  mute: (instanceId, phone) => `mute:${instanceId}:${phone}`,
+  lidMap: (instanceId, lid) => `chatwoot:lid-map:${instanceId}:${lid}`
 };
 
 function parseJson(raw) {
@@ -460,7 +462,31 @@ function createChatStore(redis, options = {}) {
     return normalizedAction;
   }
 
-  return { appendMessage, appendMessageOnce, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, keys };
+  // WhatsApp privacy LIDs are stable per account: once a linked-device stanza
+  // resolves to the real phone, remembering the mapping lets every read/write
+  // path file the chat under the real phone even when the live lookup times
+  // out. A chat keyed by the raw LID is a ghost whose history never loads in
+  // the panel (live bug, 2026-08-21).
+  async function rememberLidPhone(instanceId, lid, phone) {
+    const lidNorm = String(lid || '').trim().toLowerCase();
+    const phoneNorm = normalizePhone(phone);
+    if (!/^\d+@lid$/.test(lidNorm) || !phoneNorm || /@lid$/.test(phoneNorm)) return false;
+    await command(['SET', keys.lidMap(instanceId, lidNorm), phoneNorm, 'EX', String(LID_MAP_TTL_SECONDS)], false);
+    return true;
+  }
+
+  async function resolveLidPhone(instanceId, rawPhone) {
+    const direct = normalizePhone(rawPhone);
+    if (direct && !direct.endsWith('@lid')) return direct;
+    const lid = direct && direct.endsWith('@lid')
+      ? direct
+      : `${String(rawPhone || '').replace(/\D/g, '')}@lid`;
+    if (!/^\d+@lid$/.test(lid)) return direct;
+    const mapped = await command(['GET', keys.lidMap(instanceId, lid)], '');
+    return mapped || direct;
+  }
+
+  return { appendMessage, appendMessageOnce, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, rememberLidPhone, resolveLidPhone, keys };
 }
 
 const chatStore = createChatStore(redisClient);
@@ -468,6 +494,7 @@ const chatStore = createChatStore(redisClient);
 module.exports = {
   STANDARD_TTL_SECONDS,
   ARCHIVE_TTL_SECONDS,
+  LID_MAP_TTL_SECONDS,
   MAX_MEDIA_BYTES,
   CHAT_STATES,
   createChatStore,

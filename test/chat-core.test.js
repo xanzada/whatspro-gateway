@@ -130,3 +130,12 @@ test('sos window semantics: expiry lands untouched chats in the merged column, h
   // Archived chat must never bounce back to Бәрі on a client reply (sticky).
   assert.equal(core.chatColumn({ sos: false, state: 'archive', unread: true }), 'archive');
 });
+
+test('normalizePhone keeps the @lid suffix so ghost chats stay resolvable', () => {
+  const core = require('../public/chat-core.js');
+  // Stripping the suffix made the panel request history for digits-only LIDs,
+  // which the server rejects as not-a-phone (live bug, 2026-08-21).
+  assert.equal(core.normalizePhone('224043110273161@lid'), '224043110273161@lid');
+  assert.equal(core.normalizePhone('224043110273161@LID'), '224043110273161@lid');
+  assert.equal(core.normalizePhone('+7 (747) 688-49-56'), '77476884956');
+});
