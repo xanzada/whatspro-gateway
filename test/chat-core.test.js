@@ -98,3 +98,17 @@ test('new and all merge into one column; sos still wins', () => {
   assert.equal(core.chatColumn({ state: 'new', sos: true, sosExpiresAt: Date.now() + 60000 }), 'sos');
   assert.equal(core.chatState({ state: 'new', unread: true }), 'new', 'chatState unchanged: unread badge source');
 });
+
+test('a resolved SOS chat leaves the sos column and stays with the operator', () => {
+  const core = require('../public/chat-core.js');
+  const future = Date.now() + 60 * 1000;
+  // While the marker is active the chat is pinned to the SOS column.
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: future, state: 'operator' }), 'sos');
+  // Operator replied -> marker cleared server-side -> the chat lives in the
+  // operator column only (never duplicated into the merged all column).
+  assert.equal(core.chatColumn({ sos: false, sosExpiresAt: 0, state: 'operator' }), 'operator');
+  // Natural marker expiry falls back to the stored state the same way.
+  assert.equal(core.chatColumn({ sos: true, sosExpiresAt: Date.now() - 1000, state: 'operator' }), 'operator');
+  // ...and an operator chat with a client reply still stays put (sticky state).
+  assert.equal(core.chatColumn({ sos: false, state: 'operator', unread: true }), 'operator');
+});

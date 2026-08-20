@@ -27,6 +27,7 @@ const path = require('path');
 const { isGroupOrStatusJid, isValidChatPhone, normalizePhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
+const { sosStore } = require('./sosStore');
 const { appendMessageOnce, storeMedia, updateMessageReceipt, MAX_MEDIA_BYTES } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 const { allowsPhone, getTestModePolicy, isPhoneAllowed } = require('./testModePolicy');
@@ -1273,6 +1274,9 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source, mess
         state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
     });
     if (stored.stale) return null;
+    // An operator reply resolves the SOS: the chat moves to the "Оператор"
+    // column and stays there instead of lingering in SOS for the marker TTL.
+    await sosStore.clear(instanceId, phone).catch(() => {});
     if (stored.inserted) await publishChatEvent({ type: 'history.append', instanceId, phone, message: stored });
     return stored;
 }

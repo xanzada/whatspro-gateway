@@ -650,6 +650,13 @@ async function applyOperatorSendEffects(data) {
     state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
   });
   if (stored.stale) return;
+  // An operator reply means the SOS is being handled - resolve the marker so
+  // the chat leaves the SOS column immediately and lives in "Оператор" until
+  // the operator closes it. The marker used to survive for up to an hour and
+  // pinned the chat in the SOS column even while the operator was answering
+  // (operator request, 2026-08-20). The inbox refetch after the published
+  // event picks up sos=false on its own.
+  await sosStore.clear(instanceId, phone).catch(() => {});
   if (remainingTtl > 0) {
     const lockScript = [
       "local deletedAt = tonumber(redis.call('GET', KEYS[1]) or '0')",
