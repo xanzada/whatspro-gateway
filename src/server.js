@@ -438,6 +438,17 @@ function publicApiBase(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
+function chatParentOrigin() {
+  const fallback = 'https://hub.alemi.kz';
+  try {
+    const url = new URL(String(process.env.CHAT_PARENT_ORIGIN || fallback).trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return fallback;
+    return url.origin;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 // Cache-bust the panel's static bundles with the process start time: operators
 // keep the panel open for days, and a stale chat.js stranded already-shipped
 // fixes (live complaint 2026-08-21: buttons and PDF "still broken" long after
@@ -454,6 +465,7 @@ async function renderChatHtml(req, res) {
     branding: tenant.branding,
     chatToken: issueChatToken(instance),
     apiBase: publicApiBase(req),
+    parentOrigin: chatParentOrigin(),
     endpoints: {
       inbox: '/api/chat/inbox',
       history: '/api/chat/history',

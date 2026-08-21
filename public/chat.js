@@ -18,6 +18,7 @@
   }
 
   var apiBase = safeApiBase(config.apiBase);
+  var parentOrigin = safeParentOrigin(config.parentOrigin);
   var chatToken = String(config.chatToken || '');
   var endpoints = Object.assign({
     inbox: '/api/chat/inbox', history: '/api/chat/history', send: '/api/chat/send',
@@ -75,10 +76,32 @@
     inboxSignature: '', historySignature: '', lockUntil: 0,
     pollTimer: 0, lockTimer: 0, reconnectTimer: 0, eventAbort: null, eventFailures: 0,
     eventRefreshTimer: 0, toastTimer: 0, mediaAbort: null, audioUrls: new Map(), retrySend: null,
-    pendingViews: Object.create(null)
+    pendingViews: Object.create(null), parentSosUnread: null, parentSosRevision: 0
   };
 
   function t(key) { return dictionary[state.lang][key] == null ? key : dictionary[state.lang][key]; }
+  function safeParentOrigin(value) {
+    try {
+      var url = new URL(String(value || ''));
+      return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password ? url.origin : '';
+    } catch (_) { return ''; }
+  }
+  function publishParentSosUnread() {
+    if (!parentOrigin || window.parent === window) return;
+    var count = state.chats.reduce(function (total, chat) {
+      return total + (chat && chat.sos && chat.sosUnread ? 1 : 0);
+    }, 0);
+    if (state.parentSosUnread === count) return;
+    state.parentSosUnread = count;
+    state.parentSosRevision += 1;
+    window.parent.postMessage({
+      type: 'platform.chat.sos-unread',
+      schema_version: 1,
+      instance: instanceId,
+      sos_unread: count,
+      revision: 'whatspro:' + Date.now().toString(36) + ':' + state.parentSosRevision + ':' + count
+    }, parentOrigin);
+  }
   function headers(extra) {
     return Object.assign({}, chatToken ? { 'x-chat-token': chatToken, 'x-chat-instance': instanceId } : {}, extra || {});
   }
@@ -669,6 +692,7 @@
       chats = core.applyPendingViews(chats, Object.keys(state.pendingViews));
       var signature = JSON.stringify(chats.map(function (chat) { return [chat.phone, chat.state, chat.lastAt, chat.lastText, chat.contactName || chat.name, chat.unread, chat.hasOperator, chat.closed, chat.sos, chat.sosUnread, chat.sosExpiresAt]; }));
       state.chats = chats;
+      publishParentSosUnread();
       state.inboxRetried = false;
       if (force || signature !== state.inboxSignature) { state.inboxSignature = signature; renderContacts(); renderHeader(); }
       if (state.activePhone && (!currentChat() || (state.activeTab === 'sos' && core.chatColumn(currentChat()) !== 'sos'))) closeChat();
