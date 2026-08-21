@@ -116,6 +116,18 @@
     .send-btn { flex:0 0 auto; background:#22c55e; color:#fff; }
     .toast { position:fixed; top:max(16px,env(safe-area-inset-top)); left:50%; z-index:100; transform:translate(-50%,-90px); opacity:0; display:flex; align-items:center; gap:8px; max-width:calc(100vw - 28px); padding:11px 17px; border-radius:22px; background:#293747; box-shadow:0 10px 30px #0007; transition:.25s ease; }
     .toast.show { transform:translate(-50%,0); opacity:1; }
+    .modal-backdrop { position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; padding:18px; background:#0b111ad0; }
+    .modal-backdrop.show { display:flex; }
+    .modal-card { width:100%; max-width:340px; padding:18px; border-radius:16px; background:#1c2733; box-shadow:0 18px 50px #000a; }
+    .modal-text { margin:0 0 16px; font-size:15px; line-height:1.45; }
+    .modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+    .modal-btn { padding:9px 16px; border:0; border-radius:10px; font:inherit; font-size:14px; cursor:pointer; text-decoration:none; }
+    .modal-btn.ghost { background:#2b3948; color:#e7eef7; }
+    .modal-btn.primary { background:#2f6df6; color:#fff; }
+    .media-viewer { position:fixed; inset:0; z-index:210; display:none; flex-direction:column; background:#0b111af5; }
+    .media-viewer.show { display:flex; }
+    .media-viewer-bar { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:10px 14px; }
+    .media-viewer iframe { flex:1; width:100%; border:0; background:#fff; }
     ::-webkit-scrollbar { width:5px; height:5px; } ::-webkit-scrollbar-thumb { background:#3b4b5e; border-radius:8px; }
     @media (max-width:768px) {
       .sidebar,.chat { position:absolute; inset:0; width:100%; min-width:0; }
@@ -165,6 +177,22 @@
       <main class="messages-viewport" id="messages-viewport"><div class="messages" id="messages"></div></main>
       <footer class="composer"><div class="composer-inner"><textarea id="message-input" rows="1" disabled data-i18n-placeholder="reply"></textarea><button class="send-btn" id="send-btn" type="button" disabled data-i18n-title="send"><i class="fa-solid fa-paper-plane"></i></button></div></footer>
     </section>
+  </div>
+  <div class="modal-backdrop" id="confirm-backdrop" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <p class="modal-text" id="confirm-text"></p>
+      <div class="modal-actions">
+        <button type="button" class="modal-btn ghost" id="confirm-cancel"></button>
+        <button type="button" class="modal-btn primary" id="confirm-ok"></button>
+      </div>
+    </div>
+  </div>
+  <div class="media-viewer" id="media-viewer">
+    <div class="media-viewer-bar">
+      <a class="modal-btn ghost" id="media-download" download></a>
+      <button type="button" class="modal-btn primary" id="media-close"></button>
+    </div>
+    <iframe id="media-frame" title="document"></iframe>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat-core.js"></script>

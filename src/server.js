@@ -459,6 +459,7 @@ async function renderChatHtml(req, res) {
       history: '/api/chat/history',
       send: '/api/chat/send',
       media: '/api/chat/media',
+      session: '/api/chat/session',
       action: '/api/chat/action',
       lock: '/api/chat/operator-lock',
       events: '/api/chat/events'
@@ -936,6 +937,16 @@ app.get('/favicon.ico', (_req, res) => res.status(204).end());
 // requireUiOrApi and surface their own authorization errors inside the frame.
 app.get('/chat.html', (req, res, next) => {
   renderChatHtml(req, res).catch(next);
+});
+
+// The shell already mints a chat token publicly on every render, so exposing
+// the same mint lets a panel left open past the 24h TTL heal itself instead of
+// stranding archive, delete and PDF behind a silent 401.
+app.get('/api/chat/session/:instanceId', (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  res.set({ 'Cache-Control': 'no-store, max-age=0' });
+  return res.json({ chatToken: issueChatToken(instanceId), expiresIn: Math.floor(CHAT_TOKEN_TTL_MS / 1000) });
 });
 
 app.get('/whatspro', (req, res) => {

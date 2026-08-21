@@ -36,6 +36,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Жүйе', unknown: 'Сақталмаған контакт',
       sosBadge: 'SOS', newBadge: 'Жаңа', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот өшірулі',
       archive: 'Архивке жіберу', restore: 'Архивтен қайтару', remove: 'Біржола өшіру',
+      confirmYes: 'Иә', confirmNo: 'Болдырмау', mediaFailed: 'Файлды ашу мүмкін болмады', viewerDownload: 'Жүктеп алу', viewerClose: 'Жабу',
       confirmArchive: 'Бұл чатты архивке жіберу керек пе?', confirmRestore: 'Бұл чатты архивтен қайтару керек пе?',
       confirmDelete: 'Чатты және барлық хабарламаны біржола өшіру керек пе? Бұл әрекетті қайтару мүмкін емес.',
       archiveDone: 'Чат архивке жіберілді', restoreDone: 'Чат қайтарылды', deleteDone: 'Чат өшірілді',
@@ -51,6 +52,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Система', unknown: 'Несохранённый контакт',
       sosBadge: 'SOS', newBadge: 'Новое', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот отключён',
       archive: 'Отправить в архив', restore: 'Вернуть из архива', remove: 'Удалить навсегда',
+      confirmYes: 'Да', confirmNo: 'Отмена', mediaFailed: 'Не удалось открыть файл', viewerDownload: 'Скачать', viewerClose: 'Закрыть',
       confirmArchive: 'Отправить этот чат в архив?', confirmRestore: 'Вернуть этот чат из архива?',
       confirmDelete: 'Навсегда удалить чат и все сообщения? Это действие нельзя отменить.',
       archiveDone: 'Чат отправлен в архив', restoreDone: 'Чат восстановлен', deleteDone: 'Чат удалён',
@@ -93,14 +95,150 @@
     try { sessionStorage.setItem('chatAuthReloadAt', String(Date.now())); } catch (_) {}
     location.reload();
   }
+  // Chrome offers "prevent this page from creating additional dialogs" after a
+  // few prompts, and an embedded panel can be framed without allow-modals. In
+  // both cases window.confirm() returns false forever, so archive and delete
+  // looked completely dead with no error anywhere (operator report 2026-08-21).
+  // An in-page dialog cannot be suppressed by the browser.
+  function confirmDialog(message) {
+    var backdrop = document.getElementById('confirm-backdrop');
+    var text = document.getElementById('confirm-text');
+    var okBtn = document.getElementById('confirm-ok');
+    var cancelBtn = document.getElementById('confirm-cancel');
+    if (!backdrop || !text || !okBtn || !cancelBtn) return Promise.resolve(true);
+    text.textContent = message;
+    okBtn.textContent = t('confirmYes');
+    cancelBtn.textContent = t('confirmNo');
+    backdrop.classList.add('show');
+    return new Promise(function (resolve) {
+      function finish(result) {
+        backdrop.classList.remove('show');
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        backdrop.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      }
+      function onOk() { finish(true); }
+      function onCancel() { finish(false); }
+      function onBackdrop(event) { if (event.target === backdrop) finish(false); }
+      function onKey(event) {
+        if (event.key === 'Escape') finish(false);
+        else if (event.key === 'Enter') finish(true);
+      }
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      backdrop.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      try { okBtn.focus(); } catch (_) {}
+    });
+  }
+
+  // The page render is the only place that used to mint a chat token, so a tab
+  // open past the 24h TTL could only recover through a full reload - and the
+  // reload guard below swallowed the click entirely. Re-minting in place keeps
+  // the operator's action alive.
+  var tokenRefresh = null;
+  function refreshChatToken() {
+    if (tokenRefresh) return tokenRefresh;
+    tokenRefresh = (async function () {
+      try {
+        var url = apiBase + (endpoints.session || '/api/chat/session') + '/' + encodeURIComponent(instanceId);
+        var response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+        if (!response.ok) return false;
+        var data = await response.json().catch(function () { return {}; });
+        var next = String(data.chatToken || '');
+        if (!next) return false;
+        chatToken = next;
+        try { localStorage.setItem('token_key', next); } catch (_) {}
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        tokenRefresh = null;
+      }
+    })();
+    return tokenRefresh;
+  }
+
+  function isAuthStatus(status, data) {
+    if (status === 401 || status === 403) return true;
+    return status === 400 && /AUTH|TOKEN|INSTANCE/i.test(String(data && data.error || ''));
+  }
+
+  async function fetchMediaBlob(id) {
+    var response = await fetch(mediaUrl(id), { credentials: 'same-origin', cache: 'no-store', headers: headers({}) });
+    if (isAuthStatus(response.status, null) && await refreshChatToken()) {
+      response = await fetch(mediaUrl(id), { credentials: 'same-origin', cache: 'no-store', headers: headers({}) });
+    }
+    if (!response.ok) throw new Error('HTTP_' + response.status);
+    return response.blob();
+  }
+
+  // A token in the query string expires and a new tab can be popup-blocked, so
+  // the PDF link failed twice over. Fetching the bytes with the live token and
+  // handing the browser a blob removes both failure modes.
+  async function openMedia(id, isDocument) {
+    var blob = await fetchMediaBlob(id);
+    var objectUrl = URL.createObjectURL(blob);
+    var opened = null;
+    try { opened = window.open(objectUrl, '_blank'); } catch (_) { opened = null; }
+    if (opened) { setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 60000); return; }
+    showMediaViewer(objectUrl, isDocument);
+  }
+
+  function showMediaViewer(objectUrl, isDocument) {
+    var viewer = document.getElementById('media-viewer');
+    var frame = document.getElementById('media-frame');
+    var download = document.getElementById('media-download');
+    var closeBtn = document.getElementById('media-close');
+    if (!viewer || !frame) { window.location.href = objectUrl; return; }
+    frame.src = objectUrl;
+    if (download) {
+      download.href = objectUrl;
+      download.setAttribute('download', isDocument ? 'document.pdf' : 'image.jpg');
+      download.textContent = t('viewerDownload');
+    }
+    if (closeBtn) closeBtn.textContent = t('viewerClose');
+    viewer.classList.add('show');
+    function hide() {
+      viewer.classList.remove('show');
+      frame.removeAttribute('src');
+      if (closeBtn) closeBtn.removeEventListener('click', hide);
+      setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 1000);
+    }
+    if (closeBtn) closeBtn.addEventListener('click', hide);
+  }
+
+  async function handleMediaOpenClick(event) {
+    var link = event.target.closest ? event.target.closest('[data-media-id]') : null;
+    if (!link) return;
+    event.preventDefault();
+    var id = link.getAttribute('data-media-id');
+    if (!id || state.mediaBusy) return;
+    state.mediaBusy = true;
+    try {
+      await openMedia(id, link.classList.contains('chat-document'));
+    } catch (_) {
+      showToast(t('mediaFailed'), true);
+    } finally {
+      state.mediaBusy = false;
+    }
+  }
+
   function endpoint(name, suffix) { return apiBase + endpoints[name] + (suffix || ''); }
 
-  async function requestJson(url, options) {
+  async function requestJson(url, options, retried) {
     var response = await fetch(url, Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options || {}, {
       headers: headers(Object.assign({ Accept: 'application/json' }, options && options.headers || {}))
     }));
     var data = await response.json().catch(function () { return {}; });
     if (!response.ok) {
+      // A stale token stranded every control at once. Mint a fresh one and
+      // replay the request before the operator ever sees an error.
+      if (!retried && isAuthStatus(response.status, data) && await refreshChatToken()) {
+        return requestJson(url, options, true);
+      }
       var requestError = new Error(data.error || 'HTTP_' + response.status);
       requestError.status = response.status;
       throw requestError;
@@ -254,12 +392,12 @@
     }
     if (part.kind === 'image') {
       var imageUrl = mediaUrl(part.id);
-      content = '<a class="chat-image-link" href="' + core.escapeHtml(imageUrl) + '" target="_blank" rel="noopener"><img class="chat-image" src="' + core.escapeHtml(imageUrl) + '" alt="' + core.escapeHtml(t('photo')) + '" loading="lazy"><span class="image-error"><i class="fa-solid fa-image"></i> ' + core.escapeHtml(t('imageFailed')) + '</span></a>';
+      content = '<a class="chat-image-link" data-media-id="' + core.escapeHtml(part.id) + '" href="' + core.escapeHtml(imageUrl) + '" target="_blank" rel="noopener"><img class="chat-image" src="' + core.escapeHtml(imageUrl) + '" alt="' + core.escapeHtml(t('photo')) + '" loading="lazy"><span class="image-error"><i class="fa-solid fa-image"></i> ' + core.escapeHtml(t('imageFailed')) + '</span></a>';
     }
     if (part.kind === 'document') {
       // The PDF is served sandboxed, so it opens in its own tab instead of an
       // inline frame the operator page would have to trust.
-      content = '<a class="chat-document" href="' + core.escapeHtml(mediaUrl(part.id)) + '" target="_blank" rel="noopener">' +
+      content = '<a class="chat-document" data-media-id="' + core.escapeHtml(part.id) + '" href="' + core.escapeHtml(mediaUrl(part.id)) + '" target="_blank" rel="noopener">' +
         '<i class="fa-solid fa-file-pdf"></i><span>' + core.escapeHtml(t('document')) + '</span></a>';
     }
     return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : part.kind === 'image' ? 'image-bubble' : part.kind === 'document' ? 'document-bubble' : '') + '">' +
@@ -543,7 +681,7 @@
   async function chatAction(action) {
     if (!state.activePhone || state.actionBusy) return;
     var prompts = { close: 'confirmArchive', restore: 'confirmRestore', delete: 'confirmDelete' };
-    if (prompts[action] && !window.confirm(t(prompts[action]))) return;
+    if (prompts[action] && !(await confirmDialog(t(prompts[action])))) return;
     var phone = state.activePhone; state.actionBusy = true; updateComposer();
     try {
       await postJson(endpoint('action', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), { action: action });
@@ -640,6 +778,7 @@
     if (eventsBound) return;
     eventsBound = true;
     el.messages.addEventListener('click', handleAudioPlayClick);
+    el.messages.addEventListener('click', handleMediaOpenClick);
     el.contactList.addEventListener('click', function (event) { var item = event.target.closest('[data-phone]'); if (item) openChat(item.dataset.phone); });
     el.tabs.addEventListener('click', function (event) {
       var tab = event.target.closest('[data-tab]'); if (!tab) return;
