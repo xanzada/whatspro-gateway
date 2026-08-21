@@ -986,6 +986,36 @@ app.get('/', (req, res) => {
   return res.sendFile(path.join(PUBLIC_DIR, 'whatspro.html'));
 });
 
+// pdf.js is served straight from the installed dependency instead of being
+// copied into the repository, and the file name differs between builds, so it is
+// resolved once here. If the dependency is ever missing these routes 404 and the
+// panel falls back to the browser's own PDF handling instead of breaking.
+const PDFJS_ASSETS = (() => {
+  const exists = require('fs').existsSync;
+  const base = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist');
+  const pick = (names) => {
+    for (const name of names) {
+      const full = path.join(base, name);
+      if (exists(full)) return full;
+    }
+    return '';
+  };
+  return {
+    main: pick(['legacy/build/pdf.min.js', 'legacy/build/pdf.js', 'build/pdf.min.js', 'build/pdf.js']),
+    worker: pick(['legacy/build/pdf.worker.min.js', 'legacy/build/pdf.worker.js', 'build/pdf.worker.min.js', 'build/pdf.worker.js']),
+  };
+})();
+
+const sendPdfjsAsset = (res, file) => {
+  if (!file) return res.status(404).end();
+  res.type('application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=604800');
+  return res.sendFile(file);
+};
+
+app.get('/vendor/pdfjs/pdf.js', (req, res) => sendPdfjsAsset(res, PDFJS_ASSETS.main));
+app.get('/vendor/pdfjs/pdf.worker.js', (req, res) => sendPdfjsAsset(res, PDFJS_ASSETS.worker));
+
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get(['/api/platform/session', '/api/whatspro/session'], async (req, res) => {

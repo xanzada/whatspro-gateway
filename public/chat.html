@@ -130,6 +130,8 @@
     .media-viewer iframe { flex:1; width:100%; border:0; background:#fff; }
     .media-viewer img { flex:1; min-height:0; width:100%; object-fit:contain; }
     .media-note { margin:0; padding:0 14px 12px; color:#cbd5e1; font-size:13px; line-height:1.45; text-align:center; }
+    .media-pdf { flex:1; min-height:0; overflow:auto; padding:0 14px 14px; }
+    .media-pdf canvas { display:block; margin:0 auto 12px; max-width:100%; height:auto; background:#fff; box-shadow:0 2px 10px #0006; }
     ::-webkit-scrollbar { width:5px; height:5px; } ::-webkit-scrollbar-thumb { background:#3b4b5e; border-radius:8px; }
     @media (max-width:768px) {
       .sidebar,.chat { position:absolute; inset:0; width:100%; min-width:0; }
@@ -198,6 +200,7 @@
     <p class="media-note" id="media-note" hidden></p>
     <iframe id="media-frame" title="document"></iframe>
     <img id="media-image" alt="" hidden>
+    <div class="media-pdf" id="media-pdf" hidden></div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat-core.js"></script>

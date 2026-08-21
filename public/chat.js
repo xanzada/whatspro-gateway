@@ -36,7 +36,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Жүйе', unknown: 'Сақталмаған контакт',
       sosBadge: 'SOS', newBadge: 'Жаңа', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот өшірулі',
       archive: 'Архивке жіберу', restore: 'Архивтен қайтару', remove: 'Біржола өшіру',
-      confirmYes: 'Иә', confirmNo: 'Болдырмау', mediaFailed: 'Файлды ашу мүмкін болмады', viewerDownload: 'Жүктеп алу', viewerOpen: 'Жаңа терезеде ашу', viewerNote: 'Телефон браузері PDF-ті бет ішінде көрсетпейді. «Жүктеп алу» немесе «Жаңа терезеде ашу» түймесін басыңыз.', actionFailed: 'Әрекет орындалмады. Қайта көріңіз', viewerClose: 'Жабу',
+      confirmYes: 'Иә', confirmNo: 'Болдырмау', mediaFailed: 'Файлды ашу мүмкін болмады', viewerDownload: 'Жүктеп алу', viewerOpen: 'Жаңа терезеде ашу', viewerNote: 'Браузер PDF-ті бет ішінде көрсетпей тұр. «Жүктеп алу» немесе «Жаңа терезеде ашу» түймесін басыңыз.', actionFailed: 'Әрекет орындалмады. Қайта көріңіз', viewerClose: 'Жабу',
       confirmArchive: 'Бұл чатты архивке жіберу керек пе?', confirmRestore: 'Бұл чатты архивтен қайтару керек пе?',
       confirmDelete: 'Чатты және барлық хабарламаны біржола өшіру керек пе? Бұл әрекетті қайтару мүмкін емес.',
       archiveDone: 'Чат архивке жіберілді', restoreDone: 'Чат қайтарылды', deleteDone: 'Чат өшірілді',
@@ -52,7 +52,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Система', unknown: 'Несохранённый контакт',
       sosBadge: 'SOS', newBadge: 'Новое', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот отключён',
       archive: 'Отправить в архив', restore: 'Вернуть из архива', remove: 'Удалить навсегда',
-      confirmYes: 'Да', confirmNo: 'Отмена', mediaFailed: 'Не удалось открыть файл', viewerDownload: 'Скачать', viewerOpen: 'Открыть в новой вкладке', viewerNote: 'Браузер телефона не показывает PDF внутри страницы. Нажмите «Скачать» или «Открыть в новой вкладке».', actionFailed: 'Действие не выполнено. Попробуйте снова', viewerClose: 'Закрыть',
+      confirmYes: 'Да', confirmNo: 'Отмена', mediaFailed: 'Не удалось открыть файл', viewerDownload: 'Скачать', viewerOpen: 'Открыть в новой вкладке', viewerNote: 'Браузер не показывает PDF внутри страницы. Нажмите «Скачать» или «Открыть в новой вкладке».', actionFailed: 'Действие не выполнено. Попробуйте снова', viewerClose: 'Закрыть',
       confirmArchive: 'Отправить этот чат в архив?', confirmRestore: 'Вернуть этот чат из архива?',
       confirmDelete: 'Навсегда удалить чат и все сообщения? Это действие нельзя отменить.',
       archiveDone: 'Чат отправлен в архив', restoreDone: 'Чат восстановлен', deleteDone: 'Чат удалён',
@@ -166,76 +166,140 @@
     return status === 400 && /AUTH|TOKEN|INSTANCE/i.test(String(data && data.error || ''));
   }
 
-  async function fetchMediaBlob(id) {
+  async function fetchMedia(id) {
     var response = await fetch(mediaUrl(id), { credentials: 'same-origin', cache: 'no-store', headers: headers({}) });
     if (isAuthStatus(response.status, null) && await refreshChatToken()) {
       response = await fetch(mediaUrl(id), { credentials: 'same-origin', cache: 'no-store', headers: headers({}) });
     }
     if (!response.ok) throw new Error('HTTP_' + response.status);
-    return response.blob();
+    return response;
   }
 
-  // A token in the query string expires and a new tab can be popup-blocked, so
-  // the PDF link failed twice over. Fetching the bytes with the live token and
-  // handing the browser a blob removes both failure modes.
-  // window.open cannot be trusted here. The bytes are fetched first, so by the
-  // time it runs the click is no longer a user gesture, and Safari, Android
-  // WebView and in-app browsers answer with a truthy window that never paints
-  // anything - the viewer was then skipped and nothing opened at all. The
-  // in-page viewer is the only automatic path now; a new tab is a button the
-  // operator presses themselves, which keeps the gesture intact.
+  async function fetchMediaBlob(id) {
+    return (await fetchMedia(id)).blob();
+  }
+
+  var pdfjsPromise = null;
+  function loadPdfjs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfjsPromise) return pdfjsPromise;
+    pdfjsPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = '/vendor/pdfjs/pdf.js';
+      script.onload = function () {
+        if (!window.pdfjsLib) { reject(new Error('PDFJS_MISSING')); return; }
+        try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.js'; } catch (_) {}
+        resolve(window.pdfjsLib);
+      };
+      script.onerror = function () { pdfjsPromise = null; reject(new Error('PDFJS_UNAVAILABLE')); };
+      document.head.appendChild(script);
+    });
+    return pdfjsPromise;
+  }
+
+  async function renderPdfInto(container, bytes) {
+    var lib = await loadPdfjs();
+    var doc = await lib.getDocument({ data: new Uint8Array(bytes) }).promise;
+    container.textContent = '';
+    var width = container.clientWidth || 900;
+    var pages = Math.min(doc.numPages, 40);
+    for (var number = 1; number <= pages; number += 1) {
+      var page = await doc.getPage(number);
+      var base = page.getViewport({ scale: 1 });
+      var scale = Math.max(1, Math.min(2, (width - 28) / base.width));
+      var viewport = page.getViewport({ scale: scale });
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      container.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+    }
+    return pages;
+  }
+
+  // Three different browser behaviours broke this PDF in turn, so nothing about
+  // the browser's own PDF handling is trusted any more:
+  //   1. once the bytes have been awaited the click is no longer a user gesture,
+  //      and Safari, Android WebView and in-app browsers answer window.open with
+  //      a truthy window that never paints anything;
+  //   2. Android Chrome refuses to paint a PDF inside a frame at all;
+  //   3. Yandex Browser blocks a blob: URL inside a frame and paints its own
+  //      "site blocked" page over the viewer.
+  // The bytes are fetched with the live token and drawn onto canvas by pdf.js,
+  // so there is no frame, no blob: navigation and no browser plugin involved.
+  // The frame survives only as a fallback for a missing pdf.js bundle, and then
+  // it gets the plain same-origin URL rather than a blob.
   async function openMedia(id, isDocument) {
+    if (isDocument) {
+      var bytes = await (await fetchMedia(id)).arrayBuffer();
+      showMediaViewer({ isDocument: true, bytes: bytes, directUrl: mediaUrl(id) });
+      return;
+    }
     var blob = await fetchMediaBlob(id);
-    showMediaViewer(URL.createObjectURL(blob), isDocument);
+    showMediaViewer({ isDocument: false, objectUrl: URL.createObjectURL(blob), directUrl: mediaUrl(id) });
   }
 
   function isMobileViewer() {
     return /Android|iPhone|iPad|iPod|Mobile/i.test(String(navigator.userAgent || '')) || window.innerWidth < 768;
   }
 
-  function showMediaViewer(objectUrl, isDocument) {
+  function showMediaViewer(media) {
+    var isDocument = !!media.isDocument;
+    var objectUrl = media.objectUrl || '';
+    var directUrl = media.directUrl || objectUrl;
     var viewer = document.getElementById('media-viewer');
     var frame = document.getElementById('media-frame');
     var image = document.getElementById('media-image');
+    var pdfBox = document.getElementById('media-pdf');
     var note = document.getElementById('media-note');
     var download = document.getElementById('media-download');
     var openBtn = document.getElementById('media-open');
     var closeBtn = document.getElementById('media-close');
-    if (!viewer || !frame) { window.location.href = objectUrl; return; }
-    // Android Chrome and in-app browsers refuse to paint a PDF inside a frame,
-    // so on phones the download and open buttons are the working affordances.
-    var inlinePdf = isDocument && !isMobileViewer();
+    if (!viewer || !frame) { window.location.href = directUrl; return; }
     if (image) {
       image.hidden = isDocument;
       if (isDocument) image.removeAttribute('src');
       else image.src = objectUrl;
     }
-    frame.hidden = !inlinePdf;
-    if (inlinePdf) frame.src = objectUrl;
-    else frame.removeAttribute('src');
-    if (note) {
-      note.hidden = !isDocument || inlinePdf;
-      note.textContent = note.hidden ? '' : t('viewerNote');
-    }
+    // No frame and no blob: URL are used for a document unless pdf.js is missing.
+    frame.hidden = true;
+    frame.removeAttribute('src');
+    if (pdfBox) { pdfBox.hidden = true; pdfBox.textContent = ''; }
+    if (note) { note.hidden = true; note.textContent = ''; }
     if (download) {
-      download.href = objectUrl;
+      download.href = isDocument ? directUrl : objectUrl;
       download.setAttribute('download', isDocument ? 'document.pdf' : 'image.jpg');
       download.textContent = t('viewerDownload');
     }
     if (openBtn) {
       openBtn.textContent = t('viewerOpen');
-      openBtn.onclick = function () { try { window.open(objectUrl, '_blank'); } catch (_) {} };
+      // Pressing this is a real gesture, the only state a new tab is allowed in.
+      openBtn.onclick = function () { try { window.open(isDocument ? directUrl : objectUrl, '_blank'); } catch (_) {} };
     }
     if (closeBtn) closeBtn.textContent = t('viewerClose');
     viewer.classList.add('show');
+    if (isDocument && pdfBox && media.bytes) {
+      pdfBox.hidden = false;
+      renderPdfInto(pdfBox, media.bytes).catch(function () {
+        // The bundle could not be loaded. Fall back to the browser, with the
+        // plain URL rather than a blob, and point at the buttons in case the
+        // browser refuses to paint it too.
+        pdfBox.hidden = true;
+        pdfBox.textContent = '';
+        if (!isMobileViewer()) { frame.hidden = false; frame.src = directUrl; }
+        if (note) { note.hidden = false; note.textContent = t('viewerNote'); }
+      });
+    }
     function hide() {
       viewer.classList.remove('show');
+      frame.hidden = true;
       frame.removeAttribute('src');
+      if (pdfBox) { pdfBox.hidden = true; pdfBox.textContent = ''; }
       if (image) image.removeAttribute('src');
       if (note) { note.hidden = true; note.textContent = ''; }
       if (closeBtn) closeBtn.removeEventListener('click', hide);
       document.removeEventListener('keydown', onViewerKey);
-      setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 1000);
+      if (objectUrl) setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 1000);
     }
     function onViewerKey(event) { if (event.key === 'Escape') hide(); }
     document.addEventListener('keydown', onViewerKey);

@@ -94,31 +94,72 @@ test('the session endpoint mints a token the guarded chat routes accept', async 
 });
 
 
-// A truthy-but-blank window from Safari, Android WebView or an in-app browser
-// made openMedia return before the viewer ever opened, so the operator saw
-// nothing at all when tapping a PDF. The viewer is now the only automatic path.
-test('the media viewer never depends on window.open succeeding', () => {
+// The PDF broke three times over, each time for a different browser reason:
+//   1. window.open answers with a truthy blank window once the bytes have been
+//      awaited, so the viewer used to be skipped entirely;
+//   2. Android Chrome refuses to paint a PDF inside a frame;
+//   3. Yandex Browser blocks a blob: URL inside a frame and paints its own
+//      "site blocked" page over the viewer, which is what an operator reported
+//      seeing even after the viewer itself opened correctly.
+// Nothing about the browser's own PDF handling is trusted now: the bytes are
+// drawn onto canvas by pdf.js.
+test('documents are drawn onto canvas instead of handed to the browser', () => {
   const code = chatJs.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
-  assert.match(code, /showMediaViewer\(URL\.createObjectURL\(blob\), isDocument\)/);
+  assert.match(code, /showMediaViewer\(\{ isDocument: true, bytes: bytes, directUrl: mediaUrl\(id\) \}\)/);
+  assert.match(code, /async function renderPdfInto/);
+  assert.match(code, /lib\.getDocument\(\{ data: new Uint8Array\(bytes\) \}\)/);
+  assert.match(code, /container\.appendChild\(canvas\)/);
   assert.doesNotMatch(code, /if \(opened\)/);
   assert.doesNotMatch(code, /opened = window\.open/);
-  assert.match(code, /openBtn\.onclick = function \(\) \{ try \{ window\.open\(objectUrl/);
+  assert.ok(chatHtml.includes('id="media-pdf"'), 'the viewer needs a canvas container');
+  assert.match(chatHtml, /\.media-pdf canvas \{/);
 });
 
-test('phones get download and open affordances because framed PDFs stay blank there', () => {
-  assert.match(chatJs, /function isMobileViewer/);
-  assert.match(chatJs, /var inlinePdf = isDocument && !isMobileViewer\(\)/);
-  assert.match(chatJs, /frame\.hidden = !inlinePdf/);
-  assert.match(chatJs, /note\.hidden = !isDocument \|\| inlinePdf/);
-  for (const id of ['media-open', 'media-note', 'media-image']) {
-    assert.ok(chatHtml.includes('id="' + id + '"'), 'missing #' + id);
-  }
+test('no blob URL is ever handed to a frame, which is what Yandex blocked', () => {
+  const code = chatJs.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /frame\.src = objectUrl/);
+  const assignments = code.match(/frame\.src = [A-Za-z]+/g) || [];
+  assert.deepEqual(assignments, ['frame.src = directUrl'], 'a frame may only ever get the plain same-origin URL');
+  assert.match(code, /download\.href = isDocument \? directUrl : objectUrl/);
+  assert.match(code, /window\.open\(isDocument \? directUrl : objectUrl/);
 });
 
-test('images render as images and documents as a frame, never both', () => {
+test('the pdf.js bundle ships from the dependency and degrades to the frame', () => {
+  assert.match(chatJs, /script\.src = '\/vendor\/pdfjs\/pdf\.js'/);
+  assert.match(chatJs, /workerSrc = '\/vendor\/pdfjs\/pdf\.worker\.js'/);
+  assert.match(chatJs, /renderPdfInto\(pdfBox, media\.bytes\)\.catch\(/);
+  assert.match(serverJs, /app\.get\('\/vendor\/pdfjs\/pdf\.js'/);
+  assert.match(serverJs, /app\.get\('\/vendor\/pdfjs\/pdf\.worker\.js'/);
+  assert.match(serverJs, /if \(!file\) return res\.status\(404\)\.end\(\)/);
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.ok(pkg.dependencies['pdfjs-dist'], 'pdfjs-dist must be a runtime dependency, not a vendored copy');
+});
+
+test('images stay images and never collide with the document path', () => {
   assert.match(chatJs, /image\.hidden = isDocument/);
   assert.match(chatJs, /else image\.src = objectUrl/);
-  assert.match(chatJs, /if \(inlinePdf\) frame\.src = objectUrl/);
+  assert.match(chatJs, /showMediaViewer\(\{ isDocument: false, objectUrl: URL\.createObjectURL\(blob\)/);
+  assert.match(chatJs, /function isMobileViewer/);
+});
+
+test('the served pdf.js bundle is a real file rather than a 404', async t => {
+  const { app } = require('../src/server');
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const main = await fetch(base + '/vendor/pdfjs/pdf.js');
+  assert.equal(main.status, 200);
+  assert.match(main.headers.get('content-type') || '', /javascript/);
+  const body = await main.text();
+  assert.ok(body.length > 100000, 'the bundle looks truncated: ' + body.length + ' bytes');
+
+  const worker = await fetch(base + '/vendor/pdfjs/pdf.worker.js');
+  assert.equal(worker.status, 200);
 });
 
 test('operator errors are localized, not raw fetch text', () => {
