@@ -36,7 +36,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Жүйе', unknown: 'Сақталмаған контакт',
       sosBadge: 'SOS', newBadge: 'Жаңа', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот өшірулі',
       archive: 'Архивке жіберу', restore: 'Архивтен қайтару', remove: 'Біржола өшіру',
-      confirmYes: 'Иә', confirmNo: 'Болдырмау', mediaFailed: 'Файлды ашу мүмкін болмады', viewerDownload: 'Жүктеп алу', viewerClose: 'Жабу',
+      confirmYes: 'Иә', confirmNo: 'Болдырмау', mediaFailed: 'Файлды ашу мүмкін болмады', viewerDownload: 'Жүктеп алу', viewerOpen: 'Жаңа терезеде ашу', viewerNote: 'Телефон браузері PDF-ті бет ішінде көрсетпейді. «Жүктеп алу» немесе «Жаңа терезеде ашу» түймесін басыңыз.', actionFailed: 'Әрекет орындалмады. Қайта көріңіз', viewerClose: 'Жабу',
       confirmArchive: 'Бұл чатты архивке жіберу керек пе?', confirmRestore: 'Бұл чатты архивтен қайтару керек пе?',
       confirmDelete: 'Чатты және барлық хабарламаны біржола өшіру керек пе? Бұл әрекетті қайтару мүмкін емес.',
       archiveDone: 'Чат архивке жіберілді', restoreDone: 'Чат қайтарылды', deleteDone: 'Чат өшірілді',
@@ -52,7 +52,7 @@
       client: 'Клиент', bot: 'Бот', operatorRole: 'Оператор', system: 'Система', unknown: 'Несохранённый контакт',
       sosBadge: 'SOS', newBadge: 'Новое', archiveBadge: 'Архив', operatorBadge: 'Опер', botMuted: 'Бот отключён',
       archive: 'Отправить в архив', restore: 'Вернуть из архива', remove: 'Удалить навсегда',
-      confirmYes: 'Да', confirmNo: 'Отмена', mediaFailed: 'Не удалось открыть файл', viewerDownload: 'Скачать', viewerClose: 'Закрыть',
+      confirmYes: 'Да', confirmNo: 'Отмена', mediaFailed: 'Не удалось открыть файл', viewerDownload: 'Скачать', viewerOpen: 'Открыть в новой вкладке', viewerNote: 'Браузер телефона не показывает PDF внутри страницы. Нажмите «Скачать» или «Открыть в новой вкладке».', actionFailed: 'Действие не выполнено. Попробуйте снова', viewerClose: 'Закрыть',
       confirmArchive: 'Отправить этот чат в архив?', confirmRestore: 'Вернуть этот чат из архива?',
       confirmDelete: 'Навсегда удалить чат и все сообщения? Это действие нельзя отменить.',
       archiveDone: 'Чат отправлен в архив', restoreDone: 'Чат восстановлен', deleteDone: 'Чат удалён',
@@ -178,35 +178,67 @@
   // A token in the query string expires and a new tab can be popup-blocked, so
   // the PDF link failed twice over. Fetching the bytes with the live token and
   // handing the browser a blob removes both failure modes.
+  // window.open cannot be trusted here. The bytes are fetched first, so by the
+  // time it runs the click is no longer a user gesture, and Safari, Android
+  // WebView and in-app browsers answer with a truthy window that never paints
+  // anything - the viewer was then skipped and nothing opened at all. The
+  // in-page viewer is the only automatic path now; a new tab is a button the
+  // operator presses themselves, which keeps the gesture intact.
   async function openMedia(id, isDocument) {
     var blob = await fetchMediaBlob(id);
-    var objectUrl = URL.createObjectURL(blob);
-    var opened = null;
-    try { opened = window.open(objectUrl, '_blank'); } catch (_) { opened = null; }
-    if (opened) { setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 60000); return; }
-    showMediaViewer(objectUrl, isDocument);
+    showMediaViewer(URL.createObjectURL(blob), isDocument);
+  }
+
+  function isMobileViewer() {
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(String(navigator.userAgent || '')) || window.innerWidth < 768;
   }
 
   function showMediaViewer(objectUrl, isDocument) {
     var viewer = document.getElementById('media-viewer');
     var frame = document.getElementById('media-frame');
+    var image = document.getElementById('media-image');
+    var note = document.getElementById('media-note');
     var download = document.getElementById('media-download');
+    var openBtn = document.getElementById('media-open');
     var closeBtn = document.getElementById('media-close');
     if (!viewer || !frame) { window.location.href = objectUrl; return; }
-    frame.src = objectUrl;
+    // Android Chrome and in-app browsers refuse to paint a PDF inside a frame,
+    // so on phones the download and open buttons are the working affordances.
+    var inlinePdf = isDocument && !isMobileViewer();
+    if (image) {
+      image.hidden = isDocument;
+      if (isDocument) image.removeAttribute('src');
+      else image.src = objectUrl;
+    }
+    frame.hidden = !inlinePdf;
+    if (inlinePdf) frame.src = objectUrl;
+    else frame.removeAttribute('src');
+    if (note) {
+      note.hidden = !isDocument || inlinePdf;
+      note.textContent = note.hidden ? '' : t('viewerNote');
+    }
     if (download) {
       download.href = objectUrl;
       download.setAttribute('download', isDocument ? 'document.pdf' : 'image.jpg');
       download.textContent = t('viewerDownload');
+    }
+    if (openBtn) {
+      openBtn.textContent = t('viewerOpen');
+      openBtn.onclick = function () { try { window.open(objectUrl, '_blank'); } catch (_) {} };
     }
     if (closeBtn) closeBtn.textContent = t('viewerClose');
     viewer.classList.add('show');
     function hide() {
       viewer.classList.remove('show');
       frame.removeAttribute('src');
+      if (image) image.removeAttribute('src');
+      if (note) { note.hidden = true; note.textContent = ''; }
       if (closeBtn) closeBtn.removeEventListener('click', hide);
+      document.removeEventListener('keydown', onViewerKey);
       setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 1000);
     }
+    function onViewerKey(event) { if (event.key === 'Escape') hide(); }
+    document.addEventListener('keydown', onViewerKey);
     if (closeBtn) closeBtn.addEventListener('click', hide);
   }
 
@@ -395,8 +427,9 @@
       content = '<a class="chat-image-link" data-media-id="' + core.escapeHtml(part.id) + '" href="' + core.escapeHtml(imageUrl) + '" target="_blank" rel="noopener"><img class="chat-image" src="' + core.escapeHtml(imageUrl) + '" alt="' + core.escapeHtml(t('photo')) + '" loading="lazy"><span class="image-error"><i class="fa-solid fa-image"></i> ' + core.escapeHtml(t('imageFailed')) + '</span></a>';
     }
     if (part.kind === 'document') {
-      // The PDF is served sandboxed, so it opens in its own tab instead of an
-      // inline frame the operator page would have to trust.
+      // The href stays as a plain fallback for middle-click and \"copy link\",
+      // but the click is handled by openMedia so no popup or query token is
+      // needed to read the document.
       content = '<a class="chat-document" data-media-id="' + core.escapeHtml(part.id) + '" href="' + core.escapeHtml(mediaUrl(part.id)) + '" target="_blank" rel="noopener">' +
         '<i class="fa-solid fa-file-pdf"></i><span>' + core.escapeHtml(t('document')) + '</span></a>';
     }
@@ -690,7 +723,7 @@
       closeChat(); await loadInbox(true);
     } catch (error) {
       if (error && (error.status === 401 || error.status === 403)) { handleAuthFailure(); return; }
-      showToast(error.message, true);
+      showToast(t('actionFailed'), true);
     }
     finally { state.actionBusy = false; updateComposer(); }
   }

@@ -92,3 +92,40 @@ test('the session endpoint mints a token the guarded chat routes accept', async 
   });
   assert.notEqual(accepted.status, 401, 'a freshly minted token must pass the chat auth gate');
 });
+
+
+// A truthy-but-blank window from Safari, Android WebView or an in-app browser
+// made openMedia return before the viewer ever opened, so the operator saw
+// nothing at all when tapping a PDF. The viewer is now the only automatic path.
+test('the media viewer never depends on window.open succeeding', () => {
+  const code = chatJs.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
+  assert.match(code, /showMediaViewer\(URL\.createObjectURL\(blob\), isDocument\)/);
+  assert.doesNotMatch(code, /if \(opened\)/);
+  assert.doesNotMatch(code, /opened = window\.open/);
+  assert.match(code, /openBtn\.onclick = function \(\) \{ try \{ window\.open\(objectUrl/);
+});
+
+test('phones get download and open affordances because framed PDFs stay blank there', () => {
+  assert.match(chatJs, /function isMobileViewer/);
+  assert.match(chatJs, /var inlinePdf = isDocument && !isMobileViewer\(\)/);
+  assert.match(chatJs, /frame\.hidden = !inlinePdf/);
+  assert.match(chatJs, /note\.hidden = !isDocument \|\| inlinePdf/);
+  for (const id of ['media-open', 'media-note', 'media-image']) {
+    assert.ok(chatHtml.includes('id="' + id + '"'), 'missing #' + id);
+  }
+});
+
+test('images render as images and documents as a frame, never both', () => {
+  assert.match(chatJs, /image\.hidden = isDocument/);
+  assert.match(chatJs, /else image\.src = objectUrl/);
+  assert.match(chatJs, /if \(inlinePdf\) frame\.src = objectUrl/);
+});
+
+test('operator errors are localized, not raw fetch text', () => {
+  assert.doesNotMatch(chatJs, /showToast\(error\.message, true\)/);
+  assert.match(chatJs, /showToast\(t\('actionFailed'\), true\)/);
+  for (const key of ['viewerOpen', 'viewerNote', 'actionFailed']) {
+    const hits = chatJs.split(key + ':').length - 1;
+    assert.equal(hits, 2, key + ' must exist in both kk and ru, found ' + hits);
+  }
+});

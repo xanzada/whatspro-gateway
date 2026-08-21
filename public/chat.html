@@ -128,6 +128,8 @@
     .media-viewer.show { display:flex; }
     .media-viewer-bar { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:10px 14px; }
     .media-viewer iframe { flex:1; width:100%; border:0; background:#fff; }
+    .media-viewer img { flex:1; min-height:0; width:100%; object-fit:contain; }
+    .media-note { margin:0; padding:0 14px 12px; color:#cbd5e1; font-size:13px; line-height:1.45; text-align:center; }
     ::-webkit-scrollbar { width:5px; height:5px; } ::-webkit-scrollbar-thumb { background:#3b4b5e; border-radius:8px; }
     @media (max-width:768px) {
       .sidebar,.chat { position:absolute; inset:0; width:100%; min-width:0; }
@@ -189,10 +191,13 @@
   </div>
   <div class="media-viewer" id="media-viewer">
     <div class="media-viewer-bar">
+      <button type="button" class="modal-btn ghost" id="media-open"></button>
       <a class="modal-btn ghost" id="media-download" download></a>
       <button type="button" class="modal-btn primary" id="media-close"></button>
     </div>
+    <p class="media-note" id="media-note" hidden></p>
     <iframe id="media-frame" title="document"></iframe>
+    <img id="media-image" alt="" hidden>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat-core.js"></script>
