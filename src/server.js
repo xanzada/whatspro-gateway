@@ -938,6 +938,37 @@ async function sweepExpiredChatIndexes() {
   }
 }
 
+// One scan per instance per LEGACY_SCAN_INTERVAL_MS, shared by every poller. The
+// result is only a list of phones to consider, so a slightly stale list costs nothing:
+// a genuinely new chat arrives through the inbox index, which is not cached.
+const LEGACY_SCAN_INTERVAL_MS = Number(process.env.WHATSPRO_LEGACY_SCAN_INTERVAL_MS || 60000);
+const legacyScanCache = new Map();
+
+async function cachedLegacyHistoryKeys(instanceId) {
+  const cached = legacyScanCache.get(instanceId);
+  if (cached && Date.now() - cached.at < LEGACY_SCAN_INTERVAL_MS) return cached.rows;
+  // A scan already in flight is shared rather than duplicated, so N concurrent polls
+  // cause one scan.
+  if (cached?.pending) return cached.pending;
+  const pending = (async () => {
+    const rows = [];
+    for await (const key of scanKeys(redisClient, `history:${instanceId}:*`)) {
+      const phone = normalizePhone(key.slice(`history:${instanceId}:`.length));
+      if (isValidChatPhone(phone)) rows.push({ phone, updatedAt: 0 });
+    }
+    legacyScanCache.set(instanceId, { at: Date.now(), rows });
+    return rows;
+  })();
+  legacyScanCache.set(instanceId, { at: cached?.at || 0, rows: cached?.rows || [], pending });
+  try {
+    return await pending;
+  } catch (error) {
+    legacyScanCache.delete(instanceId);
+    console.warn(`[CHAT INBOX] legacy scan failed for ${instanceId}:`, error?.message || error);
+    return cached?.rows || [];
+  }
+}
+
 function summarizeChat(item, historyRows, viewedAt, archived) {
   const history = historyRows.map(parseHistoryEntry).filter(Boolean).map(normalizeChatEntry);
   const last = [...history].reverse().find(entry => entryPreview(entry)) || history[history.length - 1] || null;
@@ -1698,11 +1729,13 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
     readInboxEntries(instanceId, limit * 2),
     sosStore.list(instanceId, limit)
   ]);
-  const legacyHistoryKeys = [];
-  for await (const key of scanKeys(redisClient, `history:${instanceId}:*`)) {
-    const phone = normalizePhone(key.slice(`history:${instanceId}:`.length));
-    if (isValidChatPhone(phone)) legacyHistoryKeys.push({ phone, updatedAt: 0 });
-  }
+  // The legacy scan is a RECOVERY path: it finds chats that exist only as Openbot's
+  // `history:` key because the canonical inbox index lost them. It was running a full
+  // keyspace SCAN on every request, and chat.js polls this every 5 seconds per open
+  // panel - so with a few tenants and a few panels the gateway spent most of its Redis
+  // budget scanning the shared keyspace, starving message ingestion on the same
+  // connection (found 2026-08-22). Recovery does not need to happen 12 times a minute.
+  const legacyHistoryKeys = await cachedLegacyHistoryKeys(instanceId);
   const candidates = [];
   const seen = new Set();
 
@@ -2414,6 +2447,7 @@ module.exports = {
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
     issuePanelGrant, hasPanelGrant, hasRenewableChatToken, isLoopbackRequest, issueChatToken,
+    cachedLegacyHistoryKeys, legacyScanCache, LEGACY_SCAN_INTERVAL_MS,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requirePlatformAdmin, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
     recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR

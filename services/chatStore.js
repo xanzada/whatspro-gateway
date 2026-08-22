@@ -102,7 +102,8 @@ function createChatStore(redis, options = {}) {
   async function setState(instanceId, phone, state) {
     if (!CHAT_STATES.has(state)) throw new Error('INVALID_CHAT_STATE');
     const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
-    const history = await getHistory(instanceId, phone, 2000);
+    // Same reason as applyTtl: this only needs the media ids, not the transcript.
+    const history = await getHistory(instanceId, phone, TTL_MEDIA_SCAN_LIMIT);
     const ids = await mediaIds(instanceId, phone, history);
     const ttlKeys = [
       keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.mediaIds(instanceId, phone),
@@ -127,8 +128,16 @@ function createChatStore(redis, options = {}) {
     return [...new Set([...stored, ...fromHistory])];
   }
 
+  // The history is read here only to discover which media ids belong to this chat,
+  // and mediaIds already unions the stored SMEMBERS set with whatever the rows
+  // mention. Reading 2000 rows (twice, canonical + legacy) plus a full re-parse on
+  // EVERY inserted message was the dominant cost of storing a message; the recent
+  // window carries the media a live chat actually has, and anything older is already
+  // in chatwoot:media-ids (found 2026-08-22).
+  const TTL_MEDIA_SCAN_LIMIT = Number(process.env.WHATSPRO_TTL_MEDIA_SCAN_LIMIT || 200);
+
   async function applyTtl(instanceId, phone, ttl, expectedState = '') {
-    const history = await getHistory(instanceId, phone, 2000);
+    const history = await getHistory(instanceId, phone, TTL_MEDIA_SCAN_LIMIT);
     const ids = await mediaIds(instanceId, phone, history);
     const chatKeys = [
       keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone), keys.state(instanceId, phone),
@@ -251,7 +260,23 @@ function createChatStore(redis, options = {}) {
       const deliveryStatus = normalized.id ? receipts.get(String(normalized.id)) : '';
       return deliveryStatus ? { ...normalized, deliveryStatus } : normalized;
     }).sort((a, b) => a.createdAt - b.createdAt)
-      .filter((item, index, all) => !item.id || all.findIndex(other => other.id === item.id) === index)
+      // Was `all.findIndex(other => other.id === item.id) === index`, i.e. a full
+      // scan per element: O(n^2) over up to 2000 rows on the EVENT LOOP, and
+      // applyTtl/setState call this with limit 2000 on every inserted message, so
+      // each stored message cost millions of string comparisons and visibly slowed
+      // both ingestion and every panel request (found 2026-08-22). A Set keeps the
+      // same semantics - first occurrence wins, id-less rows are always kept - in
+      // one pass.
+      .filter((() => {
+        const seen = new Set();
+        return item => {
+          if (!item.id) return true;
+          const id = String(item.id);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        };
+      })())
       .slice(-limit);
   }
 

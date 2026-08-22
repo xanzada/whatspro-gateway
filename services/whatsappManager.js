@@ -1069,6 +1069,13 @@ function isChromiumResourceError(error) {
     return /Resource temporarily unavailable|posix_spawn|chrome_crashpad_handler|crashpad|ENOMEM|EAGAIN|Code:\s*null|Failed to launch the browser process|Target closed|Requesting main frame too early|Protocol error|Navigating frame was detached|browser has disconnected/i.test(String(error?.message || error || ''));
 }
 
+// Deleting SingletonLock while a browser still holds the profile is what corrupts
+// it, so the sweep only runs when this process is not holding a client for that
+// instance. Callers that intend a fresh start pass force.
+function chromiumLocksAreSafeToSweep(instanceId) {
+    return !clients.has(instanceId) && !initializingClients.has(instanceId);
+}
+
 function cleanupChromiumRuntimeLocks(instanceId) {
     // Nothing to sweep on the Baileys transport: there is no browser profile, so
     // no singleton locks and no crashpad directories.
@@ -1388,7 +1395,19 @@ async function startWhatsAppInstance(instanceId, options = {}) {
         if (currentStatus.status === 'connected') {
             return { success: true, message: 'Already connected.', ...currentStatus };
         }
+        // The map entry used to be dropped WITHOUT destroying the client, so the old
+        // one kept its listeners and its own re-arming reconnect ladder while a second
+        // client was built on the same authDir: duplicated message / message_ack
+        // events, doubled memory, Baileys credential churn on one creds.json, and on
+        // the Chromium transport a corrupted profile once cleanupChromiumRuntimeLocks
+        // below deleted the SingletonLock of a still-running browser
+        // (found 2026-08-22).
+        const stale = clients.get(instanceId);
         clients.delete(instanceId);
+        if (stale) {
+            console.warn(`[WHATSAPP] ${instanceId} replacing a client in state=${currentStatus.status}; destroying the old one first`);
+            await destroyClient(stale);
+        }
     }
 
     const currentState = instanceStates.get(instanceId);
@@ -1416,8 +1435,19 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     } else if (!options.freshAfterAuthReset) {
         console.log(`[WHATSAPP] ${instanceId} no stored session; QR required.`);
     }
-    cleanupChromiumRuntimeLocks(instanceId);
+    // By this point both maps have been cleared above, so the sweep is safe; the
+    // guard is here so a future caller cannot reintroduce the corruption.
+    if (chromiumLocksAreSafeToSweep(instanceId)) cleanupChromiumRuntimeLocks(instanceId);
     console.log(`🚀 [WHATSAPP] ${instanceId} үшін жаңа сессия іске қосылуда...`);
+
+    // An entry left in initializingClients is a browser/socket that is still coming
+    // up. Overwriting the map would orphan it exactly like the case above.
+    const stillInitializing = initializingClients.get(instanceId);
+    if (stillInitializing) {
+        initializingClients.delete(instanceId);
+        console.warn(`[WHATSAPP] ${instanceId} a previous initialization is still open; destroying it before starting a new one`);
+        await destroyClient(stillInitializing);
+    }
 
    const client = createTransportClient(instanceId);
     const transport = activeTransport(instanceId);

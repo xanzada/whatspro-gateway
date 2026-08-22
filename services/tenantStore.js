@@ -128,14 +128,37 @@ function sanitizeTenantConfig(record, instance) {
   };
 }
 
+// The snapshot is a disaster-recovery mirror of Redis, not a write-through cache.
+// findRow is on the hot path - getTestModePolicy runs per inbound message, isBotEnabled
+// per message, handleIncomingCall per call, /api/chat/inbox every 5s per open panel -
+// and every successful read used to call upsertSnapshot, which serialises EVERY tenant
+// and rewrites the whole file behind a serialised write queue. So the gateway wrote the
+// full snapshot to disk in proportion to traffic multiplied by tenant count, and inbox
+// polls queued behind that write chain together with message ingestion (found
+// 2026-08-22). Mirror only when the row actually differs from what is already on disk.
+function sameSnapshotRow(a, b) {
+  if (!a || !b) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 async function findRow(instanceValue) {
   const instance = normalizeInstance(instanceValue);
   if (!instance) return null;
   if (redisUsable()) {
     try {
       const row = parseRow(await redisClient.hGet(TENANT_STORE_KEY, instance));
-      if (row) await upsertSnapshot(row).catch(error => console.warn('[TENANT SNAPSHOT] write failed:', error.message));
-      return row || await findSnapshot(instance);
+      if (row) {
+        const mirrored = await findSnapshot(instance).catch(() => null);
+        if (!sameSnapshotRow(row, mirrored)) {
+          await upsertSnapshot(row).catch(error => console.warn('[TENANT SNAPSHOT] write failed:', error.message));
+        }
+        return row;
+      }
+      return await findSnapshot(instance);
     } catch (error) {
       console.warn(`[TENANT STORE] Redis read failed (${instance}), using snapshot:`, error.message);
     }
