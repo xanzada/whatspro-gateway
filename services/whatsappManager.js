@@ -1860,7 +1860,18 @@ client.initialize().catch(async err => {
     return { success: true, message: 'Инстанс іске қосылуда. Күте тұрыңыз...' };
 }
 
-async function stopWhatsAppInstance(instanceId) {
+// stopWhatsAppInstance is DESTRUCTIVE by default: it unlinks the device
+// (client.logout()) and deletes both session folders, so the restaurant needs a
+// physical QR rescan afterwards. That is correct for /api/wa/logout and for
+// deleting a tenant. It was NOT correct for the panel's "Қайта іске қосу" button
+// and for pausing a tenant: an operator pressing restart to clear a hiccup took
+// the restaurant offline until somebody walked to the phone, and the pause route
+// contradicted its own comment about resuming without a QR (found 2026-08-22).
+//
+// options.wipeCredentials === false stops the client and leaves the pairing on
+// disk, so the next start reconnects silently.
+async function stopWhatsAppInstance(instanceId, options = {}) {
+    const wipeCredentials = options.wipeCredentials !== false;
     intentionallyStopped.add(instanceId);
     supervisedInstances.delete(instanceId);
     stateCheckFailures.delete(instanceId);
@@ -1897,7 +1908,9 @@ async function stopWhatsAppInstance(instanceId) {
     if (clients.has(instanceId)) {
         const client = await getReadyClient(instanceId);
         try {
-            await client.logout();
+            // logout() is what unlinks the device on WhatsApp's side. Skipping it
+            // is the whole difference between "stop" and "unlink".
+            if (wipeCredentials) await client.logout();
             await client.destroy();
         } catch (err) {
             console.error(`⚠️ [WHATSAPP] ${instanceId} клиентті тоқтату кезіндегі қате:`, err.message);
@@ -1906,6 +1919,10 @@ async function stopWhatsAppInstance(instanceId) {
         }
     }
 
+    if (!wipeCredentials) {
+        console.log(`⏸️ [WHATSAPP] ${instanceId} тоқтатылды, тіркелгі сақталды (QR қайта қажет емес)`);
+        return { success: true, message: 'Stopped without clearing the session', credentialsPreserved: true };
+    }
 
     // 🚀 ЕҢ БАСТЫСЫ: ПАПКАДАҒЫ КЭШ ФАЙЛДАРДЫ ТАМЫРЫМЕН ЖОЮ!
     try {
@@ -1916,7 +1933,7 @@ async function stopWhatsAppInstance(instanceId) {
         console.error(`❌ [WHATSAPP] ${instanceId} папканы өшіру қатесі:`, err.message);
     }
 
-    return { success: true, message: 'Logged out and session cleared successfully' };
+    return { success: true, message: 'Logged out and session cleared successfully', credentialsPreserved: false };
 }
 
 async function shutdownWhatsAppClients(reason = 'process_shutdown') {

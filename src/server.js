@@ -23,7 +23,7 @@ const {
 const qrcode = require('qrcode');
 const { callWatcherStatus } = require('../services/callWatcher');
 const { isValidChatPhone, normalizePhone } = require('../services/phoneUtils');
-const { OPERATOR_ACTIVE_SECONDS, operatorActiveKey } = require('../services/operatorLock');
+const { OPERATOR_ACTIVE_SECONDS, markOperatorActive, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
@@ -480,6 +480,17 @@ function hasChatMediaToken(req) {
   const expected = process.env.WHATSPRO_API_TOKEN || '';
   const incoming = String(req.headers['x-chat-token'] || '') || String(req.query?.token || '');
   return Boolean((expected && incoming && safeEqual(incoming, expected)) || hasScopedChatToken(req, incoming));
+}
+
+// requireUiOrApi accepts a tenant's own token whenever the request names that
+// tenant. That is right for reading and for the tenant's own settings, but four
+// routes are platform-shaped: deleting the record (row + session + every Redis key),
+// cloning a NEW instance id into the registry, rotating the credential Openbot
+// holds, and approving a scan request. A leaked restaurant key could do all four
+// irreversibly (found 2026-08-22), so they require the platform, not the tenant.
+async function requirePlatformAdmin(req, res, next) {
+  if (readSession(req)) return next();
+  return requireMasterApi(req, res, next);
 }
 
 async function requireApi(req, res, next) {
@@ -1427,7 +1438,7 @@ app.patch('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   }
 });
 
-app.post('/api/wa/tenants/:instanceId/clone', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/tenants/:instanceId/clone', requirePlatformAdmin, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   try {
@@ -1442,7 +1453,7 @@ app.post('/api/wa/tenants/:instanceId/clone', requireUiOrApi, async (req, res) =
   }
 });
 
-app.post('/api/wa/tenants/:instanceId/rotate', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/tenants/:instanceId/rotate', requirePlatformAdmin, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   try {
@@ -1488,7 +1499,9 @@ app.post('/api/wa/tenants/:instanceId/active', requireUiOrApi, async (req, res) 
   try {
     const result = await tenantAdmin.setActive(instanceId, active);
     if (active) await startWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] start failed', instanceId, error?.message || error));
-    else await stopWhatsAppInstance(instanceId).catch(error => console.warn('[TENANT:ADMIN] stop failed', instanceId, error?.message || error));
+    // Pausing keeps the pairing: the comment above has always promised that
+    // resuming never asks for another QR, but the destructive stop broke it.
+    else await stopWhatsAppInstance(instanceId, { wipeCredentials: false }).catch(error => console.warn('[TENANT:ADMIN] stop failed', instanceId, error?.message || error));
     res.json({ success: true, ...result });
   } catch (error) {
     return adminError(res, error);
@@ -1611,7 +1624,7 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
   }
 });
 
-app.delete('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
+app.delete('/api/wa/tenants/:instanceId', requirePlatformAdmin, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   // Deleting a restaurant removes its row, its WhatsApp session and every cache
@@ -1639,7 +1652,7 @@ app.post('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
   res.status(201).json({ success: true, request: { id: requestId, requestedName: name, contact, status: 'pending', createdAt: Date.now() } });
 });
 
-app.post('/api/wa/scan-requests/:requestId/approve', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/scan-requests/:requestId/approve', requirePlatformAdmin, async (req, res) => {
   const requestId = String(req.params.requestId || '').trim();
   const { instanceId, label } = req.body || {};
   if (!instanceId || !label) return res.status(400).json({ error: 'INSTANCE_ID_AND_LABEL_REQUIRED' });
@@ -2014,6 +2027,27 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
     await Promise.race([effectsJob, new Promise(resolve => setTimeout(resolve, 1000))]);
     res.status(completed ? 200 : 202).json({ ...responsePayload, persistencePending: !completed });
 });
+// The invariant "while an operator is typing the bot stays silent" had no write
+// path: the lock was only set AFTER a send completed, so a customer message that
+// arrived while the operator was composing was forwarded to Openbot and answered
+// automatically - the customer got a bot answer and a human answer to the same
+// question (found 2026-08-22). The composer now claims the lock while typing.
+app.post('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
+  if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
+  if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+  // markOperatorActive uses SET ... EX, so a lock can never stick: the worst case
+  // is OPERATOR_ACTIVE_SECONDS of silence after the operator stops typing.
+  const marked = await markOperatorActive(instanceId, phone, 'operator_typing').catch(() => false);
+  if (!marked) return res.status(503).json({ error: 'LOCK_NOT_SET' });
+  const ttl = OPERATOR_ACTIVE_SECONDS;
+  const expiresAt = Date.now() + ttl * 1000;
+  await publishChatEvent({ type: 'lock.changed', instanceId, phone, ttl, expiresAt }).catch(() => undefined);
+  return res.json({ success: true, instanceId, phone, ttl, expiresAt });
+});
+
 app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
@@ -2104,10 +2138,15 @@ app.delete('/api/wa/instances/:instanceId', requireUiOrApi, async (req, res) => 
   res.json({ success: true });
 });
 
+// "Restart" means reconnect, not unlink. It used to route through the destructive
+// stop, so the panel button logged the device out and deleted the session folder -
+// an operator clearing a hiccup took the restaurant offline until somebody walked
+// to the phone with a QR code (found 2026-08-22). Unlinking lives at
+// /api/wa/logout, whose name says what it does.
 app.post('/api/wa/restart/:instanceId', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
-  await stopWhatsAppInstance(instanceId).catch(() => {});
+  await stopWhatsAppInstance(instanceId, { wipeCredentials: false }).catch(() => {});
   const result = await startWhatsAppInstance(instanceId);
   res.json({ success: true, ...result, ...(await getInstanceStatus(instanceId)) });
 });
@@ -2375,7 +2414,7 @@ module.exports = {
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
     issuePanelGrant, hasPanelGrant, hasRenewableChatToken, isLoopbackRequest, issueChatToken,
-    hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope,
+    hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requirePlatformAdmin, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
     recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR
   }

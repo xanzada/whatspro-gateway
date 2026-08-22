@@ -765,6 +765,28 @@
     renderLock();
   }
 
+  // While the operator is composing, the bot must stay silent. The lock used to be
+  // set only AFTER a send completed, so a customer message arriving mid-composition
+  // was answered by the bot and then by the human (found 2026-08-22). The composer
+  // claims the lock as soon as there is text, and refreshes it while typing
+  // continues. markOperatorActive uses SET ... EX, so the lock always expires on
+  // its own - the worst case is a short silence after the operator stops.
+  var lockClaimAt = 0;
+  var LOCK_CLAIM_INTERVAL_MS = 15000;
+  async function claimTypingLock() {
+    if (!state.activePhone) return;
+    if (Date.now() - lockClaimAt < LOCK_CLAIM_INTERVAL_MS) return;
+    lockClaimAt = Date.now();
+    var phone = state.activePhone;
+    try {
+      var data = await postJson(endpoint('lock', '/' + encodeURIComponent(instanceId) + '/' + encodeURIComponent(phone)), {});
+      if (phone === state.activePhone) setLock(data);
+    } catch (_) {
+      // A failed claim must not block typing; the next keystroke retries.
+      lockClaimAt = 0;
+    }
+  }
+
   async function loadLock() {
     if (!state.activePhone) { state.lockUntil = 0; return renderLock(); }
     var phone = state.activePhone;
@@ -938,7 +960,7 @@
     el.archiveBtn.addEventListener('click', function () { chatAction(core.chatState(currentChat()) === 'archive' ? 'restore' : 'close'); });
     el.deleteBtn.addEventListener('click', function () { chatAction('delete'); });
     el.sendBtn.addEventListener('click', sendMessage);
-    el.messageInput.addEventListener('input', function () { el.messageInput.style.height = 'auto'; el.messageInput.style.height = Math.min(120, el.messageInput.scrollHeight) + 'px'; updateComposer(); });
+    el.messageInput.addEventListener('input', function () { el.messageInput.style.height = 'auto'; el.messageInput.style.height = Math.min(120, el.messageInput.scrollHeight) + 'px'; updateComposer(); if (el.messageInput.value.trim()) claimTypingLock(); });
     el.messageInput.addEventListener('keydown', function (event) { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } });
     el.messageInput.addEventListener('focus', function () { setTimeout(syncVisualViewport, 0); });
     if (window.visualViewport) {
