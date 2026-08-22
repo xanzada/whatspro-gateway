@@ -444,7 +444,7 @@
         '<span class="contact-avatar"><i class="fa-solid fa-user"></i>' + sosPulse + '</span><span class="contact-copy">' +
         '<span class="contact-name truncate">' + core.escapeHtml(name) + '</span><span class="contact-phone truncate">+' + core.escapeHtml(phone) + '</span>' +
         '<span class="contact-snippet truncate">' + core.escapeHtml(chat.lastText || chat.lastMessage || t('noMessages')) + '</span></span>' +
-        '<span class="contact-meta"><span class="contact-time">' + core.escapeHtml(core.formatTime(chat.lastAt || chat.updatedAt, state.lang)) + '</span>' +
+        '<span class="contact-meta"><span class="contact-time" title="' + core.escapeHtml(core.formatDateTime(chat.lastAt || chat.updatedAt, state.lang)) + '">' + core.escapeHtml(core.formatListStamp(chat.lastAt || chat.updatedAt, state.lang)) + '</span>' +
         (badge ? '<span class="badge ' + (column === 'sos' ? 'sos-badge' : '') + '">' + core.escapeHtml(badge) + '</span>' : '') + '</span></button>';
     }).join('');
   }
@@ -508,7 +508,9 @@
   function messageBubble(item, part) {
     var role = core.roleOf(item);
     var label = role === 'client' ? t('client') : role === 'bot' ? t('bot') : role === 'operator' ? t('operatorRole') : t('system');
-    var timestamp = core.formatTime(item.createdAt || item.timestamp || item.sentAt, state.lang);
+    var stamp = item.createdAt || item.timestamp || item.sentAt;
+    var timestamp = core.formatTime(stamp, state.lang);
+    var fullStamp = core.formatDateTime(stamp, state.lang);
     var content = '';
     if (part.kind === 'text') content = '<div class="message-text">' + core.escapeHtml(part.text) + '</div>';
     if (part.kind === 'audio') {
@@ -530,7 +532,7 @@
     }
     return '<div class="message-row ' + role + '"><div class="bubble ' + (part.kind === 'audio' ? 'audio-bubble' : part.kind === 'image' ? 'image-bubble' : part.kind === 'document' ? 'document-bubble' : '') + '">' +
       (role === 'system' ? '' : '<div class="role">' + core.escapeHtml(label) + '</div>') + content +
-      '<div class="bubble-foot"><time>' + core.escapeHtml(timestamp) + '</time>' + renderReceipt(item, role) + '</div></div></div>';
+      '<div class="bubble-foot"><time title="' + core.escapeHtml(fullStamp) + '">' + core.escapeHtml(timestamp) + '</time>' + renderReceipt(item, role) + '</div></div></div>';
   }
 
   function revokeAudioUrls() {
@@ -551,8 +553,17 @@
     var shouldScroll = forceScroll || nearBottom();
     revokeAudioUrls();
     if (!state.history.length) el.messages.innerHTML = '<div class="empty"><p>' + core.escapeHtml(t('noMessages')) + '</p></div>';
-    else el.messages.innerHTML = state.history.map(function (item) {
-      return core.messageParts(item).map(function (part) { return messageBubble(item, part); }).join('');
+    else el.messages.innerHTML = state.history.map(function (item, index) {
+      var previous = index > 0 ? state.history[index - 1] : null;
+      var stamp = item.createdAt || item.timestamp || item.sentAt;
+      var previousStamp = previous ? (previous.createdAt || previous.timestamp || previous.sentAt) : null;
+      // WhatsApp puts the date above the first message of each day rather than on
+      // every bubble; the bubble keeps the clock and carries the full moment in
+      // its tooltip (operator request, 2026-08-22).
+      var separator = core.startsNewDay(stamp, previousStamp)
+        ? '<div class="day-separator"><span>' + core.escapeHtml(core.formatDayLabel(stamp, state.lang)) + '</span></div>'
+        : '';
+      return separator + core.messageParts(item).map(function (part) { return messageBubble(item, part); }).join('');
     }).join('');
     hydrateAudio();
     el.messages.querySelectorAll('.chat-image').forEach(function (image) {

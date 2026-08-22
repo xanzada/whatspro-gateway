@@ -109,18 +109,96 @@
     return parts;
   }
 
-  function formatTime(value, lang) {
+  function toDate(value) {
     var numeric = Number(value || 0);
     if (numeric > 0 && numeric < 1e12) numeric *= 1000;
     var date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value);
-    if (!value || Number.isNaN(date.getTime())) return '';
+    if (!value || Number.isNaN(date.getTime())) return null;
+    return date;
+  }
+
+  function localeOf(lang) {
+    return lang === 'ru' ? 'ru-RU' : 'kk-KZ';
+  }
+
+  function clockOf(date) {
+    return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+  }
+
+  function formatTime(value, lang) {
+    var date = toDate(value);
+    if (!date) return '';
     try {
-      return new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'kk-KZ', {
+      return new Intl.DateTimeFormat(localeOf(lang), {
         hour: '2-digit', minute: '2-digit', hour12: false
       }).format(date);
     } catch (_) {
-      return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+      return clockOf(date);
     }
+  }
+
+  function sameCalendarDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+
+  // The day a message belongs to, the way WhatsApp shows it: a separator above the
+  // first message of each day. Bubbles kept only the clock, so scrolling back
+  // through a week of a guest's history gave no way to tell Monday from Friday -
+  // an operator reading a complaint could not see whether it was today's order or
+  // last Tuesday's (operator request, 2026-08-22).
+  function formatDayLabel(value, lang, now) {
+    var date = toDate(value);
+    if (!date) return '';
+    var today = now instanceof Date ? now : (toDate(now) || new Date());
+    if (sameCalendarDay(date, today)) return lang === 'ru' ? 'Сегодня' : 'Бүгін';
+    var yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (sameCalendarDay(date, yesterday)) return lang === 'ru' ? 'Вчера' : 'Кеше';
+    var sameYear = date.getFullYear() === today.getFullYear();
+    try {
+      return new Intl.DateTimeFormat(localeOf(lang), sameYear
+        ? { day: 'numeric', month: 'long' }
+        : { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+    } catch (_) {
+      var parts = [String(date.getDate()).padStart(2, '0'), String(date.getMonth() + 1).padStart(2, '0')];
+      if (!sameYear) parts.push(String(date.getFullYear()));
+      return parts.join('.');
+    }
+  }
+
+  // The full moment behind a bubble's clock, for the title attribute: the clock
+  // alone is ambiguous once a chat spans days.
+  function formatDateTime(value, lang) {
+    var date = toDate(value);
+    if (!date) return '';
+    try {
+      return new Intl.DateTimeFormat(localeOf(lang), {
+        day: 'numeric', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false
+      }).format(date);
+    } catch (_) {
+      return String(date.getDate()).padStart(2, '0') + '.' + String(date.getMonth() + 1).padStart(2, '0') + '.'
+        + date.getFullYear() + ' ' + clockOf(date);
+    }
+  }
+
+  // In the contact list a chat touched today shows the clock, an older one shows
+  // its day - the same rule every messenger uses.
+  function formatListStamp(value, lang, now) {
+    var date = toDate(value);
+    if (!date) return '';
+    var today = now instanceof Date ? now : (toDate(now) || new Date());
+    if (sameCalendarDay(date, today)) return formatTime(value, lang);
+    return formatDayLabel(value, lang, today);
+  }
+
+  // True when this message opens a new calendar day relative to the previous one,
+  // i.e. when a day separator belongs above it. The first message always does.
+  function startsNewDay(current, previous) {
+    var date = toDate(current);
+    if (!date) return false;
+    var before = toDate(previous);
+    if (!before) return true;
+    return !sameCalendarDay(date, before);
   }
 
   return {
@@ -128,7 +206,12 @@
     chatColumn: chatColumn,
     chatState: chatState,
     escapeHtml: escapeHtml,
+    formatDateTime: formatDateTime,
+    formatDayLabel: formatDayLabel,
+    formatListStamp: formatListStamp,
     formatTime: formatTime,
+    sameCalendarDay: sameCalendarDay,
+    startsNewDay: startsNewDay,
     isAudio: isAudio,
     isDocument: isDocument,
     isImage: isImage,
