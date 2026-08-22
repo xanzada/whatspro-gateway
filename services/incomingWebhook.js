@@ -248,6 +248,15 @@ async function forwardIncomingWhatsAppMessage(payload) {
     // restart therefore cannot lose the customer's message between WhatsApp,
     // Chat Redis and OpenBot.
     record = await enqueueIncoming(payload);
+    if (!record) {
+      // The WAL already completed this exact message; a re-delivery must not be
+      // forwarded to Openbot a second time (2026-08-22).
+      return {
+        redis: { status: 'skipped', reason: 'already_delivered' },
+        openbot: { status: 'skipped', reason: 'already_delivered' },
+        durable: true
+      };
+    }
   } catch (error) {
     console.error('[INBOUND WAL] enqueue failed:', error.message);
     record = {

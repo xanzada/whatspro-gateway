@@ -31,14 +31,41 @@ function extractPhoneCandidate(rawValue) {
     const phoneLikeMatch =
         raw.match(/(?:\+?7|8)[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{2}[\s().-]*\d{2}/) ||
         raw.match(/\d{10,15}/);
+    if (phoneLikeMatch) return phoneLikeMatch[0];
 
-    return phoneLikeMatch ? phoneLikeMatch[0] : '';
+    // An international number written with separators matches neither pattern
+    // above: the first only accepts a Kazakhstan 7/8 prefix, and the second needs
+    // 10 contiguous digits. A WhatsApp JID is contiguous so it takes the fast path,
+    // but a contact record can carry "+90 532 123 45 67" - and returning '' here
+    // meant whatsappManager dropped the whole message before the WAL (2026-08-22).
+    // The leading + is required on purpose: it keeps a group JID, which never has
+    // one, out of this branch.
+    const separated = raw.match(/\+\d[\d\s().-]{8,20}\d/);
+    if (separated) {
+        const digits = separated[0].replace(/\D/g, '');
+        if (digits.length >= 10 && digits.length <= 15) return digits;
+    }
+
+    return '';
 }
 
+// A Kazakhstan number is normalised to its canonical 7XXXXXXXXXX form so every
+// Redis key for the same customer agrees. Any OTHER international number keeps its
+// digits instead of being thrown away.
+//
+// WHY: normalizeKazakhstanPhone returns '' for anything that is not ^7\d{10}$, and
+// whatsappManager.js drops the inbound message when isValidChatPhone fails - before
+// the WAL, before the store, before Openbot, with no log line. A customer writing
+// from +998, +90 or +49 simply vanished: no inbox entry, no bot reply, no trace
+// (found 2026-08-22). isValidChatPhone already accepts 10-15 digits, so the only
+// thing standing in the way was this silent '' .
 function normalizePhone(value) {
     const candidate = extractPhoneCandidate(value);
     if (String(candidate).endsWith('@lid')) return candidate;
-    return normalizeKazakhstanPhone(candidate);
+    const kazakhstan = normalizeKazakhstanPhone(candidate);
+    if (kazakhstan) return kazakhstan;
+    const digits = String(candidate).replace(/\D/g, '');
+    return /^\d{10,15}$/.test(digits) ? digits : '';
 }
 
 function isValidChatPhone(phone) {

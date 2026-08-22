@@ -1709,7 +1709,13 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     contactInfo.number, contactInfo.id
                 ]);
             }
-            if (!isValidChatPhone(cleanNumber)) return;
+            if (!isValidChatPhone(cleanNumber)) {
+                // This is the last point before the WAL, so a drop here is a
+                // customer message that leaves no trace anywhere. It must never be
+                // silent again (2026-08-22).
+                console.warn(`[INBOUND DROP] ${instanceId}: unusable sender, message discarded before the WAL from=${String(msg?.from || '')} resolved=${String(cleanNumber || '')}`);
+                return;
+            }
 
             if (cleanNumber) {
                 realSender = `${cleanNumber}@c.us`; 

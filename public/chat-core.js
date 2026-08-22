@@ -17,7 +17,14 @@
     // (ghost-chat bug, 2026-08-21).
     var raw = String(value || '').trim();
     if (/@lid$/i.test(raw)) return raw.toLowerCase();
-    return raw.replace(/\D/g, '');
+    var digits = raw.replace(/\D/g, '');
+    // Mirror the server's Kazakhstan canonicalisation (services/phoneUtils.js).
+    // Without it a chat the server filed under 77471234567 is looked up by the
+    // panel as 87471234567 or 7471234567 and its history never loads.
+    if (digits.length === 12 && digits.slice(0, 2) === '00') digits = digits.slice(2);
+    if (digits.length === 10) digits = '7' + digits;
+    if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
+    return digits;
   }
 
   function chatState(chat) {
