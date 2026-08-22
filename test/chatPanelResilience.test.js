@@ -68,8 +68,30 @@ test('the session endpoint mints a token the guarded chat routes accept', async 
   const bad = await fetch(base + '/api/chat/session/!!');
   assert.equal(bad.status, 400);
 
-  const minted = await fetch(base + '/api/chat/session/prestige');
-  assert.equal(minted.status, 200);
+  // The mint is no longer public. It used to hand a 24h instance-scoped token to
+  // any caller, which let the open internet read every restaurant's chats and
+  // receipt PDFs, send WhatsApp as the restaurant and delete conversations
+  // (reproduced against the live endpoint 2026-08-22). The panel obtains its
+  // proof from the shell render, which is where the renewal grant is issued, so
+  // the operator still never sees a login. Full coverage of the auth matrix lives
+  // in test/chatSessionAuth.test.js.
+  const anonymous = await fetch(base + '/api/chat/session/prestige');
+  assert.equal(anonymous.status, 401, 'the mint must refuse an anonymous caller');
+
+  const shell = await fetch(base + '/chat.html?instance=prestige');
+  assert.equal(shell.status, 200);
+  const setCookie = (shell.headers.getSetCookie
+    ? shell.headers.getSetCookie()
+    : [shell.headers.get('set-cookie')].filter(Boolean))
+    .map(String)
+    .find(value => value.startsWith('whatspro_panel='));
+  assert.ok(setCookie, 'the shell render must issue the panel grant');
+  const grantCookie = setCookie.split(';')[0];
+
+  const minted = await fetch(base + '/api/chat/session/prestige', {
+    headers: { cookie: grantCookie }
+  });
+  assert.equal(minted.status, 200, 'a panel holding the grant renews without a login');
   const payload = await minted.json();
   assert.equal(typeof payload.chatToken, 'string');
   assert.equal(payload.chatToken.split('.').length, 2);

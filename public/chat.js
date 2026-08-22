@@ -167,7 +167,15 @@
     tokenRefresh = (async function () {
       try {
         var url = apiBase + (endpoints.session || '/api/chat/session') + '/' + encodeURIComponent(instanceId);
-        var response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+        // Send the aged-out token back: it is the renewal proof the server checks.
+        // Third-party cookies are blocked in many browsers, so the cookie grant
+        // alone cannot be relied on inside the Hub iframe.
+        var renewalHeaders = { Accept: 'application/json' };
+        if (chatToken) {
+          renewalHeaders['x-chat-token'] = chatToken;
+          renewalHeaders['x-chat-instance'] = instanceId;
+        }
+        var response = await fetch(url, { credentials: 'include', cache: 'no-store', headers: renewalHeaders });
         if (!response.ok) return false;
         var data = await response.json().catch(function () { return {}; });
         var next = String(data.chatToken || '');

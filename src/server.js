@@ -52,6 +52,17 @@ const SESSION_SECRET = process.env.WHATSPRO_SESSION_SECRET || process.env.WHATSP
 const MIN_ADMIN_PASSWORD_LENGTH = 10;
 const SSE_MAX_LIFETIME_MS = 60 * 60 * 1000;
 const CHAT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+// A chat token that has just aged out may still buy its own replacement. The panel
+// lives inside the Hub iframe and has no login of its own, so demanding an admin
+// session on renewal would strand the operator behind a silent 401 (that is exactly
+// what the 24h TTL used to do). A validly signed token is proof the caller already
+// held one, and third-party cookies are blocked in many browsers, so this - not a
+// cookie - is the primary renewal proof.
+const CHAT_TOKEN_RENEWAL_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+// The panel grant is the cookie half of the same proof, for the case where the tab
+// was reloaded without a token to hand back. 30 days, so the operator never logs in
+// again during normal work.
+const PANEL_GRANT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CONNECT_TOKEN_TTL_MS = 72 * 60 * 60 * 1000;
 const CONNECT_RATE_WINDOW_SECONDS = 10 * 60;
 const CONNECT_RATE_LIMIT = 480;
@@ -349,6 +360,83 @@ function hasScopedChatToken(req, tokenOverride = '') {
   }
 }
 
+// ---------------------------------------------------------------- panel grant
+//
+// WHY THIS EXISTS: /api/chat/session/:instanceId used to mint a 24h instance-scoped
+// chat token for anyone who asked, with no credential at all. That token satisfies
+// requireChatUiOrApi, so the open internet could read every restaurant's chats and
+// receipt PDFs, send WhatsApp as the restaurant, and delete conversations
+// (reproduced from the public endpoint 2026-08-22). The panel still must not ask an
+// operator to log in - it is framed by hub.alemi.kz and has no login of its own -
+// so the mint now requires proof of prior legitimate access instead of a password.
+
+function issuePanelGrant(instanceId, expiresAt = Date.now() + PANEL_GRANT_TTL_MS) {
+  const payload = Buffer.from(`${instanceId}:${expiresAt}`).toString('base64url');
+  const signature = crypto.createHmac('sha256', SESSION_SECRET).update(`panel:${payload}`).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function hasPanelGrant(req, instanceId) {
+  try {
+    const raw = String(parseCookies(req).whatspro_panel || '');
+    const [payload, signature, extra] = raw.split('.');
+    if (!payload || !signature || extra) return false;
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(`panel:${payload}`).digest('base64url');
+    if (!safeEqual(signature, expected)) return false;
+    const decoded = Buffer.from(payload, 'base64url').toString('utf8');
+    const separator = decoded.lastIndexOf(':');
+    if (separator < 1) return false;
+    const grantInstance = decoded.slice(0, separator);
+    const expiresAt = Number(decoded.slice(separator + 1));
+    return grantInstance === String(instanceId) && expiresAt > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function setPanelGrant(res, instanceId) {
+  // SameSite=None is required for the cookie to travel inside the Hub iframe, and
+  // the browser only accepts it together with Secure. Behind Traefik the browser
+  // sees HTTPS; in tests and local http there is no TLS, so fall back to Lax
+  // rather than emit a cookie the browser silently drops.
+  const crossSite = process.env.NODE_ENV === 'production';
+  res.cookie('whatspro_panel', issuePanelGrant(instanceId), {
+    httpOnly: true,
+    sameSite: crossSite ? 'none' : 'lax',
+    secure: crossSite,
+    maxAge: PANEL_GRANT_TTL_MS,
+    path: '/'
+  });
+}
+
+// A chat token whose signature is ours and whose instance matches, accepted even
+// after expiry but only inside the renewal grace window. Renewal proof only -
+// never call this to authorise data access.
+function hasRenewableChatToken(req, instanceId) {
+  try {
+    const incoming = String(req.headers['x-chat-token'] || req.query?.token || '');
+    const [payload, signature, extra] = incoming.split('.');
+    if (!payload || !signature || extra) return false;
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+    if (!safeEqual(signature, expected)) return false;
+    const decoded = Buffer.from(payload, 'base64url').toString('utf8');
+    const separator = decoded.lastIndexOf(':');
+    if (separator < 1) return false;
+    const tokenInstance = decoded.slice(0, separator);
+    const expiresAt = Number(decoded.slice(separator + 1));
+    if (tokenInstance !== String(instanceId)) return false;
+    return Number.isFinite(expiresAt) && Date.now() - expiresAt < CHAT_TOKEN_RENEWAL_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackRequest(req) {
+  const raw = String(req.ip || req.socket?.remoteAddress || '');
+  const host = raw.replace(/^::ffff:/, '');
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
+}
+
 function issueConnectToken(instanceId, expiresAt = Date.now() + CONNECT_TOKEN_TTL_MS) {
   const payload = Buffer.from(JSON.stringify({
     v: 1,
@@ -480,6 +568,10 @@ async function renderChatHtml(req, res) {
   const html = (await fs.readFile(CHAT_HTML_PATH, 'utf8'))
     .replace('src="/chat-core.js"', `src="/chat-core.js?v=${CHAT_ASSET_VERSION}"`)
     .replace('src="/chat.js"', `src="/chat.js?v=${CHAT_ASSET_VERSION}"`);
+  // The shell render is the one moment the panel is known to be legitimate, so it
+  // is where the 30-day renewal grant is handed out. The operator never sees a
+  // login because of this line.
+  setPanelGrant(res, instance);
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
   res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
   const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
@@ -880,7 +972,15 @@ function summarizeChat(item, historyRows, viewedAt, archived) {
 }
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'whatspro' }));
-app.get('/health/detailed', async (req, res) => {
+// The container healthcheck calls this over loopback, so loopback stays open.
+// From anywhere else it needs a credential: it published the Redis host, the
+// Openbot host, the tenant count and the instance ids that still need a QR scan -
+// exactly the ids an attacker needs to ask for (2026-08-22).
+app.get('/health/detailed', async (req, res, next) => {
+  if (isLoopbackRequest(req)) return next();
+  if (readSession(req) || await hasApiToken(req)) return next();
+  return res.status(401).json({ error: 'AUTH_REQUIRED' });
+}, async (req, res) => {
   const redis = getRedisState();
   const storage = await tenantStore.getStorageSummary().catch(error => ({
     backend: 'unavailable',
@@ -951,12 +1051,24 @@ app.get('/chat.html', (req, res, next) => {
   renderChatHtml(req, res).catch(next);
 });
 
-// The shell already mints a chat token publicly on every render, so exposing
-// the same mint lets a panel left open past the 24h TTL heal itself instead of
-// stranding archive, delete and PDF behind a silent 401.
-app.get('/api/chat/session/:instanceId', (req, res) => {
+// Renewal, not issuance: a panel left open past the 24h TTL heals itself instead
+// of stranding archive, delete and PDF behind a silent 401. It is NOT public -
+// the caller must already hold a panel grant, a renewable chat token, an admin
+// session or an API token. Handing a token to an anonymous caller was a full
+// cross-tenant takeover (fixed 2026-08-22).
+app.get('/api/chat/session/:instanceId', async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const entitled = hasPanelGrant(req, instanceId)
+    || hasRenewableChatToken(req, instanceId)
+    || readSession(req)
+    || await hasApiToken(req);
+  if (!entitled) return res.status(401).json({ error: 'AUTH_REQUIRED' });
+  const tenant = await tenantStore.getTenantChatConfig(instanceId).catch(() => null);
+  if (!tenant?.found) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+  // Renewing also refreshes the grant, so an operator who keeps the panel open
+  // never falls off the 30-day window.
+  setPanelGrant(res, instanceId);
   res.set({ 'Cache-Control': 'no-store, max-age=0' });
   return res.json({ chatToken: issueChatToken(instanceId), expiresIn: Math.floor(CHAT_TOKEN_TTL_MS / 1000) });
 });
@@ -2262,6 +2374,7 @@ module.exports = {
   renderChatHtml,
   __test: {
     createSendIdempotency, isValidSendRequestId, remainingOperatorTtl, hasChatMediaToken,
+    issuePanelGrant, hasPanelGrant, hasRenewableChatToken, isLoopbackRequest, issueChatToken,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
     recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR
