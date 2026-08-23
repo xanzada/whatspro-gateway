@@ -1099,7 +1099,31 @@ app.get('/chat.html', (req, res, next) => {
 // the caller must already hold a panel grant, a renewable chat token, an admin
 // session or an API token. Handing a token to an anonymous caller was a full
 // cross-tenant takeover (fixed 2026-08-22).
-app.get('/api/chat/session/:instanceId', async (req, res) => {
+// Rewrites an alemi_instance in the URL to the canonical instance_id, for every chat
+// route, BEFORE auth runs. Order matters: the scoped chat token and the panel grant are
+// both bound to req.params.instanceId, so resolving after auth would mint a token for
+// "kebab1" while the grant cookie says "kabab-1" and the two would fight. Resolving here
+// means the whole request - auth, storage keys, cookie - speaks one id.
+async function resolveChatInstance(req, res, next) {
+  const requested = String(req.params?.instanceId || '').trim();
+  if (!isValidInstanceId(requested)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  let canonical = requested;
+  try {
+    canonical = (await tenantStore.resolveInstanceAlias(requested)) || requested;
+  } catch {
+    canonical = requested;
+  }
+  if (canonical !== requested) {
+    req.params.instanceId = canonical;
+    // The panel needs to know, so it can pin the canonical id for later requests instead
+    // of re-resolving on every call.
+    res.set('X-Chat-Instance', canonical);
+  }
+  req.chatInstanceRequested = requested;
+  return next();
+}
+
+app.get('/api/chat/session/:instanceId', resolveChatInstance, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   const entitled = hasPanelGrant(req, instanceId)
@@ -1723,7 +1747,7 @@ app.get('/api/wa/scan-invitations', requireUiOrApi, async (req, res) => {
   res.status(201).json({ success: true, request: { id: requestId } });
 });
 
-app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
+app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
@@ -1811,7 +1835,7 @@ app.get('/api/chat/inbox/:instanceId', requireChatUiOrApi, async (req, res) => {
   res.json({ success: true, instanceId, items });
 });
 
-app.get('/api/chat/events/:instanceId', requireChatUiOrApi, async (req, res) => {
+app.get('/api/chat/events/:instanceId', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
 
@@ -1857,7 +1881,7 @@ app.get('/api/chat/events/:instanceId', requireChatUiOrApi, async (req, res) => 
   }
 });
 
-app.get('/api/chat/inbox-legacy/:instanceId', requireChatUiOrApi, async (req, res) => {
+app.get('/api/chat/inbox-legacy/:instanceId', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
@@ -1903,7 +1927,7 @@ app.get('/api/chat/inbox-legacy/:instanceId', requireChatUiOrApi, async (req, re
   res.json({ success: true, instanceId, items });
 });
 
-app.get('/api/chat/history/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+app.get('/api/chat/history/:instanceId/:phone', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -1923,7 +1947,7 @@ const serveChatMedia = createChatMediaHandler({
     recoverMedia: (instanceId, messageId, req) => recoverChatMedia(instanceId, req.query?.phone, messageId)
 });
 
-app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (req, res) => {
+app.get('/api/chat/media/:instanceId/:messageId', resolveChatInstance, requireChatMediaAuth, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const messageId = String(req.params.messageId || '').trim();
 
@@ -1941,7 +1965,7 @@ app.get('/api/chat/media/:instanceId/:messageId', requireChatMediaAuth, async (r
 
     return serveChatMedia(req, res);
 });
-app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
     const instanceId = String(req.params.instanceId || '').trim();
     const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
@@ -2070,7 +2094,7 @@ app.post('/api/chat/send/:instanceId/:phone', requireChatUiOrApi, async (req, re
 // arrived while the operator was composing was forwarded to Openbot and answered
 // automatically - the customer got a bot answer and a human answer to the same
 // question (found 2026-08-22). The composer now claims the lock while typing.
-app.post('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+app.post('/api/chat/operator-lock/:instanceId/:phone', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
@@ -2086,7 +2110,7 @@ app.post('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async
   return res.json({ success: true, instanceId, phone, ttl, expiresAt });
 });
 
-app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+app.get('/api/chat/operator-lock/:instanceId/:phone', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   if (!isValidInstanceId(instanceId) || !isValidChatPhone(phone)) return res.status(400).json({ error: 'BAD_CHAT_REQUEST' });
@@ -2096,7 +2120,7 @@ app.get('/api/chat/operator-lock/:instanceId/:phone', requireChatUiOrApi, async 
   return res.json({ success: true, instanceId, phone, ttl: safeTtl, expiresAt: safeTtl ? Date.now() + safeTtl * 1000 : 0 });
 });
 
-app.post('/api/chat/action/:instanceId/:phone', requireChatUiOrApi, async (req, res) => {
+app.post('/api/chat/action/:instanceId/:phone', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
   const instanceId = String(req.params.instanceId || '').trim();
   const phone = await resolveChatPhoneParam(instanceId, req.params.phone);
   const action = String(req.body?.action || '').trim().toLowerCase();

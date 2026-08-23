@@ -70,7 +70,10 @@ test('logout still unlinks - that route is named for what it does', () => {
 // customer received a bot answer and a human answer to the same question.
 
 test('the operator lock has a write path', () => {
-  assert.match(serverSrc, /app\.post\('\/api\/chat\/operator-lock\/:instanceId\/:phone', requireChatUiOrApi/,
+  // resolveChatInstance sits in front of the auth middleware on every chat route, so the
+  // hub's alemi_instance in the URL is rewritten to our instance_id before the token is
+  // checked (C25, 2026-08-23). The write path itself is unchanged.
+  assert.match(serverSrc, /app\.post\('\/api\/chat\/operator-lock\/:instanceId\/:phone', resolveChatInstance, requireChatUiOrApi/,
     'a POST route must exist, not only the read-only GET');
   const route = serverSrc.slice(
     serverSrc.indexOf("app.post('/api/chat/operator-lock/:instanceId/:phone'"),

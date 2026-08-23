@@ -145,6 +145,41 @@ function sameSnapshotRow(a, b) {
   }
 }
 
+// The hub knows a restaurant by its alemi_instance; we know it by instance_id. They are
+// the same string for some tenants and different for others (kebab1 vs kabab-1), and the
+// hub's integration page links the chat panel using ITS id - so every tenant whose ids
+// differ had a dead panel, while the inbox answered an empty list rather than an error
+// (found 2026-08-23). The ownership index is already maintained on create/update/delete,
+// so resolving through it adds no new state to keep in sync.
+async function resolveInstanceAlias(instanceValue) {
+  const requested = normalizeInstance(instanceValue);
+  if (!requested) return null;
+  // A canonical id always wins, so an alias can never shadow a real tenant.
+  if (await findRow(requested)) return requested;
+  if (redisUsable()) {
+    try {
+      const owner = await redisClient.hGet(ALEMI_INSTANCE_INDEX_KEY, requested);
+      const normalizedOwner = normalizeInstance(owner);
+      if (normalizedOwner && (await findRow(normalizedOwner))) return normalizedOwner;
+    } catch (error) {
+      console.warn(`[TENANT STORE] alias lookup failed (${requested}):`, error.message);
+    }
+  }
+  // Redis unavailable, or no index entry: fall back to a scan of what we can see. The
+  // snapshot mirrors every row, so a restart during a Redis outage still resolves.
+  try {
+    const rows = await listTenantRecords();
+    const match = (Array.isArray(rows) ? rows : []).find(
+      (row) => normalizeInstance(row?.alemi_instance) === requested
+    );
+    const matchedId = normalizeInstance(match?.instance_id);
+    if (matchedId) return matchedId;
+  } catch {
+    // Nothing further to try; the caller reports TENANT_NOT_FOUND as before.
+  }
+  return null;
+}
+
 async function findRow(instanceValue) {
   const instance = normalizeInstance(instanceValue);
   if (!instance) return null;
@@ -276,6 +311,7 @@ async function getStorageSummary() {
 
 module.exports = {
   ALEMI_INSTANCE_INDEX_KEY,
+  resolveInstanceAlias,
   TENANT_STORE_KEY,
   createRow,
   deleteRow,
