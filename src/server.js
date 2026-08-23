@@ -2320,7 +2320,31 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
     const mediaPayload = mimeType ? `data:${mimeType};base64,${encoded}` : encoded;
     effectiveMediaType = mimeType;
     if (mimeType.startsWith('audio/')) audioMediaData = encoded;
-    sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption);
+    // The text branch below has had an idempotency lease since the send WAL was written; the
+    // media branch never did. So an HTTP timeout on the caller's side - Openbot retrying its
+    // own outbox - delivered the same photo or Kaspi receipt PDF to the guest twice (found
+    // 2026-08-23). Same mechanism, not a second one: the hash covers the bytes, the caption
+    // and the filename, so a retry of the same upload replays while a different photo under a
+    // reused requestId is the same 409 conflict text already gives.
+    if (requestId) {
+      const payloadHash = crypto
+        .createHash('sha256')
+        .update(`media:${mimeType}:${fileName}:${caption}:`)
+        .update(encoded)
+        .digest('hex');
+      apiSendLease = await sendIdempotency.begin(instanceId, cleanPhone, requestId, payloadHash);
+      if (apiSendLease.conflict) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+      if (apiSendLease.response) return res.json({ ...apiSendLease.response, replayed: true });
+      if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
+    }
+    try {
+      sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption);
+    } catch (error) {
+      // Mirrors the text branch: a failed send must not strand the requestId, or a
+      // legitimate retry of a message that never arrived would be refused forever.
+      if (apiSendLease) await sendIdempotency.release(apiSendLease).catch(() => {});
+      throw error;
+    }
   } else if (text) {
     if (requestId) {
       const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
