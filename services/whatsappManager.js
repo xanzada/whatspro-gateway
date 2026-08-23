@@ -610,7 +610,14 @@ function scheduleMediaPersist(instanceId, phone, msg) {
 
                 if (Number(exists) === 1) return;
                 if (!await hasAuthoritativeMessage(instanceId, phone, messageId)) {
-                    permanentMediaFailures.add(failureKey);
+                    // scheduleMediaPersist fires BEFORE the background WAL writes the message,
+                    // so on the first tick hasAuthoritativeMessage is legitimately still false -
+                    // that is a "not yet", not a verdict. Treating it as permanent disarmed the
+                    // whole 1s/3s/7s/15s/30s ladder on its own first step, and a voice note or
+                    // Kaspi receipt then 404'd with MEDIA_NOT_READY (found 2026-08-23). The miss
+                    // only becomes permanent once every delay has been tried.
+                    const isLastTick = delayMs === delays[delays.length - 1];
+                    if (isLastTick) permanentMediaFailures.add(failureKey);
                     return;
                 }
 
