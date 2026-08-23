@@ -1268,7 +1268,14 @@ app.post(['/api/platform/logout', '/api/whatspro/logout'], (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
+// Platform-wide answers are owner-only. Reproduced live 2026-08-23 with a real tenant token:
+// GET /api/wa/instances?instance=kabab-1 returned BOTH instances, /api/wa/tenants returned
+// the readiness report for every tenant, and PUT /api/wa/shared-prompt rewrote the system
+// prompt of every tenant on prompt_mode=shared. hasApiToken accepts a tenant token as long
+// as the request names its OWN instance, and naming yourself satisfied the scope check while
+// the handler stayed platform-wide. withinApiScope was written for exactly this class of
+// mistake and had simply never been applied to routes whose answer is the whole platform.
+app.get('/api/wa/instances', requirePlatformAdmin, async (req, res) => {
   res.json({ success: true, instances: await listInstances() });
 });
 
@@ -1276,7 +1283,7 @@ app.get('/api/wa/instances', requireUiOrApi, async (req, res) => {
   // Redis and answer whether each record is operationally complete,
 // including the collisions that only exist between rows. They return pass/fail
 // codes and never a field's value, so the token stays where it lives.
-app.get('/api/wa/tenants', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/tenants', requirePlatformAdmin, async (req, res) => {
   let records;
   try {
     records = await tenantStore.listTenantRecords();
@@ -1399,7 +1406,7 @@ function adminError(res, error) {
 // The form derives an id and a domain while you type. It has to ask what the
 // suffix is rather than guess, so the same defaults hold in the browser and on
 // the server instead of drifting apart.
-app.get('/api/wa/tenant-defaults', requireUiOrApi, (req, res) => {
+app.get('/api/wa/tenant-defaults', requirePlatformAdmin, (req, res) => {
   res.json({
     success: true,
     domainSuffix: String(process.env.WHATSPRO_TENANT_DOMAIN_SUFFIX || '').replace(/^\.+/, ''),
@@ -1407,7 +1414,7 @@ app.get('/api/wa/tenant-defaults', requireUiOrApi, (req, res) => {
   });
 });
 
-app.get('/api/wa/platform-storage', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/platform-storage', requirePlatformAdmin, async (req, res) => {
   try {
     res.json({ success: true, ...(await tenantStore.getStorageSummary()) });
   } catch (error) {
@@ -1451,11 +1458,11 @@ app.post('/api/wa/runtime-configs/:instanceId/memories', requireMasterApi, async
   }
 });
 
-app.get('/api/wa/shared-prompt', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/shared-prompt', requirePlatformAdmin, async (req, res) => {
   res.json({ success: true, prompt: await readSharedPrompt() });
 });
 
-app.put('/api/wa/shared-prompt', requireUiOrApi, async (req, res) => {
+app.put('/api/wa/shared-prompt', requirePlatformAdmin, async (req, res) => {
   const prompt = String(req.body?.prompt || '').replace(/\r\n/g, '\n').trim().slice(0, 20000);
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_UNAVAILABLE' });
   await redisClient.set(SHARED_PROMPT_KEY, prompt);
@@ -1481,7 +1488,11 @@ app.get('/api/wa/tenants/:instanceId/settings', requireUiOrApi, async (req, res)
   }
 });
 
-app.post('/api/wa/tenants', requireUiOrApi, async (req, res) => {
+// Owner-only for the same reason as /api/wa/instances above: a tenant token satisfies
+// requireUiOrApi by naming itself, and these routes answer about - or act on - the platform
+// rather than the caller's own restaurant. Scan requests and invitations are keyed by an
+// opaque id that belongs to whoever asked for it, not to the caller (found 2026-08-23).
+app.post('/api/wa/tenants', requirePlatformAdmin, async (req, res) => {
   try {
     const result = await tenantAdmin.createTenant(req.body || {}, {
       publicBase: publicApiBase(req),
@@ -1712,11 +1723,11 @@ app.delete('/api/wa/tenants/:instanceId', requirePlatformAdmin, async (req, res)
   }
 });
 
-app.get('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/scan-requests', requirePlatformAdmin, async (req, res) => {
   res.json({ success: true, requests: await listScanRequests() });
 });
 
-app.post('/api/wa/scan-requests', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/scan-requests', requirePlatformAdmin, async (req, res) => {
   const { name, contact } = req.body || {};
   if (!name || !contact) return res.status(400).json({ error: 'NAME_AND_CONTACT_REQUIRED' });
   const requestId = `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
@@ -1733,27 +1744,27 @@ app.post('/api/wa/scan-requests/:requestId/approve', requirePlatformAdmin, async
   res.json({ success: true });
 });
 
-app.post('/api/wa/scan-requests/:requestId/reject', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/scan-requests/:requestId/reject', requirePlatformAdmin, async (req, res) => {
   const requestId = String(req.params.requestId || '').trim();
   await updateScanRequest(requestId, { status: 'rejected' });
   res.json({ success: true });
 });
 
-app.post('/api/wa/scan-requests/:requestId/open', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/scan-requests/:requestId/open', requirePlatformAdmin, async (req, res) => {
   const requestId = String(req.params.requestId || '').trim();
   const request = await getScanRequest(requestId);
   if (!request) return res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
   res.json({ success: true, request });
 });
 
-app.get('/api/wa/scan-requests/:requestId', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/scan-requests/:requestId', requirePlatformAdmin, async (req, res) => {
   const requestId = String(req.params.requestId || '').trim();
   const request = await getScanRequest(requestId);
   if (!request) return res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
   res.json({ success: true, request });
 });
 
-app.get('/api/wa/scan-invitations', requireUiOrApi, async (req, res) => {
+app.get('/api/wa/scan-invitations', requirePlatformAdmin, async (req, res) => {
   const requestId = `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   await saveScanRequest(requestId, { status: 'pending' });
   res.status(201).json({ success: true, request: { id: requestId } });
@@ -2154,6 +2165,9 @@ app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   const label = String(req.body?.label || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  // The instance arrives in the body, so the header-authenticated scope and the body
+  // must be made to agree - the same reason withinApiScope exists on the send path.
+  if (!withinApiScope(req, instanceId)) return res.status(403).json({ error: 'INSTANCE_SCOPE_MISMATCH' });
   await saveInstance(instanceId, label);
   const result = await startWhatsAppInstance(instanceId);
   res.json({ success: true, ...result, ...(await getInstanceStatus(instanceId)) });
@@ -2177,6 +2191,12 @@ app.post('/api/wa/statuses', requireUiOrApi, async (req, res) => {
   if (!instanceIds.length || instanceIds.length > 500 || instanceIds.some(instanceId => !isValidInstanceId(instanceId))) {
     return res.status(400).json({ error: 'BAD_INSTANCE_IDS' });
   }
+  // A tenant token may poll its OWN status - that is the legitimate use - but asking for a
+  // list containing anyone else is a cross-tenant read. withinApiScope is the same check the
+  // send path uses to stop a request authenticating as one tenant and acting as another.
+  if (!instanceIds.every(instanceId => withinApiScope(req, instanceId))) {
+    return res.status(403).json({ error: 'INSTANCE_SCOPE_MISMATCH' });
+  }
   const entries = await Promise.all(instanceIds.map(async instanceId => {
     try {
       return [instanceId, await readLiveStatus(instanceId)];
@@ -2195,7 +2215,7 @@ app.get('/api/wa/status/:instanceId', requireUiOrApi, async (req, res) => {
 });
 
 // Инстансты қосу (whatspro.html интерфейсі үшін)
-app.post('/api/wa/instances', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/instances', requirePlatformAdmin, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   const label = String(req.body?.label || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
@@ -2225,7 +2245,7 @@ app.post('/api/wa/restart/:instanceId', requireUiOrApi, async (req, res) => {
   res.json({ success: true, ...result, ...(await getInstanceStatus(instanceId)) });
 });
 
-app.post('/api/wa/logout', requireUiOrApi, async (req, res) => {
+app.post('/api/wa/logout', requirePlatformAdmin, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   res.json(await stopWhatsAppInstance(instanceId));
