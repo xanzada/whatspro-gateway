@@ -1808,8 +1808,12 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
   const sosByPhone = new Map(sosRows.map(row => [row.phone, row]));
   const [archiveRows, histories, openbotHistories, viewedScores, states] = await Promise.all([
     redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => []))),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => []))),
+    // null, not [], on failure. An errored read used to be indistinguishable from "no
+    // history", and the sweep below deletes the inbox index entry for a chat with no
+    // history - so one transient Redis error made a live conversation vanish from the
+    // operator panel and could resurface an archived chat as active (found 2026-08-23).
+    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
+    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
     Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null))),
     Promise.all(candidates.map(item => chatStore.getState(instanceId, item.phone)))
   ]);
@@ -1820,10 +1824,14 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
   candidates.forEach((item, index) => {
     // The gateway timeline is canonical. OpenBot history is an internal model
     // memory and is used only to recover older chats that have no gateway rows.
-    const gatewayRows = histories[index] || [];
-    const historyRows = gatewayRows.length ? gatewayRows : (openbotHistories[index] || []);
+    const gatewayRows = histories[index];
+    const openbotRows = openbotHistories[index];
+    // A failed read must never be treated as an empty chat: deleting index state on a blip
+    // is how a real conversation disappears from the panel.
+    const readFailed = gatewayRows === null && openbotRows === null;
+    const historyRows = (gatewayRows && gatewayRows.length) ? gatewayRows : (openbotRows || []);
     if (!historyRows.length) {
-      stalePhones.push(item.phone);
+      if (!readFailed) stalePhones.push(item.phone);
       return;
     }
     const summary = summarizeChat(item, historyRows, Number(viewedScores[index]) || 0, archiveSet.has(item.phone));
@@ -1832,7 +1840,14 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
     items.push({
       ...summary,
       state,
-      unread: state === 'new',
+      // The computed flag, not a state test. summarizeChat derives unread from
+      // latestCustomerAt vs viewedAt, and this line threw it away - so a customer reply
+      // into a chat the operator had taken over (state 'operator') or archived showed NO
+      // badge anywhere, which is the busiest case in a live shift. incomingWebhook stops
+      // setting 'new' for those chats precisely because its comment promises "the unread
+      // badge still comes from the unread flag"; nothing implemented that (found
+      // 2026-08-23).
+      unread: Boolean(summary.unread),
       viewed: state === 'all',
       hasOperator: state === 'operator',
       closed: state === 'archive',

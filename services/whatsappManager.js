@@ -501,7 +501,16 @@ async function removeOrphanedMedia(instanceId, phone, messageId) {
 async function updatePersistedMediaMetadata(instanceId, phone, messageId, mediaType) {
     if (!redisClient.isOpen) return false;
     const key = `chatwoot:history:${instanceId}:${phone}`;
-    const rows = await redisClient.sendCommand(['LRANGE', key, '-500', '-1']).catch(() => []);
+    // LRANGE gives a WINDOW; LSET takes an ABSOLUTE index. Writing back the window-relative
+    // index destroyed an unrelated message 500 positions earlier as soon as a chat passed
+    // 500 rows in the 24h window - an older customer message gone, and the voice note or
+    // receipt appearing in the middle of a previous day. The two agreed only while
+    // LLEN <= 500, which is why it survived (found 2026-08-23).
+    const length = Number(await redisClient.sendCommand(['LLEN', key]).catch(() => 0)) || 0;
+    if (!length) return false;
+    const window = 500;
+    const start = Math.max(0, length - window);
+    const rows = await redisClient.sendCommand(['LRANGE', key, String(start), '-1']).catch(() => []);
     for (let index = rows.length - 1; index >= 0; index -= 1) {
         let entry;
         try { entry = JSON.parse(rows[index]); } catch { continue; }
@@ -510,7 +519,16 @@ async function updatePersistedMediaMetadata(instanceId, phone, messageId, mediaT
         entry.mediaType = mediaType;
         entry.mediaKind = entry.mediaKind || entry.type || 'audio';
         entry.pendingMedia = false;
-        await redisClient.sendCommand(['LSET', key, String(index), JSON.stringify(entry)]).catch(() => 0);
+        const absoluteIndex = start + index;
+        // The list can have grown between the LLEN and the write, which would shift nothing
+        // (rPush appends) - but it can also have been trimmed, which shifts everything. So
+        // the row is re-read at the absolute index and only overwritten if it is still the
+        // message we matched.
+        const current = await redisClient.sendCommand(['LINDEX', key, String(absoluteIndex)]).catch(() => null);
+        let currentId = '';
+        try { currentId = String(JSON.parse(current)?.id || ''); } catch { currentId = ''; }
+        if (currentId !== messageId) return false;
+        await redisClient.sendCommand(['LSET', key, String(absoluteIndex), JSON.stringify(entry)]).catch(() => 0);
         return true;
     }
     return false;

@@ -135,6 +135,35 @@ async function shouldSkipOpenBot(payload = {}, dependencies = {}) {
   return Number(operatorTtl) > 0 || Number(muteTtl) > 0;
 }
 
+// A guest can send more than audio, images and PDFs. Everything else used to be stored with
+// an empty body and hasMedia:false, so the chat jumped to the top marked new and the
+// transcript rendered NOTHING - the operator opened it and saw only older messages while the
+// guest waited for an answer (found 2026-08-23). The media is deliberately still not stored:
+// that is what hasSupportedMedia draws the line for. But the operator has to be able to see
+// that something arrived, and in what form, so they can ask.
+const UNSUPPORTED_MEDIA_LABEL = {
+  video: '🎥 Видео',
+  ptv: '🎥 Видео',
+  sticker: '🌟 Стикер',
+  location: '📍 Локация',
+  livelocation: '📍 Локация',
+  vcard: '👤 Контакт',
+  contact: '👤 Контакт',
+  'multi_vcard': '👤 Контакттар',
+  poll: '📊 Сауалнама',
+};
+
+function unsupportedMediaLabel(type, rawMediaType) {
+  const kind = String(type || '').trim().toLowerCase();
+  if (UNSUPPORTED_MEDIA_LABEL[kind]) return UNSUPPORTED_MEDIA_LABEL[kind];
+  const mime = String(rawMediaType || '').trim().toLowerCase();
+  if (mime.startsWith('video/')) return UNSUPPORTED_MEDIA_LABEL.video;
+  if (mime.startsWith('audio/')) return '🎧 Аудио';
+  if (mime.startsWith('image/')) return '🖼 Сурет';
+  if (mime) return `📎 Файл (${mime.slice(0, 40)})`;
+  return '📎 Файл';
+}
+
 function buildHistoryEntry(payload, instanceId, phone, timestamp) {
   const body = String(payload.body || payload.text || payload.data?.message?.conversation || '').trim();
   const rawMediaData = String(payload.mediaData || payload.data?.mediaData || '').trim();
@@ -155,14 +184,24 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
       : hasSupportedMedia ? rawMediaType : '';
   const mediaKind = String(payload.mediaKind || payload.type || '').trim();
   const contactName = String(payload.contactName || payload.data?.contactName || payload.contact?.name || payload.data?.contact?.name || '').trim();
+  // Media we cannot render AND no caption: without this the entry is invisible everywhere -
+  // the transcript, the inbox preview, and the operator's sense of what the guest sent. The
+  // label is stored rather than invented in the panel, because the panel is only one of the
+  // readers (the inbox preview builds its own text from this same row).
+  const unsupportedMedia = !isSystem && Boolean(payload.hasMedia) && !hasSupportedMedia;
+  const visibleBody = body || (unsupportedMedia ? unsupportedMediaLabel(type, rawMediaType) : body);
+
   return {
     id: String(payload.messageId || payload.data?.key?.id || `${timestamp}:${phone}`),
     instanceId,
     phone,
     direction: payload.fromMe === true || payload.data?.key?.fromMe === true ? 'outgoing' : 'incoming',
     fromMe: payload.fromMe === true || payload.data?.key?.fromMe === true,
-    body,
-    text: body,
+    body: visibleBody,
+    text: visibleBody,
+    // Marks the row as "something arrived that this panel cannot show", so a future reader
+    // can treat it differently from a plain text message without re-deriving it.
+    unsupportedMedia,
     type: payload.type || 'chat',
     hasMedia: hasSupportedMedia,
     mediaData,
