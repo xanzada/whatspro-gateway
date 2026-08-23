@@ -16,7 +16,13 @@ const snapshotPath = path.resolve(
   )
 );
 
-let loaded = false;
+// The in-flight read itself, not a boolean. `loaded = true` before the await let a
+// concurrent second caller past the guard and hand back the still-empty rows object:
+// Promise.all([findRow('prestige'), findRow('kabab-1')]) returned one row and one null,
+// every time, while the same two calls in sequence returned both (found 2026-08-23).
+// This is the path that runs when Redis is unavailable, which is exactly when a wrong
+// "tenant not found" is most expensive.
+let loadPromise = null;
 let rows = {};
 let updatedAt = '';
 let writeQueue = Promise.resolve();
@@ -33,9 +39,7 @@ function safeRows(value) {
   return result;
 }
 
-async function load() {
-  if (loaded) return rows;
-  loaded = true;
+async function readSnapshotFile() {
   if (!snapshotEnabled) return rows;
   try {
     const parsed = JSON.parse(await fs.readFile(snapshotPath, 'utf8'));
@@ -47,6 +51,19 @@ async function load() {
     if (error.code !== 'ENOENT') console.warn('[TENANT SNAPSHOT] read failed:', error.message);
   }
   return rows;
+}
+
+async function load() {
+  // Every caller awaits the same read. A failed read is not cached as success: the
+  // promise is cleared so the next caller retries rather than inheriting empty rows
+  // for the lifetime of the process.
+  if (!loadPromise) {
+    loadPromise = readSnapshotFile().catch((error) => {
+      loadPromise = null;
+      throw error;
+    });
+  }
+  return loadPromise;
 }
 
 async function persist() {
