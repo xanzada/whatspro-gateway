@@ -106,3 +106,29 @@ test('the panel is told the canonical id so it stops using the alias', async () 
   // Only when it actually changed - no header noise on the common case.
   assert.ok(body.indexOf('if (canonical !== requested)') < body.indexOf("res.set('X-Chat-Instance'"));
 });
+
+test('the page that serves the shell resolves the alias too', async () => {
+  const server = await read('../src/server.js');
+  const fn = server.slice(server.indexOf('async function renderChatHtml'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  // This is the gate the first version of the fix missed: renderChatHtml does its own
+  // lookup from req.query.instance, so the PAGE answered 404 before any API call could
+  // happen. Curl against /api/chat/* could not see it; a browser saw it immediately.
+  assert.match(body, /resolveInstanceAlias\(requested\)/);
+  // The lookup must use the resolved id, not the requested one.
+  assert.match(body, /getTenantChatConfig\(instance\)/);
+  // And the token and grant must be minted for the SAME id the API routes canonicalise
+  // to, or hasScopedChatToken rejects every request the page makes.
+  assert.match(body, /chatToken: issueChatToken\(instance\)/);
+  assert.match(body, /setPanelGrant\(res, instance\)/);
+});
+
+test('a resolver failure still renders or 404s, never throws', async () => {
+  const server = await read('../src/server.js');
+  const fn = server.slice(server.indexOf('async function renderChatHtml'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  // An unhandled rejection here would take down the operator panel for every tenant.
+  assert.match(body, /\.catch\(\(\) => null\)\) \|\| requested/);
+  // A bad id is still rejected before any storage call.
+  assert.match(body, /if \(!isValidInstanceId\(requested\)\) return res\.status\(400\)/);
+});

@@ -556,8 +556,19 @@ function chatParentOrigin() {
 const CHAT_ASSET_VERSION = String(Date.now());
 
 async function renderChatHtml(req, res) {
-  const instance = String(req.query.instance || '').trim();
-  if (!isValidInstanceId(instance)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  const requested = String(req.query.instance || '').trim();
+  if (!isValidInstanceId(requested)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  // The hub's integration page links here with ITS identifier (alemi_instance), and this
+  // shell used to look the tenant up by instance_id only - so the PAGE answered 404 before
+  // any API call could happen. The first version of this fix covered the ten /api/chat/*
+  // routes and missed this one, which is why it looked fixed under curl and was still
+  // broken in a browser (found 2026-08-23).
+  //
+  // Everything below is built from the canonical id on purpose: issueChatToken and
+  // setPanelGrant bind to it, and hasScopedChatToken compares the token's instance to the
+  // canonicalised route param. A shell holding a "kebab1" token against a "kabab-1" route
+  // would have every request it makes rejected.
+  const instance = (await tenantStore.resolveInstanceAlias(requested).catch(() => null)) || requested;
   const tenant = await tenantStore.getTenantChatConfig(instance);
   if (!tenant?.found) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
   const config = {
@@ -584,6 +595,7 @@ async function renderChatHtml(req, res) {
   // is where the 30-day renewal grant is handed out. The operator never sees a
   // login because of this line.
   setPanelGrant(res, instance);
+  if (instance !== requested) res.set('X-Chat-Instance', instance);
   const script = `<script>window.__CHAT_CONFIG__=${safeJsonForScript(config)};</script>`;
   res.set({ 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache', Expires: '0' });
   const renderedHtml = html.includes('<!--__CHAT_CONFIG__-->')
