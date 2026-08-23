@@ -6,6 +6,7 @@
 // landing in another's chat. This turns the row into a checklist that can be
 // read before the first customer writes in.
 
+const crypto = require('crypto');
 const REQUIRED = 'required';
 const RECOMMENDED = 'recommended';
 
@@ -299,18 +300,46 @@ function sessionCheck(instanceId, sessions = []) {
 // alemi_instance routes nothing wrong locally and stays invisible until the hub
 // answers 401. Recommended, never required: a divergence can be deliberate, and
 // blocking a save on it would strand a row an operator is halfway through.
-function alemiInstanceMatchCheck(record) {
+function alemiInstanceMatchCheck(record, hubProbe = null) {
   const instanceId = text(record, fieldColumns('instance_id'));
   const alemiInstance = text(record, fieldColumns('alemi_instance'));
   // An empty alemi_instance is already reported by its own required check;
   // repeating it here as a mismatch would only double the noise.
-  const ok = !instanceId || !alemiInstance || alemiInstance === instanceId;
+  const identical = !instanceId || !alemiInstance || alemiInstance === instanceId;
+  const column = fieldColumns('alemi_instance')[0];
+
+  // This check used to compare our two own ids and nothing else, so it sat permanently
+  // yellow for every tenant whose ids differ by a hyphen - kabab-1 vs kebab1 - and the
+  // one tenant that was genuinely broken looked identical to the healthy ones. Nobody
+  // looks at a warning that is always on, which is how a transposed vowel silenced a
+  // restaurant for days (found 2026-08-23). The hub is the only authority here, so when
+  // it has answered, its answer decides.
+  if (!identical && hubProbe && hubProbe.status === 'accepted') {
+    return {
+      id: 'alemi_instance_match',
+      level: RECOMMENDED,
+      ok: true,
+      code: 'DIVERGENT_BUT_ACCEPTED',
+      column,
+      why: 'alemi_instance пен instance_id әртүрлі, бірақ hub осы жұпты қабылдады - демек айырмашылық әдейі жасалған және дұрыс.'
+    };
+  }
+  if (!identical && hubProbe && hubProbe.status === 'rejected') {
+    return {
+      id: 'alemi_instance_match',
+      level: RECOMMENDED,
+      ok: false,
+      code: 'MISMATCH_AND_REJECTED',
+      column,
+      why: 'hub осы instance + secret жұбын қабылдамады, ал alemi_instance мәні instance_id-мен де сәйкес емес. Бірінші тексеретін нәрсе - alemi_instance hub-тағы "ID инстанса" өрісімен ӘРІПТЕП бірдей ме (мысалы kebab1 / kabab1).'
+    };
+  }
   return {
     id: 'alemi_instance_match',
     level: RECOMMENDED,
-    ok,
-    code: ok ? 'OK' : 'MISMATCH',
-    column: fieldColumns('alemi_instance')[0],
+    ok: identical,
+    code: identical ? 'OK' : 'MISMATCH',
+    column,
     why: 'alemi_instance мәні hub.alemi.kz-тегі ресторанның "ID инстанса" өрісіне тең болуы керек және ол WhatsPro instance_id-мен сәйкес келмей тұр. Сәйкессіздік hub 401 қайтарғанша көрінбейді.'
   };
 }
@@ -341,11 +370,113 @@ function isCallsDisabled(record) {
   return Boolean(value);
 }
 
+// Nothing verified that the Alemi credential pair actually WORKS. alemiInstanceMatchCheck
+// above compares alemi_instance to our own instance_id, and those legitimately differ
+// (kabab-1 vs kebab1), so it sat permanently yellow for tenants that were perfectly fine
+// and could not be distinguished from the tenant that was broken. On 2026-08-23 a single
+// transposed vowel - alemi_instance "kabab1" where the hub has "kebab1" - had silenced a
+// restaurant's runtime reads for days: openbot logged 401s, the panel showed nothing but
+// that same MISMATCH warning, and the secret was correct all along.
+//
+// The only authority on whether a credential works is the hub, so ask it. Read-only
+// (runtime.status.get), RECOMMENDED rather than REQUIRED, and skipped entirely unless the
+// caller supplies a prober - a panel page may spend a network call, a data export may not.
+const HUB_PROBE_TIMEOUT_MS = Math.max(2000, Number(process.env.ALEMI_PROBE_TIMEOUT_MS || 6000));
+
+function hubCredentialCheck(result) {
+  const base = {
+    id: 'alemi_credential_accepted',
+    level: RECOMMENDED,
+    column: fieldColumns('alemi_secret')[0],
+    why: 'hub.alemi.kz осы instance + secret жұбын қабылдай ма, тек hub өзі айта алады. 401 бұл жерде "құпия бұрыс" немесе "instance аты бұрыс жазылған" дегенді бірдей білдіреді - екеуін де тексеріңіз.'
+  };
+  if (!result || result.status === 'skipped') {
+    return { ...base, ok: true, code: 'NOT_PROBED' };
+  }
+  if (result.status === 'accepted') return { ...base, ok: true, code: 'OK' };
+  if (result.status === 'rejected') {
+    return { ...base, ok: false, code: `REJECTED_${Number(result.httpStatus) || 0}` };
+  }
+  // A transport failure says nothing about the credential, so it must not be reported as
+  // a credential fault - that would turn every hub outage into a panel full of red rows.
+  return { ...base, ok: true, code: 'UNREACHABLE' };
+}
+
+// Mirrors Openbot-fastfood/src/services/alemiApi.service.ts: HMAC-SHA256 over
+// "<unix_ts>.<rawBody>", header "v1=<hex>", POST /v1/integrations/bot/commands. If those
+// two ever diverge this probe becomes a lie, so the shape is spelled out rather than
+// abbreviated. runtime.status.get is chosen because it is the read the bot itself makes
+// most often and it changes nothing.
+async function probeAlemiCredential(record, fetchImpl = globalThis.fetch) {
+  const instance = text(record, fieldColumns('alemi_instance'));
+  const secret = text(record, fieldColumns('alemi_secret'));
+  const apiUrl = text(record, fieldColumns('alemi_api_url'));
+  if (!instance || !secret || !apiUrl) return { status: 'skipped', reason: 'INCOMPLETE' };
+
+  const commandId = `cmd_${crypto.randomBytes(13).toString('hex').toUpperCase()}`;
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const rawBody = JSON.stringify({
+    command: 'runtime.status.get',
+    command_id: commandId,
+    data: {},
+    instance,
+    schema_version: 1
+  });
+  const signature = `v1=${crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`, 'utf8').digest('hex')}`;
+  const url = `${apiUrl.replace(/\/+$/, '')}/v1/integrations/bot/commands`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'X-Platform-Instance': instance,
+        'X-Command-Id': commandId,
+        'X-Command-Timestamp': timestamp,
+        'X-Command-Signature': signature
+      },
+      body: rawBody,
+      signal: controller.signal
+    });
+    if (response.ok) return { status: 'accepted', httpStatus: response.status };
+    // 401 covers "wrong secret", "unknown instance" and "instance spelled differently" -
+    // the hub returns the same code for all three, which is precisely why the panel has
+    // to surface it instead of leaving it in a log.
+    return { status: 'rejected', httpStatus: response.status };
+  } catch (error) {
+    return { status: 'unreachable', reason: error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One probe per tenant, sequentially: this runs on a panel page for a handful of
+// restaurants, and a fan-out of signed hub calls is not worth the contention.
+async function probeAlemiCredentials(records, options = {}) {
+  const probes = {};
+  for (const record of Array.isArray(records) ? records : []) {
+    const instanceId = text(record, fieldColumns('instance_id'));
+    if (!instanceId) continue;
+    if (!isActive(record)) {
+      probes[instanceId] = { status: 'skipped', reason: 'INACTIVE' };
+      continue;
+    }
+    probes[instanceId] = await probeAlemiCredential(record, options.fetchImpl).catch(() => ({ status: 'unreachable', reason: 'THREW' }));
+  }
+  return probes;
+}
+
 function evaluateTenant(record, options = {}) {
   const instanceId = text(record, fieldColumns('instance_id'));
   const active = isActive(record);
   const checks = checkFields(record);
-  const extras = [alemiInstanceMatchCheck(record)];
+  // Passed in rather than fetched here, exactly like `sessions`: this function stays
+  // synchronous and every caller decides whether a network probe is appropriate.
+  const hubProbe = options.hubProbes ? options.hubProbes[instanceId] : null;
+  const extras = [alemiInstanceMatchCheck(record, hubProbe)];
+  if (options.hubProbes) extras.push(hubCredentialCheck(hubProbe));
   // A paused restaurant has no session on purpose. Reporting that as a fault
   // would make every deliberately closed branch look broken.
   if (options.sessions && active) extras.push(sessionCheck(instanceId, options.sessions));
@@ -381,6 +512,10 @@ module.exports = {
   FIELDS,
   evaluateTenant,
   evaluateAll,
+  probeAlemiCredential,
+  probeAlemiCredentials,
+  hubCredentialCheck,
+  alemiInstanceMatchCheck,
   collisionsAcross,
   __test: { isUsableDomain, isAbsoluteHttpUrl }
 };

@@ -284,7 +284,42 @@ function resolvePrompt(fields, input, sharedPrompt, existing = null) {
   return cleanMultiline(sharedPrompt || existing?.system_prompt || '');
 }
 
+
+// Recognisable alternate spellings of the whitelisted update fields. Only these are
+// rejected: a body may legitimately carry unrelated metadata keys, and ignoring those is
+// forward-compatible. But a key that is exactly the snake_case form of a field this
+// endpoint owns is unambiguous intent, and silently dropping it is how a typo survives
+// for days behind a green tick.
+const FIELD_NAME_ALIASES = {
+  instance_id: 'instanceId',
+  whatsapp_phone: 'whatsappPhone',
+  admin_phone: 'adminPhone',
+  work_hours: 'workHours',
+  prompt_mode: 'promptMode',
+  system_prompt: 'systemPrompt',
+  alemi_api_url: 'alemiApiUrl',
+  alemi_instance: 'alemiInstance',
+  alemi_secret: 'alemiSecret',
+  bot_enabled: 'botEnabled',
+  calls_disabled: 'callsDisabled'
+};
+
+function rejectedFieldNames(input = {}) {
+  return Object.keys(FIELD_NAME_ALIASES)
+    .filter((snake) => Object.prototype.hasOwnProperty.call(input, snake))
+    .map((snake) => ({ sent: snake, expected: FIELD_NAME_ALIASES[snake] }));
+}
+
+function unknownFieldError(misnamed) {
+  const error = new Error('TENANT_FIELD_NAME_INVALID');
+  error.statusCode = 400;
+  error.fields = misnamed.map((entry) => `${entry.sent} -> rename to ${entry.expected}`);
+  return error;
+}
+
 async function createTenant(input, options = {}) {
+  const misnamed = rejectedFieldNames(input);
+  if (misnamed.length) throw unknownFieldError(misnamed);
   const fields = operatorFields(input);
   const alemiSecret = normalizeAlemiSecret(input.alemiSecret, true);
   const errors = validationErrors(fields);
@@ -338,6 +373,13 @@ async function updateTenant(instanceId, input, options = {}) {
     error.statusCode = 404;
     throw error;
   }
+  // An update that silently discarded its only field used to answer
+  // {"success":true,"updated":true}: the whitelist below is camelCase, so a body written
+  // in snake_case fell through mergeExisting untouched and nothing changed (reproduced
+  // 2026-08-23 - {"alemi_instance":"kebab1"} returned success and changed nothing,
+  // which is how the kabab1/kebab1 typo survived for days).
+  const misnamed = rejectedFieldNames(input);
+  if (misnamed.length) throw unknownFieldError(misnamed);
   const fields = operatorFields(mergeExisting(instanceId, input, existing));
   const errors = validationErrors(fields);
   if (errors.length) throw badRequest(errors);
@@ -725,5 +767,5 @@ module.exports = {
   updateTenant,
   slugify,
   withCurrentTransport,
-  __test: { generateSecret, generateAlemiSecret, suggestAlemiSecret, alemiSecretsMatch, assertAlemiSecretUnique, ALEMI_SECRET_CLASSES, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting }
+  __test: { generateSecret, generateAlemiSecret, suggestAlemiSecret, alemiSecretsMatch, assertAlemiSecretUnique, ALEMI_SECRET_CLASSES, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting, rejectedFieldNames, FIELD_NAME_ALIASES }
 };

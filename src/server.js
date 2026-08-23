@@ -33,7 +33,8 @@ const { parseScoredMembers, scanKeys } = require('../services/redisReply');
 // lookup stays a seam the isolation tests can stand in for.
 const tenantStore = require('../services/tenantStore');
 const tenantMemoryStore = require('../services/tenantMemoryStore');
-const { evaluateAll } = require('../services/tenantReadiness');
+const tenantReadiness = require('../services/tenantReadiness');
+const { evaluateAll } = tenantReadiness;
 const tenantAdmin = require('../services/tenantAdmin');
 const tenantWorkbook = require('../services/tenantWorkbook');
 const { allowsPhone, getTestModePolicy } = require('../services/testModePolicy');
@@ -1247,7 +1248,11 @@ app.get('/api/wa/tenants', requireUiOrApi, async (req, res) => {
     return res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
   }
   const sessions = await listInstances().catch(() => []);
-  res.json({ success: true, ...evaluateAll(records, { sessions }) });
+  // The credential probe is what turns "the hub returns 401" from a log line nobody reads
+  // into a row in the panel. Read-only and non-blocking: a hub outage reports UNREACHABLE,
+  // not a fault (added 2026-08-23 after a misspelled alemi_instance went unnoticed for days).
+  const hubProbes = await tenantReadiness.probeAlemiCredentials(records).catch(() => ({}));
+  res.json({ success: true, ...evaluateAll(records, { sessions, hubProbes }) });
 });
 
 app.get('/api/wa/backups/tenants.xlsx', requireUiSession, async (req, res) => {
