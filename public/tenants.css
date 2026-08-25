@@ -937,3 +937,18 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
 .toggle-pill.on { background:#22c55e; }
 
 .toggle-pill.on::after { left:14px; }
+
+/* ---------- API key беті (LLM кілттері) ---------- */
+.ak-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 6px; }
+.ak-title-row h3 { margin: 0; font-size: 16px; font-weight: 650; }
+.ak-hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+.ak-pool { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0 0 16px; }
+.ak-pool > h3 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+.ak-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 10px; }
+.ak-card .field { margin: 0; }
+.ak-card .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.ak-card .field input, .ak-card .field select { width: 100%; min-height: 38px; }
+.ak-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ak-actions .button { min-height: 32px; padding: 0 10px; font-size: 12px; width: auto; }
+.ak-add, .ak-save { min-height: 36px; width: auto; padding: 0 14px; font-size: 13px; }
+@media (min-width: 720px) { .ak-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } }

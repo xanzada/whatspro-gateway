@@ -101,6 +101,8 @@
       workspaceTitle: 'Жұмыс кеңістігі — AI кілттері', workspaceCopy: 'Үстіңгі кілт негізгі, қалғандары резерв. Біреуі тоқтаса, бот келесісіне өзі секіреді. Тізім бос болса, ортақ env-килттер қолданылады.',
       apiKeys: 'API key', keyPrimary: 'негізгі', keyNameLabel: 'Атауы', keyProvider: 'Провайдер',
       keyPlaceholder: 'мысалы: DeepSeek тегін',
+      keyBaseUrl: 'Base URL (провайдер мекенжайы)', keyType: 'Хаттама', typeOpenai: 'OpenAI-үйлесімді (chat/completions)', typeGemini: 'Gemini (Google)',
+      akDupHint: 'Бар кілттің үлгісін көшіреді — жаңа кілтті ғана жазасыз', remove: 'Өшіру', keyUp: 'жоғары',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
@@ -187,6 +189,8 @@
       workspaceTitle: 'Рабочее пространство — AI-ключи', workspaceCopy: 'Верхний ключ основной, остальные — резерв. Если один перестаёт работать, бот сам перескакивает на следующий. Пустой список — используются общие env-ключи.',
       apiKeys: 'API key', keyPrimary: 'основной', keyNameLabel: 'Название', keyProvider: 'Провайдер',
       keyPlaceholder: 'например: DeepSeek бесплатный',
+      keyBaseUrl: 'Base URL (адрес провайдера)', keyType: 'Протокол', typeOpenai: 'OpenAI-совместимый (chat/completions)', typeGemini: 'Gemini (Google)',
+      akDupHint: 'Копирует образец — впишете только новый ключ', remove: 'Убрать', keyUp: 'вверх',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
@@ -750,35 +754,36 @@
 
   function akEntryHtml(pool, entry, index, total) {
     var badge = index === 0 ? ' · ' + t('keyPrimary') : '';
-    return '<section class="detail-section" data-ak-block="' + pool + '" data-ak-index="' + index + '">' +
-      '<div class="detail-section-head"><strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong></div>' +
-      '<div class="detail-body">' +
+    return '<section class="ak-card" data-ak-block="' + pool + '" data-ak-index="' + index + '">' +
+      '<strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong>' +
       '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
-      '<div class="field"><label>' + t('keyProvider') + '</label><select name="ak-provider">' +
-      '<option value="gemini"' + (entry.provider === 'gemini' ? ' selected' : '') + '>Gemini</option>' +
-      '<option value="openrouter"' + (entry.provider !== 'gemini' ? ' selected' : '') + '>OpenRouter</option>' +
+      '<div class="field"><label>' + t('keyBaseUrl') + '</label><input name="ak-base" value="' + attr(entry.baseUrl || '') + '" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" inputmode="url"></div>' +
+      '<div class="ak-two"><div class="field"><label>' + t('keyType') + '</label><select name="ak-type">' +
+      '<option value="openai"' + (entry.type !== 'gemini' ? ' selected' : '') + '>' + t('typeOpenai') + '</option>' +
+      '<option value="gemini"' + (entry.type === 'gemini' ? ' selected' : '') + '>' + t('typeGemini') + '</option>' +
       '</select></div>' +
-      '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div>' +
+      '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div></div>' +
       '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
-      '<div class="header-actions">' +
+      '<div class="ak-actions">' +
       (index > 0 ? '<button class="button ghost" type="button" data-action="ak-up" data-pool="' + pool + '" data-index="' + index + '">↑</button>' : '') +
       (index < total - 1 ? '<button class="button ghost" type="button" data-action="ak-down" data-pool="' + pool + '" data-index="' + index + '">↓</button>' : '') +
-      '<button class="button ghost" type="button" data-action="ak-del" data-pool="' + pool + '" data-index="' + index + '">✕</button>' +
-      '</div></div></section>';
+      '<button class="button ghost" type="button" data-action="ak-dup" data-pool="' + pool + '" data-index="' + index + '" title="' + attr(t('akDupHint')) + '">⧉ ' + t('duplicate') + '</button>' +
+      '<button class="button ghost" type="button" data-action="ak-del" data-pool="' + pool + '" data-index="' + index + '">✕ ' + t('remove') + '</button>' +
+      '</div></section>';
   }
 
   function renderApiKeys() {
     var pools = akPools || { text: [], media: [] };
     return '<div class="page">' +
-      '<section class="panel"><div class="panel-head"><strong>' + t('workspaceTitle') + '</strong>' +
-      '<button class="button primary" type="button" data-action="ak-save">' + icon('check') + t('save') + '</button></div>' +
-      '<p class="confirm-copy">' + t('workspaceCopy') + '</p></section>' +
-      '<section class="panel"><div class="panel-head"><strong>' + t('poolText') + '</strong></div>' +
-      (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="confirm-copy">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></section>' +
-      '<section class="panel"><div class="panel-head"><strong>' + t('poolMedia') + '</strong></div>' +
-      (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="confirm-copy">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></section>' +
+      '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
+      '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button></div>' +
+      '<p class="ak-hint">' + t('workspaceCopy') + '</p>' +
+      '<div class="ak-pool"><h3>' + t('poolText') + '</h3>' +
+      (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></div>' +
+      '<div class="ak-pool"><h3>' + t('poolMedia') + '</h3>' +
+      (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></div>' +
       '</div>';
   }
 
@@ -793,7 +798,8 @@
       $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
         var entry = {
           name: String($('[name="ak-name"]', block).value || '').trim(),
-          provider: $('[name="ak-provider"]', block).value,
+          baseUrl: String($('[name="ak-base"]', block).value || '').trim().replace(/\/+$/, ''),
+          type: $('[name="ak-type"]', block).value === 'gemini' ? 'gemini' : 'openai',
           model: String($('[name="ak-model"]', block).value || '').trim(),
           key: String($('[name="ak-key"]', block).value || '').replace(/\s+/g, '')
         };
@@ -1529,7 +1535,21 @@
       else if (name === 'ak-add') {
         var pools = ensureAkPools();
         var addPool = action.dataset.pool || 'text';
-        pools[addPool].push({ name: '', provider: addPool === 'media' ? 'gemini' : 'openrouter', model: '', key: '' });
+        pools[addPool].push(addPool === 'media'
+          ? { name: '', type: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash', key: '' }
+          : { name: '', type: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: '', key: '' });
+        render();
+      } else if (name === 'ak-dup') {
+        var dup = ensureAkPools();
+        var dupPool = action.dataset.pool;
+        var dupIndex = Number(action.dataset.index) || 0;
+        var source = dup[dupPool][dupIndex];
+        if (source) {
+          dup[dupPool].splice(dupIndex + 1, 0, {
+            name: (source.name ? source.name + ' — ' : '') + t('duplicateSuffix'),
+            type: source.type, baseUrl: source.baseUrl, model: source.model, key: ''
+          });
+        }
         render();
       } else if (name === 'ak-del' || name === 'ak-up' || name === 'ak-down') {
         var cur = ensureAkPools();
