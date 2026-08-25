@@ -99,6 +99,8 @@
       systemPrompt: 'AI жүйелік промпт', promptHint: 'Бос қалдырсаңыз, ортақ промпт қолданылады.',
       contactPolicy: 'Контактілер саясаты', contactPolicyHint: 'Бот кімдерге жауап беретінін таңдаңыз. Еленбейтіндер — тізімдегі адамдарды бот мүлде оқымайды және жауап бермейді.',
       workspaceTitle: 'Жұмыс кеңістігі — AI кілттері', workspaceCopy: 'Үстіңгі кілт негізгі, қалғандары резерв. Біреуі тоқтаса, бот келесісіне өзі секіреді. Тізім бос болса, ортақ env-килттер қолданылады.',
+      apiKeys: 'API key', keyPrimary: 'негізгі', keyNameLabel: 'Атауы', keyProvider: 'Провайдер',
+      keyPlaceholder: 'мысалы: DeepSeek тегін',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
@@ -183,6 +185,8 @@
       systemPrompt: 'Системный AI-промпт', promptHint: 'Если оставить пустым, будет использован общий промпт.',
       contactPolicy: 'Политика контактов', contactPolicyHint: 'Выберите, кому отвечает бот. Игнорируемые — люди из списка: бот их вообще не читает и не отвечает.',
       workspaceTitle: 'Рабочее пространство — AI-ключи', workspaceCopy: 'Верхний ключ основной, остальные — резерв. Если один перестаёт работать, бот сам перескакивает на следующий. Пустой список — используются общие env-ключи.',
+      apiKeys: 'API key', keyPrimary: 'основной', keyNameLabel: 'Название', keyProvider: 'Провайдер',
+      keyPlaceholder: 'например: DeepSeek бесплатный',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
@@ -577,6 +581,7 @@
     document.title = t('documentTitle');
     $('#nav-dashboard').textContent = t('dashboard');
     $('#nav-restaurants').textContent = t('restaurants');
+    $('#nav-apikeys').textContent = t('apiKeys');
     $('#brand-subtitle').textContent = t('platform');
     $('.nav-label').textContent = t('workspace');
     $('.main-nav').setAttribute('aria-label', t('primaryNavigation'));
@@ -740,6 +745,74 @@
       statCard(t('attention'), c.attention, t('requireAction'), 'alert', 'yellow', 'stat-attention') +
       '</div>' + tablePanel(filteredTenants().slice(0, 8), true) + '</div>';
   }
+  /* ---------- API key беті (Жұмыс кеңістігі) ---------- */
+  var akPools = null;
+
+  function akEntryHtml(pool, entry, index, total) {
+    var badge = index === 0 ? ' · ' + t('keyPrimary') : '';
+    return '<section class="detail-section" data-ak-block="' + pool + '" data-ak-index="' + index + '">' +
+      '<div class="detail-section-head"><strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong></div>' +
+      '<div class="detail-body">' +
+      '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
+      '<div class="field"><label>' + t('keyProvider') + '</label><select name="ak-provider">' +
+      '<option value="gemini"' + (entry.provider === 'gemini' ? ' selected' : '') + '>Gemini</option>' +
+      '<option value="openrouter"' + (entry.provider !== 'gemini' ? ' selected' : '') + '>OpenRouter</option>' +
+      '</select></div>' +
+      '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div>' +
+      '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
+      '<div class="header-actions">' +
+      (index > 0 ? '<button class="button ghost" type="button" data-action="ak-up" data-pool="' + pool + '" data-index="' + index + '">↑</button>' : '') +
+      (index < total - 1 ? '<button class="button ghost" type="button" data-action="ak-down" data-pool="' + pool + '" data-index="' + index + '">↓</button>' : '') +
+      '<button class="button ghost" type="button" data-action="ak-del" data-pool="' + pool + '" data-index="' + index + '">✕</button>' +
+      '</div></div></section>';
+  }
+
+  function renderApiKeys() {
+    var pools = akPools || { text: [], media: [] };
+    return '<div class="page">' +
+      '<section class="panel"><div class="panel-head"><strong>' + t('workspaceTitle') + '</strong>' +
+      '<button class="button primary" type="button" data-action="ak-save">' + icon('check') + t('save') + '</button></div>' +
+      '<p class="confirm-copy">' + t('workspaceCopy') + '</p></section>' +
+      '<section class="panel"><div class="panel-head"><strong>' + t('poolText') + '</strong></div>' +
+      (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="confirm-copy">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></section>' +
+      '<section class="panel"><div class="panel-head"><strong>' + t('poolMedia') + '</strong></div>' +
+      (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="confirm-copy">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></section>' +
+      '</div>';
+  }
+
+  function ensureAkPools() {
+    if (!akPools) akPools = { text: [], media: [] };
+    return akPools;
+  }
+
+  function akCollect() {
+    var pools = { text: [], media: [] };
+    ['text', 'media'].forEach(function (pool) {
+      $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
+        var entry = {
+          name: String($('[name="ak-name"]', block).value || '').trim(),
+          provider: $('[name="ak-provider"]', block).value,
+          model: String($('[name="ak-model"]', block).value || '').trim(),
+          key: String($('[name="ak-key"]', block).value || '').replace(/\s+/g, '')
+        };
+        if (entry.model && entry.key) pools[pool].push(entry);
+      });
+    });
+    return pools;
+  }
+
+  function loadApiKeys(force) {
+    if (akPools && !force) return Promise.resolve();
+    return api('GET', '/api/wa/llm-workspace').then(function (result) {
+      akPools = {
+        text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
+        media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
+      };
+    }).catch(function () { akPools = { text: [], media: [] }; });
+  }
+
   function renderRestaurants() {
     var items = filteredTenants();
     return '<div class="page">' + pageHeader(t('restaurantDirectory'), t('restaurantsTitle'), t('restaurantsCopy'), addButton()) +
@@ -813,7 +886,7 @@
     $$('.nav-item[data-view]').forEach(function (button) {
       button.classList.toggle('active', button.dataset.view === currentView && !currentDetail);
     });
-    viewEl.innerHTML = currentDetail ? renderDetail() : (currentView === 'restaurants' ? renderRestaurants() : renderDashboard());
+    viewEl.innerHTML = currentDetail ? renderDetail() : (currentView === 'restaurants' ? renderRestaurants() : currentView === 'apikeys' ? renderApiKeys() : renderDashboard());
   }
 
   function normalizeInstances(data) {
@@ -1397,6 +1470,9 @@
     currentDetail = '';
     currentView = name || 'dashboard';
     if (currentView === 'dashboard') activeFilter = 'all';
+    if (currentView === 'apikeys') {
+      loadApiKeys().then(function () { if (currentView === 'apikeys' && !currentDetail) render(); });
+    }
     openMenuId = '';
     render();
     window.scrollTo({ top: 0 });
@@ -1450,6 +1526,31 @@
       else if (name === 'export-excel') { closeModal(); exportWorkbook(instanceId); }
       else if (name === 'bot-toggle') toggleBot(instanceId, action.dataset.enabled === 'true');
       else if (name === 'calls-toggle') toggleCalls(instanceId, action.dataset.disabled === 'true');
+      else if (name === 'ak-add') {
+        var pools = ensureAkPools();
+        var addPool = action.dataset.pool || 'text';
+        pools[addPool].push({ name: '', provider: addPool === 'media' ? 'gemini' : 'openrouter', model: '', key: '' });
+        render();
+      } else if (name === 'ak-del' || name === 'ak-up' || name === 'ak-down') {
+        var cur = ensureAkPools();
+        var delPool = action.dataset.pool;
+        var delIndex = Number(action.dataset.index) || 0;
+        if (name === 'ak-del') cur[delPool].splice(delIndex, 1);
+        else {
+          var target = name === 'ak-up' ? delIndex - 1 : delIndex + 1;
+          if (target >= 0 && target < cur[delPool].length) {
+            var movedEntry = cur[delPool].splice(delIndex, 1)[0];
+            cur[delPool].splice(target, 0, movedEntry);
+          }
+        }
+        render();
+      } else if (name === 'ak-save') {
+        var payload = akCollect();
+        akPools = payload;
+        api('PUT', '/api/wa/llm-workspace', payload)
+          .then(function () { toast(t('saved'), t('workspaceTitle')); })
+          .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      }
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
       else if (name === 'delete') { closeModal(); window.setTimeout(function () { openDelete(instanceId); }, 0); }
       else if (name === 'qr-refresh') {
@@ -1595,107 +1696,6 @@
   });
   $('#refresh-button').addEventListener('click', function () { loadData(); });
 
-  /* ---------- Жұмыс кеңістігі: LLM key pools ---------- */
-  var workspacePools = { text: [], media: [] };
-  function wsPoolRowsHtml(pool, prefix) {
-    if (!pool.length) return '<p class="confirm-copy" data-ws-empty>' + t('workspaceEmpty') + '</p>';
-    return pool.map(function (entry, index) {
-      return '<div class="field" data-ws-row="' + prefix + '" data-ws-index="' + index + '" style="display:grid;grid-template-columns:1fr 130px 1fr 1fr auto auto;gap:8px;align-items:end;">' +
-        '<input name="ws-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyName')) + '">' +
-        '<select name="ws-provider">' +
-        '<option value="gemini"' + (entry.provider === 'gemini' ? ' selected' : '') + '>Gemini</option>' +
-        '<option value="openrouter"' + (entry.provider !== 'gemini' ? ' selected' : '') + '>OpenRouter</option>' +
-        '</select>' +
-        '<input name="ws-model" value="' + attr(entry.model || '') + '" placeholder="gemini-2.5-flash" autocomplete="off" spellcheck="false">' +
-        '<input name="ws-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false">' +
-        '<button class="button ghost" type="button" data-ws-action="up" title="↑">↑</button>' +
-        '<button class="button ghost" type="button" data-ws-action="del" title="✕">✕</button>' +
-        '</div>';
-    }).join('');
-  }
-
-  function wsCollectPool(prefix) {
-    var rows = $$('[data-ws-row="' + prefix + '"]', modalRoot);
-    var out = [];
-    rows.forEach(function (row) {
-      var entry = {
-        name: String($('[name="ws-name"]', row).value || '').trim(),
-        provider: $('[name="ws-provider"]', row).value,
-        model: String($('[name="ws-model"]', row).value || '').trim(),
-        key: String($('[name="ws-key"]', row).value || '').replace(/\s+/g, '')
-      };
-      if (entry.model && entry.key) out.push(entry);
-    });
-    return out;
-  }
-
-  function wsDraw() {
-    var body = '' +
-      '<section class="detail-section"><div class="detail-section-head"><strong>' + t('poolText') + '</strong></div>' +
-      '<div class="detail-body" id="ws-text-rows">' + wsPoolRowsHtml(workspacePools.text, 'text') + '</div>' +
-      '<button class="button ghost" type="button" data-ws-action="add" data-ws-pool="text">+ ' + t('addKey') + '</button></section>' +
-      '<section class="detail-section"><div class="detail-section-head"><strong>' + t('poolMedia') + '</strong></div>' +
-      '<div class="detail-body" id="ws-media-rows">' + wsPoolRowsHtml(workspacePools.media, 'media') + '</div>' +
-      '<button class="button ghost" type="button" data-ws-action="add" data-ws-pool="media">+ ' + t('addKey') + '</button></section>' +
-      '<p class="confirm-copy">' + t('workspaceCopy') + '</p>';
-    $('[data-ws-body]', modalRoot).innerHTML = body;
-  }
-
-  function openWorkspaceModal() {
-    workspacePools = { text: [], media: [] };
-    openModal(modalHeader(t('workspaceTitle'), t('workspaceCopy')) +
-      '<div class="modal-body" data-ws-body><p class="confirm-copy">…</p></div>' +
-      '<div class="modal-footer"><span class="spacer"></span>' +
-      '<button class="button ghost" type="button" data-modal-close>' + t('cancel') + '</button>' +
-      '<button class="button primary" type="button" data-ws-save>' + t('save') + '</button></div>');
-    api('GET', '/api/wa/llm-workspace').then(function (result) {
-      workspacePools = {
-        text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
-        media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
-      };
-    }).catch(function () { /* empty pools on failure */ }).finally(function () { wsDraw(); });
-  }
-
-  $('#workspace-button').addEventListener('click', openWorkspaceModal);
-
-  function wsHandleAction(action, target) {
-    var pool = target.getAttribute('data-ws-pool');
-    var row = target.closest('[data-ws-row]');
-    if (action === 'add') {
-      workspacePools[pool] = wsCollectPool(pool);
-      workspacePools[pool].push({ name: '', provider: pool === 'media' ? 'gemini' : 'openrouter', model: '', key: '' });
-      wsDraw();
-      return;
-    }
-    if (!row) return;
-    var index = Number(row.getAttribute('data-ws-index')) || 0;
-    workspacePools[pool] = wsCollectPool(pool);
-    if (action === 'del') {
-      workspacePools[pool].splice(index, 1);
-    } else if (action === 'up' && index > 0) {
-      var moved = workspacePools[pool].splice(index, 1)[0];
-      workspacePools[pool].splice(index - 1, 0, moved);
-    }
-    wsDraw();
-  }
-
-  modalRoot.addEventListener('click', function (event) {
-    var actionButton = event.target.closest('[data-ws-action]');
-    if (actionButton) { wsHandleAction(actionButton.getAttribute('data-ws-action'), actionButton); return; }
-    var saveButton = event.target.closest('[data-ws-save]');
-    if (!saveButton) return;
-    saveButton.disabled = true;
-    api('PUT', '/api/wa/llm-workspace', {
-      text: wsCollectPool('text'),
-      media: wsCollectPool('media')
-    }).then(function () {
-      toast(t('saved'), t('workspaceTitle'));
-      closeModal();
-    }).catch(function (error) {
-      saveButton.disabled = false;
-      toast(t('actionFailed'), error.message || t('workspaceTitle'), true);
-    });
-  });
   $('#sidebar-toggle').addEventListener('click', function () { appShell.classList.toggle('collapsed'); });
   $('#mobile-menu').addEventListener('click', function () {
     appShell.classList.add('mobile-nav-open');
