@@ -27,6 +27,7 @@ const { OPERATOR_ACTIVE_SECONDS, markOperatorActive, operatorActiveKey } = requi
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
 const llmWorkspace = require('../services/llmWorkspace');
+const runtimeSettings = require('../services/runtimeSettings');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { parseScoredMembers, scanKeys } = require('../services/redisReply');
@@ -1492,6 +1493,26 @@ app.put('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
   try {
     const workspace = await llmWorkspace.saveWorkspace(req.body || {});
     res.json({ success: true, workspace });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// Runtime controls (developer phone, test mode + allow-list, receipt filter).
+// Same auth split as the key workspace: master token for OpenBot's poller,
+// panel session for saving.
+app.get('/api/wa/runtime-settings', requirePlatformAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, settings: await runtimeSettings.getSettings() });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.put('/api/wa/runtime-settings', requirePlatformAdmin, async (req, res) => {
+  try {
+    const settings = await runtimeSettings.saveSettings(req.body || {});
+    res.json({ success: true, settings });
   } catch (error) {
     return adminError(res, error);
   }

@@ -103,6 +103,11 @@
       keyPlaceholder: 'мысалы: DeepSeek тегін',
       keyBaseUrl: 'Base URL (провайдер мекенжайы)', keyType: 'Хаттама', typeOpenai: 'OpenAI-үйлесімді (chat/completions)', typeGemini: 'Gemini (Google)',
       akDupHint: 'Бар кілттің үлгісін көшіреді — жаңа кілтті ғана жазасыз', remove: 'Өшіру', keyUp: 'жоғары',
+      settingsTitle: 'Настройки', settingsCopy: 'Платформа бойынша жұмыс режимдері. Өзгеріс 60 секунд ішінде ботқа жетеді, restart қажет емес.',
+      developerPhone: 'Developer телефоны', developerHint: 'Жүйе қателері мен SOS сигналдары осы нөмірге барады.',
+      testMode: 'Тест режимі', testModeOn: 'Тест режимі қосулы', testModeHint: 'Қосулы болса, бот тек төмендегі нөмірлерге жауап береді. Әдеттегі қонақтарға — тынышлық.',
+      addPhone: 'Нөмір қосу', receiptFilter: 'Чек фильтрі', receiptFilterOn: 'Продакшн фильтр (AI күдікті чектерді тексереді)',
+      receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
@@ -191,6 +196,11 @@
       keyPlaceholder: 'например: DeepSeek бесплатный',
       keyBaseUrl: 'Base URL (адрес провайдера)', keyType: 'Протокол', typeOpenai: 'OpenAI-совместимый (chat/completions)', typeGemini: 'Gemini (Google)',
       akDupHint: 'Копирует образец — впишете только новый ключ', remove: 'Убрать', keyUp: 'вверх',
+      settingsTitle: 'Настройки', settingsCopy: 'Режимы работы платформы. Изменение доходит до бота за 60 секунд, перезапуск не нужен.',
+      developerPhone: 'Телефон разработчика', developerHint: 'Сюда приходят системные ошибки и SOS-сигналы.',
+      testMode: 'Тестовый режим', testModeOn: 'Тестовый режим включён', testModeHint: 'Когда включён, бот отвечает только номерам ниже. Обычные гости — тишина.',
+      addPhone: 'Добавить номер', receiptFilter: 'Фильтр чеков', receiptFilterOn: 'Продакшн-фильтр (AI проверяет подозрительные чеки)',
+      receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
@@ -819,6 +829,59 @@
     }).catch(function () { akPools = { text: [], media: [] }; });
   }
 
+  /* ---------- Настройки беті (runtime controls) ---------- */
+  var rsSettings = null;
+
+  function rsPhoneRow(phone, index) {
+    return '<div class="field" data-rs-phone-row="' + index + '" style="display:flex;gap:8px;align-items:center;">' +
+      '<input name="rs-phone" value="' + attr('+' + phone) + '" inputmode="tel" autocomplete="off">' +
+      '<button class="button ghost" type="button" data-action="rs-del-phone" data-index="' + index + '">✕</button>' +
+      '</div>';
+  }
+
+  function renderSettings() {
+    var s = rsSettings || { developer_phone: '', test_mode_enabled: false, test_allowed_phones: [], receipt_filter_enabled: true };
+    return '<div class="page">' +
+      '<div class="ak-title-row"><h3>' + t('settingsTitle') + '</h3>' +
+      '<button class="button primary ak-save" type="button" data-action="rs-save">' + t('save') + '</button></div>' +
+      '<p class="ak-hint">' + t('settingsCopy') + '</p>' +
+
+      '<div class="ak-pool"><h3>' + t('developerPhone') + '</h3>' +
+      '<div class="field"><input name="rs-dev-phone" value="' + attr(s.developer_phone || '') + '" placeholder="+7 700 000 00 00" inputmode="tel" autocomplete="off"></div>' +
+      '<p class="ak-hint">' + t('developerHint') + '</p></div>' +
+
+      '<div class="ak-pool"><h3>' + t('testMode') + '</h3>' +
+      '<label class="checkbox" for="rs-test-enabled"><input id="rs-test-enabled" type="checkbox" name="rs-test-enabled" ' + (s.test_mode_enabled ? 'checked' : '') + '><span>' + t('testModeOn') + '</span></label>' +
+      '<p class="ak-hint">' + t('testModeHint') + '</p>' +
+      '<div id="rs-phones">' + (s.test_allowed_phones || []).map(rsPhoneRow).join('') + '</div>' +
+      '<button class="button ak-add" type="button" data-action="rs-add-phone">+ ' + t('addPhone') + '</button></div>' +
+
+      '<div class="ak-pool"><h3>' + t('receiptFilter') + '</h3>' +
+      '<label class="checkbox" for="rs-receipt-filter"><input id="rs-receipt-filter" type="checkbox" name="rs-receipt-filter" ' + (s.receipt_filter_enabled ? 'checked' : '') + '><span>' + t('receiptFilterOn') + '</span></label>' +
+      '<p class="ak-hint">' + t('receiptFilterHint') + '</p></div>' +
+      '</div>';
+  }
+
+  function rsCollect() {
+    var devPhone = String(($('[name="rs-dev-phone"]', viewEl) || {}).value || '').replace(/[^\d+]/g, '').trim();
+    var phones = $$('[data-rs-phone-row]', viewEl).map(function (row) {
+      return String(($('[name="rs-phone"]', row) || {}).value || '').replace(/\D/g, '');
+    }).filter(function (phone) { return phone.length >= 10; });
+    return {
+      developer_phone: devPhone,
+      test_mode_enabled: Boolean($('#rs-test-enabled', viewEl) && $('#rs-test-enabled', viewEl).checked),
+      test_allowed_phones: phones,
+      receipt_filter_enabled: Boolean($('#rs-receipt-filter', viewEl) && $('#rs-receipt-filter', viewEl).checked)
+    };
+  }
+
+  function loadRuntimeSettings(force) {
+    if (rsSettings && !force) return Promise.resolve();
+    return api('GET', '/api/wa/runtime-settings').then(function (result) {
+      rsSettings = result.settings || {};
+    }).catch(function () { rsSettings = {}; });
+  }
+
   function renderRestaurants() {
     var items = filteredTenants();
     return '<div class="page">' + pageHeader(t('restaurantDirectory'), t('restaurantsTitle'), t('restaurantsCopy'), addButton()) +
@@ -892,7 +955,7 @@
     $$('.nav-item[data-view]').forEach(function (button) {
       button.classList.toggle('active', button.dataset.view === currentView && !currentDetail);
     });
-    viewEl.innerHTML = currentDetail ? renderDetail() : (currentView === 'restaurants' ? renderRestaurants() : currentView === 'apikeys' ? renderApiKeys() : renderDashboard());
+    viewEl.innerHTML = currentDetail ? renderDetail() : (currentView === 'restaurants' ? renderRestaurants() : currentView === 'apikeys' ? renderApiKeys() : currentView === 'settings' ? renderSettings() : renderDashboard());
   }
 
   function normalizeInstances(data) {
@@ -1479,6 +1542,9 @@
     if (currentView === 'apikeys') {
       loadApiKeys().then(function () { if (currentView === 'apikeys' && !currentDetail) render(); });
     }
+    if (currentView === 'settings') {
+      loadRuntimeSettings().then(function () { if (currentView === 'settings' && !currentDetail) render(); });
+    }
     openMenuId = '';
     render();
     window.scrollTo({ top: 0 });
@@ -1569,6 +1635,30 @@
         akPools = payload;
         api('PUT', '/api/wa/llm-workspace', payload)
           .then(function () { toast(t('saved'), t('workspaceTitle')); })
+          .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      } else if (name === 'rs-add-phone') {
+        var rs = rsSettings || {};
+        rs.test_allowed_phones = rs.test_allowed_phones || [];
+        var phoneInputs = $$('[data-rs-phone-row] input[name="rs-phone"]', viewEl).map(function (input) { return input.value; });
+        phoneInputs.forEach(function (value) {
+          var digits = String(value || '').replace(/\D/g, '');
+          if (digits.length >= 10 && rs.test_allowed_phones.indexOf(digits) === -1) rs.test_allowed_phones.push(digits);
+        });
+        rs.test_allowed_phones.push('');
+        rsSettings = rs;
+        render();
+      } else if (name === 'rs-del-phone') {
+        var delRs = rsSettings || {};
+        delRs.test_allowed_phones = $$('[data-rs-phone-row]', viewEl).map(function (row) {
+          return String(($('[name="rs-phone"]', row) || {}).value || '').replace(/\D/g, '');
+        });
+        delRs.test_allowed_phones.splice(Number(action.dataset.index) || 0, 1);
+        rsSettings = delRs;
+        render();
+      } else if (name === 'rs-save') {
+        rsSettings = rsCollect();
+        api('PUT', '/api/wa/runtime-settings', rsSettings)
+          .then(function () { toast(t('saved'), t('settingsTitle')); })
           .catch(function (error) { toast(t('actionFailed'), error.message, true); });
       }
       else if (name === 'restart' || name === 'reconnect') runInstanceAction(instanceId, name);
