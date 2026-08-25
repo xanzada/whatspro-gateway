@@ -97,6 +97,9 @@
       phoneHint: 'Бос қалдырсаңыз, нөмірді QR сканерлегеннен кейін қосуға болады.',
       hoursHint: 'Мысалы: 09:00 - 23:00', domainHint: 'Бос қалдырсаңыз, атаудан жасалады.',
       systemPrompt: 'AI жүйелік промпт', promptHint: 'Бос қалдырсаңыз, ортақ промпт қолданылады.',
+      contactPolicy: 'Контактілер саясаты', contactPolicyHint: 'Бот кімдерге жауап беретінін таңдаңыз. Еленбейтіндер — тізімдегі адамдарды бот мүлде оқымайды және жауап бермейді.',
+      allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
+      ignoredContacts: 'Еленбейтін контактілер', ignoredHint: 'Атауы (мысалы: мама, папа) немесе нөмірі — үтірмен немесе жаңа жолмен.',
       createRestaurant: 'Ресторанды құру', startImmediately: 'WhatsApp сессиясын бірден іске қосу',
       creating: 'Құрылуда', creatingCopy: 'Ресторан және WhatsPro сессиясы бір уақытта жасалады.',
       savingRecord: 'Ресторан жазбасы сақталуда', syncingInstance: 'WhatsPro-мен синхрондалуда',
@@ -175,6 +178,9 @@
       phoneHint: 'Оставьте пустым, чтобы привязать номер после сканирования QR.',
       hoursHint: 'Например: 09:00 - 23:00', domainHint: 'Если оставить пустым, создастся из названия.',
       systemPrompt: 'Системный AI-промпт', promptHint: 'Если оставить пустым, будет использован общий промпт.',
+      contactPolicy: 'Политика контактов', contactPolicyHint: 'Выберите, кому отвечает бот. Игнорируемые — люди из списка: бот их вообще не читает и не отвечает.',
+      allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
+      ignoredContacts: 'Игнорируемые контакты', ignoredHint: 'Имя (например: мама, папа) или номер — через запятую или с новой строки.',
       createRestaurant: 'Создать ресторан', startImmediately: 'Сразу запустить WhatsApp-сессию',
       creating: 'Создание', creatingCopy: 'Ресторан и сессия WhatsPro создаются вместе.',
       savingRecord: 'Сохраняется запись ресторана', syncingInstance: 'Синхронизация с WhatsPro',
@@ -771,6 +777,8 @@
       infoItem(t('alemiInstance'), detail.alemiInstance) +
       (tenant.virtual ? infoItem(t('alemiSecret'), detail.secrets && detail.secrets.alemiSecret ? t('alemiSecretStored') : t('alemiSecretMissing'))
         : alemiSecretItem(tenant.instanceId, Boolean(detail.secrets && detail.secrets.alemiSecret))) +
+      infoItem(t('contactPolicy'), (detail.allowSavedContacts === false ? '—' : '✓') + ' / ' + (detail.allowUnsavedContacts === false ? '—' : '✓') +
+        (Array.isArray(detail.ignoredContacts) && detail.ignoredContacts.length ? ' · ' + escapeHtml(detail.ignoredContacts.join(', ')) : '')) +
       infoItem(t('source'), 'WhatsPro Platform') +
       '</div></div></section>' +
       '<section class="detail-section" id="section-whatsapp"><div class="detail-section-head"><strong>WhatsApp</strong><span>' + t('realTime') +
@@ -1091,9 +1099,15 @@
       systemPrompt: existing.systemPrompt || '', alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
       alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: String(existing.alemiSecret || ''),
       alemiSecretSet: Boolean(existing.alemiSecretSet) || Boolean(existing.secrets && existing.secrets.alemiSecret),
+      allowSavedContacts: existing.allowSavedContacts === undefined ? false : Boolean(existing.allowSavedContacts),
+      allowUnsavedContacts: existing.allowUnsavedContacts === undefined ? true : Boolean(existing.allowUnsavedContacts),
+      ignoredContactsText: Array.isArray(existing.ignoredContacts) ? existing.ignoredContacts.join(', ') : String(existing.ignoredContacts || ''),
       startNow: existing.startNow !== false
     } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '',
-      alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: '', alemiSecret: '', alemiSecretSet: false, startNow: true };
+      alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: '', alemiSecret: '', alemiSecretSet: false,
+      // Defaults mirror the platform-wide behaviour this panel inherited:
+      // saved contacts were ignored, strangers were served.
+      allowSavedContacts: false, allowUnsavedContacts: true, ignoredContactsText: '', startNow: true };
     var editingId = !cloneSourceId && existing && existing.instanceId;
     function draw() {
       var body = '';
@@ -1118,13 +1132,24 @@
         '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
         ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
-        '</textarea><small>' + t('promptHint') + '</small></div></div>';
+        '</textarea><small>' + t('promptHint') + '</small></div>' +
+        '<div class="field full"><label>' + t('contactPolicy') + '</label><div class="checkbox-row">' +
+        '<label class="checkbox" for="wizard-allow-saved"><input id="wizard-allow-saved" type="checkbox" name="allowSavedContacts" ' + (data.allowSavedContacts ? 'checked' : '') +
+        '><span>' + t('allowSavedContacts') + '</span></label>' +
+        '<label class="checkbox" for="wizard-allow-unsaved"><input id="wizard-allow-unsaved" type="checkbox" name="allowUnsavedContacts" ' + (data.allowUnsavedContacts ? 'checked' : '') +
+        '><span>' + t('allowUnsavedContacts') + '</span></label></div><small>' + t('contactPolicyHint') + '</small></div>' +
+        '<div class="field full"><label for="wizard-ignored">' + t('ignoredContacts') + ' <span class="optional">(' + t('optional') +
+        ')</span></label><textarea id="wizard-ignored" name="ignoredContactsText" placeholder="мама, папа, +7 700 000 00 00">' + escapeHtml(data.ignoredContactsText || '') +
+        '</textarea><small>' + t('ignoredHint') + '</small></div></div>';
       if (step === 3) body = '<div class="review-grid">' +
         [['restaurantName', data.brand], ['instance', editingId || slugify(data.brand)], ['phone', data.whatsappPhone || '—'],
           ['hours', data.workHours || '—'], ['domain', data.domain || '—'], ['address', data.address || '—'],
           ['alemiApiUrl', data.alemiApiUrl], ['alemiInstance', data.alemiInstance],
           ['alemiSecret', data.alemiSecret ? t('alemiSecretWillUpdate') : (data.alemiSecretSet ? t('alemiSecretStored') : t('alemiSecretMissing'))],
-          ['prompt', data.systemPrompt || t('sharedPrompt')]]
+          ['prompt', data.systemPrompt || t('sharedPrompt')],
+          [t('allowSavedContacts'), data.allowSavedContacts ? '✓' : '—'],
+          [t('allowUnsavedContacts'), data.allowUnsavedContacts ? '✓' : '—'],
+          [t('ignoredContacts'), data.ignoredContactsText || '—']]
           .map(function (row) { return '<div class="review-row"><span>' + t(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>'; }).join('') +
         '</div><label class="checkbox" for="wizard-start"><input id="wizard-start" type="checkbox" name="startNow" ' + (data.startNow ? 'checked' : '') + '><span>' + t('startImmediately') + '</span></label>';
       var footer = '<div class="modal-footer"><button class="button ghost" type="button" ' +
@@ -1197,7 +1222,8 @@
       domain: data.domain || '', address: data.address || '', workHours: data.workHours || '',
       adminPhone: data.whatsappPhone || '', promptMode: data.systemPrompt ? 'custom' : 'shared',
       systemPrompt: data.systemPrompt || '', alemiApiUrl: data.alemiApiUrl,
-      alemiInstance: data.alemiInstance || generatedId, alemiSecret: data.alemiSecret || '', active: true
+      alemiInstance: data.alemiInstance || generatedId, alemiSecret: data.alemiSecret || '', active: true,
+      ...contactPolicyFromData(data)
     };
     drawProgress();
     var createPath = cloneSourceId
@@ -1220,13 +1246,21 @@
     }).then(function () { drawProgress(null, true); })
       .catch(function (error) { drawProgress(error, false); });
   }
+  function contactPolicyFromData(data) {
+    var truthy = function (value) { return value === true || value === 'true' || value === 'on' || value === 1; };
+    return {
+      allowSavedContacts: truthy(data.allowSavedContacts),
+      allowUnsavedContacts: truthy(data.allowUnsavedContacts),
+      ignoredContacts: String(data.ignoredContactsText || '').split(/[\n,;]+/).map(function (item) { return item.trim(); }).filter(Boolean)
+    };
+  }
   function saveRestaurant(instanceId, data) {
     var payload = {
       brand: data.brand, whatsappPhone: data.whatsappPhone || '', domain: data.domain || '',
       address: data.address || '', workHours: data.workHours || '', adminPhone: data.whatsappPhone || '',
       promptMode: data.systemPrompt ? 'custom' : 'shared', systemPrompt: data.systemPrompt || '',
       alemiApiUrl: data.alemiApiUrl, alemiInstance: data.alemiInstance || instanceId,
-      alemiSecret: data.alemiSecret || '', active: true
+      alemiSecret: data.alemiSecret || '', active: true, ...contactPolicyFromData(data)
     };
     var saveRequest = api('PATCH', '/api/wa/tenants/' + encodeURIComponent(instanceId), payload);
     data.alemiSecret = '';

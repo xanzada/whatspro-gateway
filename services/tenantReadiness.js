@@ -487,6 +487,9 @@ function evaluateTenant(record, options = {}) {
     botEnabled: isBotEnabled(record),
     callsDisabled: isCallsDisabled(record),
     promptMode: text(record, ['prompt_mode']).toLowerCase() === 'custom' ? 'custom' : 'shared',
+    allowSavedContacts: record.allow_saved_contacts === undefined || record.allow_saved_contacts === null ? false : Boolean(record.allow_saved_contacts),
+    allowUnsavedContacts: record.allow_unsaved_contacts === undefined || record.allow_unsaved_contacts === null ? true : Boolean(record.allow_unsaved_contacts),
+    ignoredContacts: Array.isArray(record.ignored_contacts) ? record.ignored_contacts : [],
     checks: [...checks, ...extras],
     summary: summarize(checks, extras)
   };

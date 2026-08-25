@@ -23,6 +23,38 @@ function normalizePhoneField(value) {
   return digits ? `+${digits}` : '';
 }
 
+// Contact-policy flags are tri-state on the wire: an absent value must fall
+// back to what the row (or the platform default) already says rather than being
+// read as "false" — a PATCH that omits them would otherwise mute every saved
+// contact by accident.
+function normalizeContactFlag(value, fallback) {
+  if (value === true) return true;
+  if (value === false) return false;
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  return fallback;
+}
+
+// One entry per person: a saved-contact name ("мама", "Анашым") or a phone in
+// any formatting. Names match whole words against the identity fields only —
+// never the message text — so a guest typing the word "мама" is still served.
+function normalizeIgnoredContacts(value) {
+  const raw = Array.isArray(value) ? value : String(value ?? '').split(/[\n,;]+/);
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const entry = clean(item, 64);
+    if (!entry) continue;
+    const key = entry.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 function isValidInstanceId(value) {
   return /^[a-zA-Z0-9_-]{2,64}$/.test(String(value || ''));
 }
@@ -284,7 +316,6 @@ function resolvePrompt(fields, input, sharedPrompt, existing = null) {
   return cleanMultiline(sharedPrompt || existing?.system_prompt || '');
 }
 
-
 // Recognisable alternate spellings of the whitelisted update fields. Only these are
 // rejected: a body may legitimately carry unrelated metadata keys, and ignoring those is
 // forward-compatible. But a key that is exactly the snake_case form of a field this
@@ -301,7 +332,10 @@ const FIELD_NAME_ALIASES = {
   alemi_instance: 'alemiInstance',
   alemi_secret: 'alemiSecret',
   bot_enabled: 'botEnabled',
-  calls_disabled: 'callsDisabled'
+  calls_disabled: 'callsDisabled',
+  allow_saved_contacts: 'allowSavedContacts',
+  allow_unsaved_contacts: 'allowUnsavedContacts',
+  ignored_contacts: 'ignoredContacts'
 };
 
 function rejectedFieldNames(input = {}) {
@@ -315,6 +349,22 @@ function unknownFieldError(misnamed) {
   error.statusCode = 400;
   error.fields = misnamed.map((entry) => `${entry.sent} -> rename to ${entry.expected}`);
   return error;
+}
+
+// Per-tenant contact policy. Defaults mirror the platform-wide behaviour the
+// day this shipped — BOT_IGNORE_SAVED_CONTACTS=true meant saved contacts were
+// silently ignored and strangers were served — so flipping restaurants to
+// per-tenant control changes nothing until an operator touches the switches.
+function contactPolicyPayload(input = {}, existing = null) {
+  const savedFallback = normalizeContactFlag(existing?.allow_saved_contacts, false);
+  const unsavedFallback = normalizeContactFlag(existing?.allow_unsaved_contacts, true);
+  return {
+    allow_saved_contacts: normalizeContactFlag(input.allowSavedContacts, savedFallback),
+    allow_unsaved_contacts: normalizeContactFlag(input.allowUnsavedContacts, unsavedFallback),
+    ignored_contacts: normalizeIgnoredContacts(
+      input.ignoredContacts !== undefined ? input.ignoredContacts : existing?.ignored_contacts
+    )
+  };
 }
 
 async function createTenant(input, options = {}) {
@@ -335,7 +385,8 @@ async function createTenant(input, options = {}) {
     ...fields,
     ...platformFields(options.publicBase),
     alemi_secret: alemiSecret,
-    system_prompt: resolvePrompt(fields, input, options.sharedPrompt)
+    system_prompt: resolvePrompt(fields, input, options.sharedPrompt),
+    ...contactPolicyPayload(input, null)
   };
   await tenantStore.createRow(payload);
   return { instanceId: fields.instance_id, created: true };
@@ -386,7 +437,8 @@ async function updateTenant(instanceId, input, options = {}) {
 
   const payload = {
     ...fields,
-    system_prompt: resolvePrompt(fields, input, options.sharedPrompt, existing)
+    system_prompt: resolvePrompt(fields, input, options.sharedPrompt, existing),
+    ...contactPolicyPayload(input, existing)
   };
   const alemiSecret = normalizeAlemiSecret(input.alemiSecret);
   if (alemiSecret) {
@@ -438,7 +490,10 @@ function workbookInput(row = {}) {
     alemiSecret: row.alemi_secret ?? row.alemiSecret,
     active: row.active,
     botEnabled: row.bot_enabled,
-    callsDisabled: row.calls_disabled
+    callsDisabled: row.calls_disabled,
+    allowSavedContacts: row.allow_saved_contacts,
+    allowUnsavedContacts: row.allow_unsaved_contacts,
+    ignoredContacts: Array.isArray(row.ignored_contacts) ? row.ignored_contacts.join(', ') : (row.ignored_contacts || '')
   };
 }
 
@@ -693,6 +748,9 @@ function presentableTenant(row) {
     active: row.active === undefined || row.active === null ? true : Boolean(row.active),
     botEnabled: row.bot_enabled === undefined || row.bot_enabled === null ? true : Boolean(row.bot_enabled),
     callsDisabled: row.calls_disabled === undefined || row.calls_disabled === null ? true : Boolean(row.calls_disabled),
+    allowSavedContacts: normalizeContactFlag(row.allow_saved_contacts, false),
+    allowUnsavedContacts: normalizeContactFlag(row.allow_unsaved_contacts, true),
+    ignoredContacts: normalizeIgnoredContacts(row.ignored_contacts),
     createdAt: clean(row.created_at || row.CreatedAt, 64),
     updatedAt: clean(row.updated_at || row.UpdatedAt, 64),
     secrets: {
@@ -767,5 +825,5 @@ module.exports = {
   updateTenant,
   slugify,
   withCurrentTransport,
-  __test: { generateSecret, generateAlemiSecret, suggestAlemiSecret, alemiSecretsMatch, assertAlemiSecretUnique, ALEMI_SECRET_CLASSES, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting, rejectedFieldNames, FIELD_NAME_ALIASES }
+  __test: { generateSecret, generateAlemiSecret, suggestAlemiSecret, alemiSecretsMatch, assertAlemiSecretUnique, ALEMI_SECRET_CLASSES, operatorFields, validationErrors, resolvePrompt, platformFields, applyDefaults, workbookInput, normalizeAlemiApiUrl, normalizeAlemiSecret, mergeExisting, rejectedFieldNames, FIELD_NAME_ALIASES, contactPolicyPayload, normalizeIgnoredContacts }
 };
