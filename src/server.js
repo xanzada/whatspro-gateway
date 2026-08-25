@@ -26,6 +26,7 @@ const { isValidChatPhone, normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, markOperatorActive, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
+const llmWorkspace = require('../services/llmWorkspace');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
 const { parseScoredMembers, scanKeys } = require('../services/redisReply');
@@ -1471,6 +1472,26 @@ app.put('/api/wa/shared-prompt', requirePlatformAdmin, async (req, res) => {
     // so the write and the propagation are one action.
     const result = await tenantAdmin.applySharedPrompt(prompt);
     res.json({ success: true, ...result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+// The LLM key workspace ("Жұмыс кеңістігі"): two ordered key pools — text and
+// media. GET accepts the master token because OpenBot polls it every minute to
+// rebuild its model chains; PUT is the panel saving the arrangement.
+app.get('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, workspace: await llmWorkspace.getWorkspace() });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.put('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
+  try {
+    const workspace = await llmWorkspace.saveWorkspace(req.body || {});
+    res.json({ success: true, workspace });
   } catch (error) {
     return adminError(res, error);
   }

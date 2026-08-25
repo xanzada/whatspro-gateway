@@ -98,6 +98,9 @@
       hoursHint: 'Мысалы: 09:00 - 23:00', domainHint: 'Бос қалдырсаңыз, атаудан жасалады.',
       systemPrompt: 'AI жүйелік промпт', promptHint: 'Бос қалдырсаңыз, ортақ промпт қолданылады.',
       contactPolicy: 'Контактілер саясаты', contactPolicyHint: 'Бот кімдерге жауап беретінін таңдаңыз. Еленбейтіндер — тізімдегі адамдарды бот мүлде оқымайды және жауап бермейді.',
+      workspaceTitle: 'Жұмыс кеңістігі — AI кілттері', workspaceCopy: 'Үстіңгі кілт негізгі, қалғандары резерв. Біреуі тоқтаса, бот келесісіне өзі секіреді. Тізім бос болса, ортақ env-килттер қолданылады.',
+      workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
+      keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
       ignoredContacts: 'Еленбейтін контактілер', ignoredHint: 'Атауы (мысалы: мама, папа) немесе нөмірі — үтірмен немесе жаңа жолмен.',
       createRestaurant: 'Ресторанды құру', startImmediately: 'WhatsApp сессиясын бірден іске қосу',
@@ -179,6 +182,9 @@
       hoursHint: 'Например: 09:00 - 23:00', domainHint: 'Если оставить пустым, создастся из названия.',
       systemPrompt: 'Системный AI-промпт', promptHint: 'Если оставить пустым, будет использован общий промпт.',
       contactPolicy: 'Политика контактов', contactPolicyHint: 'Выберите, кому отвечает бот. Игнорируемые — люди из списка: бот их вообще не читает и не отвечает.',
+      workspaceTitle: 'Рабочее пространство — AI-ключи', workspaceCopy: 'Верхний ключ основной, остальные — резерв. Если один перестаёт работать, бот сам перескакивает на следующий. Пустой список — используются общие env-ключи.',
+      workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
+      keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
       ignoredContacts: 'Игнорируемые контакты', ignoredHint: 'Имя (например: мама, папа) или номер — через запятую или с новой строки.',
       createRestaurant: 'Создать ресторан', startImmediately: 'Сразу запустить WhatsApp-сессию',
@@ -1588,6 +1594,108 @@
     openImportModal(file);
   });
   $('#refresh-button').addEventListener('click', function () { loadData(); });
+
+  /* ---------- Жұмыс кеңістігі: LLM key pools ---------- */
+  var workspacePools = { text: [], media: [] };
+  function wsPoolRowsHtml(pool, prefix) {
+    if (!pool.length) return '<p class="confirm-copy" data-ws-empty>' + t('workspaceEmpty') + '</p>';
+    return pool.map(function (entry, index) {
+      return '<div class="field" data-ws-row="' + prefix + '" data-ws-index="' + index + '" style="display:grid;grid-template-columns:1fr 130px 1fr 1fr auto auto;gap:8px;align-items:end;">' +
+        '<input name="ws-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyName')) + '">' +
+        '<select name="ws-provider">' +
+        '<option value="gemini"' + (entry.provider === 'gemini' ? ' selected' : '') + '>Gemini</option>' +
+        '<option value="openrouter"' + (entry.provider !== 'gemini' ? ' selected' : '') + '>OpenRouter</option>' +
+        '</select>' +
+        '<input name="ws-model" value="' + attr(entry.model || '') + '" placeholder="gemini-2.5-flash" autocomplete="off" spellcheck="false">' +
+        '<input name="ws-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false">' +
+        '<button class="button ghost" type="button" data-ws-action="up" title="↑">↑</button>' +
+        '<button class="button ghost" type="button" data-ws-action="del" title="✕">✕</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  function wsCollectPool(prefix) {
+    var rows = $$('[data-ws-row="' + prefix + '"]', modalRoot);
+    var out = [];
+    rows.forEach(function (row) {
+      var entry = {
+        name: String($('[name="ws-name"]', row).value || '').trim(),
+        provider: $('[name="ws-provider"]', row).value,
+        model: String($('[name="ws-model"]', row).value || '').trim(),
+        key: String($('[name="ws-key"]', row).value || '').replace(/\s+/g, '')
+      };
+      if (entry.model && entry.key) out.push(entry);
+    });
+    return out;
+  }
+
+  function wsDraw() {
+    var body = '' +
+      '<section class="detail-section"><div class="detail-section-head"><strong>' + t('poolText') + '</strong></div>' +
+      '<div class="detail-body" id="ws-text-rows">' + wsPoolRowsHtml(workspacePools.text, 'text') + '</div>' +
+      '<button class="button ghost" type="button" data-ws-action="add" data-ws-pool="text">+ ' + t('addKey') + '</button></section>' +
+      '<section class="detail-section"><div class="detail-section-head"><strong>' + t('poolMedia') + '</strong></div>' +
+      '<div class="detail-body" id="ws-media-rows">' + wsPoolRowsHtml(workspacePools.media, 'media') + '</div>' +
+      '<button class="button ghost" type="button" data-ws-action="add" data-ws-pool="media">+ ' + t('addKey') + '</button></section>' +
+      '<p class="confirm-copy">' + t('workspaceCopy') + '</p>';
+    $('[data-ws-body]', modalRoot).innerHTML = body;
+  }
+
+  function openWorkspaceModal() {
+    workspacePools = { text: [], media: [] };
+    openModal(modalHeader(t('workspaceTitle'), t('workspaceCopy')) +
+      '<div class="modal-body" data-ws-body><p class="confirm-copy">…</p></div>' +
+      '<div class="modal-footer"><span class="spacer"></span>' +
+      '<button class="button ghost" type="button" data-modal-close>' + t('cancel') + '</button>' +
+      '<button class="button primary" type="button" data-ws-save>' + t('save') + '</button></div>');
+    api('GET', '/api/wa/llm-workspace').then(function (result) {
+      workspacePools = {
+        text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
+        media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
+      };
+    }).catch(function () { /* empty pools on failure */ }).finally(function () { wsDraw(); });
+  }
+
+  $('#workspace-button').addEventListener('click', openWorkspaceModal);
+
+  function wsHandleAction(action, target) {
+    var pool = target.getAttribute('data-ws-pool');
+    var row = target.closest('[data-ws-row]');
+    if (action === 'add') {
+      workspacePools[pool] = wsCollectPool(pool);
+      workspacePools[pool].push({ name: '', provider: pool === 'media' ? 'gemini' : 'openrouter', model: '', key: '' });
+      wsDraw();
+      return;
+    }
+    if (!row) return;
+    var index = Number(row.getAttribute('data-ws-index')) || 0;
+    workspacePools[pool] = wsCollectPool(pool);
+    if (action === 'del') {
+      workspacePools[pool].splice(index, 1);
+    } else if (action === 'up' && index > 0) {
+      var moved = workspacePools[pool].splice(index, 1)[0];
+      workspacePools[pool].splice(index - 1, 0, moved);
+    }
+    wsDraw();
+  }
+
+  modalRoot.addEventListener('click', function (event) {
+    var actionButton = event.target.closest('[data-ws-action]');
+    if (actionButton) { wsHandleAction(actionButton.getAttribute('data-ws-action'), actionButton); return; }
+    var saveButton = event.target.closest('[data-ws-save]');
+    if (!saveButton) return;
+    saveButton.disabled = true;
+    api('PUT', '/api/wa/llm-workspace', {
+      text: wsCollectPool('text'),
+      media: wsCollectPool('media')
+    }).then(function () {
+      toast(t('saved'), t('workspaceTitle'));
+      closeModal();
+    }).catch(function (error) {
+      saveButton.disabled = false;
+      toast(t('actionFailed'), error.message || t('workspaceTitle'), true);
+    });
+  });
   $('#sidebar-toggle').addEventListener('click', function () { appShell.classList.toggle('collapsed'); });
   $('#mobile-menu').addEventListener('click', function () {
     appShell.classList.add('mobile-nav-open');
