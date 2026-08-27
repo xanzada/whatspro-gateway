@@ -2218,6 +2218,49 @@ app.post('/api/chat/action/:instanceId/:phone', resolveChatInstance, requireChat
   return res.json({ success: true, instanceId, phone, action });
 });
 
+// The site needs the SOS count WITHOUT the operator opening the chat. The iframe
+// postMessage (platform.chat.sos-unread) only fires while the panel is on screen, so a
+// restaurant whose owner just looked at the cabinet saw a green button with no number
+// even though a guest was waiting (owner report, 2026-08-27). This is the server-side
+// half of the same fact: Hub polls it, gets the count, and paints the badge before
+// anybody clicks anything.
+//
+// Deliberately a pure read of the SOS index - it never acknowledges, so polling can
+// never clear a signal the operator has not seen. `revision` changes only when the
+// count does, which lets the caller skip a repaint.
+app.get('/api/chat/sos-count/:instanceId', resolveChatInstance, requireChatUiOrApi, async (req, res) => {
+  const instanceId = String(req.params.instanceId || '').trim();
+  if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
+  if (!withinApiScope(req, instanceId)) return res.status(403).json({ error: 'INSTANCE_SCOPE_MISMATCH' });
+  if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+  // A test-mode tenant must not report guests the panel itself refuses to show, or the
+  // badge would count a chat the operator cannot open.
+  const testModePolicy = await getTestModePolicy(instanceId);
+  const rows = await sosStore.list(instanceId, 1000).catch(() => null);
+  if (rows === null) return res.status(503).json({ error: 'SOS_STATE_UNAVAILABLE' });
+  let unread = 0;
+  let total = 0;
+  let latestAt = 0;
+  for (const row of rows) {
+    const phone = await chatStore.resolveLidPhone(instanceId, row.phone).catch(() => row.phone);
+    if (!isValidChatPhone(phone) || !allowsPhone(testModePolicy, phone)) continue;
+    total += 1;
+    if (row.sosUnread) unread += 1;
+    latestAt = Math.max(latestAt, Number(row.sosCreatedAt || 0));
+  }
+  res.set({ 'Cache-Control': 'no-store, max-age=0' });
+  return res.json({
+    success: true,
+    instance: instanceId,
+    schema_version: 1,
+    sos_unread: unread,
+    sos_open: total,
+    latest_at: latestAt ? new Date(latestAt).toISOString() : null,
+    observed_at: new Date().toISOString(),
+    revision: `whatspro:${instanceId}:${unread}:${total}`
+  });
+});
+
 app.post('/api/wa/start', requireUiOrApi, async (req, res) => {
   const instanceId = String(req.body?.instanceId || '').trim();
   const label = String(req.body?.label || '').trim();

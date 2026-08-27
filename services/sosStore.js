@@ -4,7 +4,11 @@ const { redisClient } = require('../config/redis');
 const { isValidChatPhone, normalizePhone } = require('./phoneUtils');
 const { parseScoredMembers } = require('./redisReply');
 
-const SOS_TTL_SECONDS = 60 * 60;
+// Kept in step with Openbot's operatorCase.service.ts: the writer sets these keys with
+// this TTL, this reader prunes the index by the same clock. One hour dropped a night
+// complaint out of the SOS column before the morning shift ever saw it (owner report,
+// 2026-08-27).
+const SOS_TTL_SECONDS = 24 * 60 * 60;
 const keys = {
   index: instanceId => `chatwoot:sos:${instanceId}`,
   marker: (instanceId, phone) => `chatwoot:sos:${instanceId}:${phone}`,
