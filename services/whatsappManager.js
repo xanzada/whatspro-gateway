@@ -1330,6 +1330,12 @@ async function getContactInfoFromMessage(msg) {
             shortName: contact?.shortName || '',
             pushName: contact?.pushname || contact?.pushName || msg?._data?.notifyName || '',
             isMyContact: Boolean(contact?.isMyContact),
+            // Carried through so the bot can tell "this guest is not in the address book"
+            // apart from "this session has no address book yet". A fresh QR pairing has an
+            // empty contact map, and treating that as "everyone is a stranger" silenced a
+            // saved-contacts-only tenant completely (owner report, 2026-08-30). Absent for
+            // the wwebjs transport, where the browser profile always carries the book.
+            addressBookKnown: contact?.addressBookKnown === undefined ? true : Boolean(contact.addressBookKnown),
             isWAContact: Boolean(contact?.isWAContact)
         };
     } catch (error) {
@@ -1845,7 +1851,10 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                     pushName: msg._data?.notifyName || contactInfo.pushName || contactInfo.name || 'Client',
                     contact: contactInfo,
                     contactName: contactInfo.name || contactInfo.shortName || contactInfo.pushName || '',
-                    isMyContact: Boolean(contactInfo.isMyContact)
+                    isMyContact: Boolean(contactInfo.isMyContact),
+                    // See getContactInfoFromMessage: false here means the session has no
+                    // address book at all, which must not be read as "stranger".
+                    addressBookKnown: contactInfo.addressBookKnown === undefined ? true : Boolean(contactInfo.addressBookKnown)
                 }
             });
             if (downloadedMedia && hasSupportedMedia) {

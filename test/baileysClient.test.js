@@ -210,6 +210,36 @@ test('Baileys preserves saved-contact provenance without replaying synced histor
     });
     const unsaved = await seen[1].getContact();
     assert.equal(unsaved.isMyContact, false, 'a public push name is not an address-book entry');
+    // Once ANY contact has arrived the book exists, so isMyContact:false here really does
+    // mean "not saved" - which is what lets the bot keep honouring a saved-only policy.
+    assert.equal(unsaved.addressBookKnown, true);
+    assert.equal(saved.addressBookKnown, true);
+  });
+});
+
+// A fresh QR pairing has no address book at all, and reading that as "everyone is a
+// stranger" silenced a saved-contacts-only tenant completely (owner report, 2026-08-30).
+// The flag is what lets OpenBot tell "not saved" apart from "cannot tell".
+test('Baileys reports an unknown address book before any contact event arrives', async () => {
+  const fake = fakeBaileys();
+  const seen = [];
+
+  await withClient('fresh-pairing', fake, async client => {
+    client.on('message', msg => seen.push(msg));
+    assert.equal(client.hasAddressBook(), false, 'a fresh session knows no contacts');
+
+    fake.sockets[0].emit('messages.upsert', { type: 'notify', messages: [textMessage()] });
+    const contact = await seen[0].getContact();
+    assert.equal(contact.isMyContact, false);
+    assert.equal(contact.addressBookKnown, false, 'false means unknown, not stranger');
+    // The public push name still travels, so the panel and the agent keep a display name.
+    assert.equal(contact.pushname, 'Аружан');
+
+    fake.sockets[0].emit('contacts.upsert', [{ id: '77001112233@s.whatsapp.net', name: 'Досым' }]);
+    assert.equal(client.hasAddressBook(), true, 'one contact event is enough to trust the book');
+    const after = await seen[0].getContact();
+    assert.equal(after.addressBookKnown, true);
+    assert.equal(after.isMyContact, false, 'this particular guest is still not saved');
   });
 });
 

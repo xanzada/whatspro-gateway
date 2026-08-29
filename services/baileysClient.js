@@ -876,6 +876,19 @@ class BaileysClient extends EventEmitter {
         return this._contactShape(jid, pushName, msg.fromMe);
     }
 
+    // Whether this session has any address-book data at all.
+    //
+    // `isMyContact` is derived from `_contacts`, which is an in-memory Map filled only by
+    // `contacts.upsert` / `contacts.update` / `messaging-history.set`. On a FRESH pairing
+    // none of those has fired yet - and with `syncFullHistory:false` WhatsApp may never
+    // send the address book at all. So an empty Map does not mean "this guest is a
+    // stranger", it means "we cannot tell". Callers need that difference: a tenant that
+    // only serves saved contacts went completely silent after a QR re-scan, because every
+    // guest looked unsaved (owner report, 2026-08-30).
+    hasAddressBook() {
+        return this._contacts.size > 0;
+    }
+
     _contactShape(jid, pushName, isMe = false) {
         const normalized = stripDevice(jid || '');
         const user = userOf(normalized);
@@ -893,6 +906,9 @@ class BaileysClient extends EventEmitter {
             shortName: localName || publicName,
             pushname: publicName,
             isMyContact: Boolean(localName),
+            // False means "no address book here", NOT "not a saved contact". Everything
+            // downstream that gates on isMyContact has to know which of the two it is.
+            addressBookKnown: this._contacts.size > 0,
             isWAContact: Boolean(normalized),
             isMe: Boolean(isMe),
             isUser: !isGroupJid(normalized),
