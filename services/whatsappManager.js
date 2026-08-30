@@ -1318,28 +1318,60 @@ async function saveOperatorOutgoingHistory(instanceId, phone, text, source, mess
     return stored;
 }
 
-async function getContactInfoFromMessage(msg) {
-    if (typeof msg.getContact !== 'function') return {};
+// The address book is keyed by `<phone>@s.whatsapp.net`, but an inbound message on a
+// modern WhatsApp account arrives as `<opaque>@lid`. msg.getContact() resolves from the
+// message's own jid, so on a @lid turn it looks the guest up under an id the book never
+// contains and isMyContact is false for EVERYONE - including contacts the owner really
+// has saved. cleanNumber has already been resolved by the caller, so a second lookup
+// under the real phone is the only way to answer the question that was actually asked.
+async function contactByPhone(client, phone) {
+    const raw = String(phone || '').trim();
+    // A lid is all digits too, so "has digits" is not enough: asking the book about
+    // `224043110273161@c.us` would invent a number nobody owns. Only a resolved phone
+    // may be looked up, and an unresolved lid simply yields no second opinion.
+    if (!raw || /@lid$/i.test(raw)) return null;
+    const digits = raw.replace(/\D/g, '');
+    if (!digits || typeof client?.getContactById !== 'function') return null;
+    try {
+        return await withTimeout(client.getContactById(`${digits}@c.us`), 1500, 'CONTACT_BY_PHONE_TIMEOUT');
+    } catch (error) {
+        return null;
+    }
+}
+
+async function getContactInfoFromMessage(msg, client = null, phone = '') {
+    if (typeof msg.getContact !== 'function') return { addressBookKnown: false };
 
     try {
         const contact = await withTimeout(msg.getContact(), 1500, 'CONTACT_LOOKUP_TIMEOUT');
+        // Only worth a second round trip when the message jid could not confirm the guest.
+        // A positive isMyContact is already a fact and never needs re-checking.
+        const byPhone = contact?.isMyContact ? null : await contactByPhone(client, phone);
+        const resolved = byPhone?.isMyContact ? byPhone : contact;
+        const bookSeen = Boolean(contact?.addressBookKnown) || Boolean(byPhone?.addressBookKnown);
         return {
-            id: contact?.id?._serialized || '',
-            number: contact?.number || contact?.id?.user || contact?.userid || '',
-            name: contact?.name || '',
-            shortName: contact?.shortName || '',
+            id: resolved?.id?._serialized || contact?.id?._serialized || '',
+            number: resolved?.number || resolved?.id?.user || contact?.number || contact?.id?.user || contact?.userid || '',
+            name: resolved?.name || contact?.name || '',
+            shortName: resolved?.shortName || contact?.shortName || '',
             pushName: contact?.pushname || contact?.pushName || msg?._data?.notifyName || '',
-            isMyContact: Boolean(contact?.isMyContact),
+            isMyContact: Boolean(resolved?.isMyContact),
             // Carried through so the bot can tell "this guest is not in the address book"
             // apart from "this session has no address book yet". A fresh QR pairing has an
             // empty contact map, and treating that as "everyone is a stranger" silenced a
-            // saved-contacts-only tenant completely (owner report, 2026-08-30). Absent for
-            // the wwebjs transport, where the browser profile always carries the book.
-            addressBookKnown: contact?.addressBookKnown === undefined ? true : Boolean(contact.addressBookKnown),
-            isWAContact: Boolean(contact?.isWAContact)
+            // saved-contacts-only tenant completely (owner report, 2026-08-30). Undefined on
+            // both shapes means the wwebjs transport, whose browser profile always carries
+            // the book, so it stays `true` there.
+            addressBookKnown: contact?.addressBookKnown === undefined && byPhone?.addressBookKnown === undefined
+                ? true
+                : bookSeen,
+            isWAContact: Boolean(resolved?.isWAContact || contact?.isWAContact)
         };
     } catch (error) {
-        return {};
+        // A lookup that timed out or threw tells us NOTHING about the address book, and
+        // "nothing" must not be reported as "the book is present and this guest is absent" -
+        // that is exactly the pair of meanings that silenced the tenant.
+        return { addressBookKnown: false };
     }
 }
 
@@ -1763,7 +1795,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 if (cached && !/@lid$/i.test(cached)) cleanNumber = cached;
             }
             if (typeof getContactInfoFromMessage === 'function') {
-                contactInfo = await getContactInfoFromMessage(msg);
+                // cleanNumber is passed so the address book can be consulted under the real
+                // phone: a @lid message jid is never a key in that book (see contactByPhone).
+                contactInfo = await getContactInfoFromMessage(msg, client, cleanNumber);
             }
             if (!cleanNumber) {
                 cleanNumber = normalizePhoneFromCandidates([
@@ -3249,6 +3283,8 @@ module.exports = {
             jidMap.clear();
         },
         buildOperatorHistoryEntry,
+        contactByPhone,
+        getContactInfoFromMessage,
 
         rejectIncomingCallReliably,
         handleIncomingCall,
