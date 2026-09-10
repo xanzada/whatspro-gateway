@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 # Debian's `chromium` package installs /usr/bin/chromium. It has never installed
 # /usr/bin/chromium-browser, which PUPPETEER_EXECUTABLE_PATH pointed at for as
