@@ -2423,7 +2423,7 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
       if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
     }
     try {
-      sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption);
+      sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption, { skipQueue: true });
     } catch (error) {
       // Mirrors the text branch: a failed send must not strand the requestId, or a
       // legitimate retry of a message that never arrived would be refused forever.
@@ -2439,7 +2439,7 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
       if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
     }
     try {
-      sendResult = await sendWhatsAppText(instanceId, cleanPhone, text);
+      sendResult = await sendWhatsAppText(instanceId, cleanPhone, text, { skipQueue: true });
     } catch (error) {
       if (apiSendLease) await sendIdempotency.release(apiSendLease).catch(() => {});
       throw error;
@@ -2448,7 +2448,7 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
 
-  const ok = Boolean(sendResult?.success || sendResult);
+  const ok = isSuccessfulApiSend(sendResult);
   const responsePayload = {
     success: ok,
     messageId: String(sendResult?.messageId || '')
@@ -2481,6 +2481,10 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
 
   res.status(ok ? 200 : 503).json(responsePayload);
 });
+
+function isSuccessfulApiSend(sendResult) {
+  return sendResult === true || sendResult?.success === true;
+}
 
 app.post('/api/presence', requireApi, async (req, res) => {
   const { instanceId, instance, phone, state } = req.body || {};
@@ -2635,6 +2639,6 @@ module.exports = {
     cachedLegacyHistoryKeys, legacyScanCache, LEGACY_SCAN_INTERVAL_MS,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requirePlatformAdmin, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
-    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, SEND_WAL_DIR
+    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, isSuccessfulApiSend, SEND_WAL_DIR
   }
 };

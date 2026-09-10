@@ -2960,9 +2960,17 @@ async function flushPendingOutgoingText(instanceId) {
         await delay(250);
     }
 
-    if (retry.length) {
-        pendingTextQueues.set(instanceId, retry);
+    const queuedDuringFlush = pendingTextQueues.get(instanceId) || [];
+    const remaining = [...retry, ...queuedDuringFlush];
+    while (remaining.length > OUTGOING_TEXT_QUEUE_MAX) remaining.shift();
+    if (remaining.length) {
+        // Deliveries await network I/O. A new API/worker message can enter the
+        // queue during that wait; replacing the map with `retry` used to erase
+        // it (production audit 2026-09-10).
+        pendingTextQueues.set(instanceId, remaining);
         scheduleFlush(instanceId, 5000);
+    } else {
+        pendingTextQueues.delete(instanceId);
     }
 }
 
@@ -3305,6 +3313,9 @@ module.exports = {
         },
         clearPendingTextQueue(instanceId) {
             pendingTextQueues.delete(instanceId);
+            const timer = flushTimers.get(instanceId);
+            if (timer) clearTimeout(timer);
+            flushTimers.delete(instanceId);
         },
         buildReconnectPlan,
         calculateRestartDelay,
