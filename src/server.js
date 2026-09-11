@@ -27,6 +27,7 @@ const { OPERATOR_ACTIVE_SECONDS, markOperatorActive, operatorActiveKey } = requi
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
 const { sosStore } = require('../services/sosStore');
 const llmWorkspace = require('../services/llmWorkspace');
+const { createLlmProviderHealth, validateOutcomePayload } = require('../services/llmProviderHealth');
 const runtimeSettings = require('../services/runtimeSettings');
 const { publishChatEvent, subscribeChatEvents } = require('../services/chatEvents');
 const { createChatMediaHandler } = require('../services/chatMedia');
@@ -44,6 +45,7 @@ const { getOpenBotWebhookUrl, startIncomingWalWorker } = require('../services/in
 const { incomingWalSummary } = require('../services/incomingWal');
 
 const app = express();
+const llmProviderHealth = createLlmProviderHealth({ redis: redisClient });
 const PORT = Number(process.env.PORT || 3000);
 const INSTANCE_STORE_KEY = 'whatspro:instances';
 const SCAN_REQUESTS_KEY = 'whatspro:scan-requests';
@@ -1483,7 +1485,14 @@ app.put('/api/wa/shared-prompt', requirePlatformAdmin, async (req, res) => {
 // rebuild its model chains; PUT is the panel saving the arrangement.
 app.get('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
   try {
-    res.json({ success: true, workspace: await llmWorkspace.getWorkspace() });
+    const configured = await llmWorkspace.getWorkspace();
+    // The browser must keep the operator's saved order. OpenBot authenticates
+    // with the master token and receives a health-ranked copy; storage is never
+    // rewritten by runtime observations.
+    const workspace = readSession(req)
+      ? configured
+      : await llmProviderHealth.getRuntimeWorkspace(configured);
+    res.json({ success: true, workspace });
   } catch (error) {
     return adminError(res, error);
   }
@@ -1493,6 +1502,46 @@ app.put('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
   try {
     const workspace = await llmWorkspace.saveWorkspace(req.body || {});
     res.json({ success: true, workspace });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.get('/api/wa/llm-workspace/health', requirePlatformAdmin, async (req, res) => {
+  try {
+    const workspace = await llmWorkspace.getWorkspace();
+    res.json({ success: true, health: await llmProviderHealth.getHealth(workspace) });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/llm-workspace/check', requirePlatformAdmin, async (req, res) => {
+  try {
+    const workspace = await llmWorkspace.getWorkspace();
+    const entryId = String(req.body?.entryId || '');
+    const pool = String(req.body?.pool || '');
+    if (!entryId && !pool) {
+      return res.json({ success: true, health: await llmProviderHealth.checkAll(workspace) });
+    }
+    if (!entryId || !['text', 'media'].includes(pool)) {
+      return res.status(400).json({ error: 'INVALID_LLM_CHECK' });
+    }
+    const result = await llmProviderHealth.checkOne(workspace, pool, entryId);
+    res.json({ success: true, result });
+  } catch (error) {
+    return adminError(res, error);
+  }
+});
+
+app.post('/api/wa/llm-workspace/outcomes', requirePlatformAdmin, async (req, res) => {
+  try {
+    // Strict allowlist: prompts, provider bodies and keys are rejected before
+    // they can reach logs or Redis.
+    const body = validateOutcomePayload(req.body);
+    const workspace = await llmWorkspace.getWorkspace();
+    const result = await llmProviderHealth.recordOutcome(workspace, body);
+    res.json({ success: true, result });
   } catch (error) {
     return adminError(res, error);
   }
@@ -2530,6 +2579,7 @@ async function boot() {
   });
 
   await connectRedis();
+  llmProviderHealth.start(() => llmWorkspace.getWorkspace());
   await tenantStore.listTenantRecords().catch(error => {
     console.warn('[TENANT SNAPSHOT] startup warm-up failed:', error.message);
   });

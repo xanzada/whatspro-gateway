@@ -109,6 +109,9 @@
       addPhone: 'Нөмір қосу', receiptFilter: 'Чек фильтрі', receiptFilterOn: 'Продакшн фильтр (AI күдікті чектерді тексереді)',
       receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
+      poolTextHint: 'Клиентпен мәтіндік диалог және құрал шақырулары.', poolMediaHint: 'Аудио, сурет және құжаттарды талдау.',
+      healthHealthy: 'Жұмыс істеп тұр', healthUnknown: 'Әлі тексерілмеді', healthSuspect: 'Тұрақсыз', healthUnavailable: 'Қолжетімсіз',
+      checkNow: 'Қазір тексеру', checkedAt: 'Тексерілді', latency: 'Кідіріс', checkingProvider: 'Провайдер тексерілуде',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
       ignoredContacts: 'Еленбейтін контактілер', ignoredHint: 'Атауы (мысалы: мама, папа) немесе нөмірі — үтірмен немесе жаңа жолмен.',
@@ -202,6 +205,9 @@
       addPhone: 'Добавить номер', receiptFilter: 'Фильтр чеков', receiptFilterOn: 'Продакшн-фильтр (AI проверяет подозрительные чеки)',
       receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
+      poolTextHint: 'Текстовый диалог с клиентом и вызовы инструментов.', poolMediaHint: 'Анализ аудио, изображений и документов.',
+      healthHealthy: 'Работает', healthUnknown: 'Ещё не проверен', healthSuspect: 'Нестабилен', healthUnavailable: 'Недоступен',
+      checkNow: 'Проверить сейчас', checkedAt: 'Проверено', latency: 'Задержка', checkingProvider: 'Проверяем провайдера',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
       ignoredContacts: 'Игнорируемые контакты', ignoredHint: 'Имя (например: мама, папа) или номер — через запятую или с новой строки.',
@@ -761,11 +767,39 @@
   }
   /* ---------- API key беті (Жұмыс кеңістігі) ---------- */
   var akPools = null;
+  var akHealth = { text: [], media: [] };
+
+  function akHealthFor(pool, entryId) {
+    return (akHealth[pool] || []).find(function (item) { return item.entryId === entryId; }) || {
+      status: 'unknown', source: 'none', lastCheckedAt: null, latencyMs: null, errorCode: null
+    };
+  }
+
+  function akHealthLabel(status) {
+    if (status === 'healthy') return t('healthHealthy');
+    if (status === 'suspect') return t('healthSuspect');
+    if (status === 'unavailable') return t('healthUnavailable');
+    return t('healthUnknown');
+  }
+
+  function akHealthHtml(pool, entry) {
+    var health = akHealthFor(pool, entry.id);
+    var status = ['healthy', 'suspect', 'unavailable'].includes(health.status) ? health.status : 'unknown';
+    var details = [];
+    if (health.lastCheckedAt) details.push(t('checkedAt') + ': ' + formatTime(health.lastCheckedAt));
+    if (health.latencyMs != null) details.push(t('latency') + ': ' + Number(health.latencyMs) + ' ms');
+    if (health.errorCode) details.push(String(health.errorCode));
+    return '<div class="ak-health" role="status">' +
+      '<span class="ak-health-dot ' + status + '" aria-hidden="true"></span>' +
+      '<span><strong>' + escapeHtml(akHealthLabel(status)) + '</strong>' +
+      '<small>' + escapeHtml(details.join(' · ') || t('healthUnknown')) + '</small></span></div>';
+  }
 
   function akEntryHtml(pool, entry, index, total) {
     var badge = index === 0 ? ' · ' + t('keyPrimary') : '';
     return '<section class="ak-card" data-ak-block="' + pool + '" data-ak-index="' + index + '">' +
-      '<strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong>' +
+      '<div class="ak-card-head"><strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong>' + akHealthHtml(pool, entry) + '</div>' +
+      '<input name="ak-id" type="hidden" value="' + attr(entry.id || '') + '">' +
       '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
       '<div class="field"><label>' + t('keyBaseUrl') + '</label><input name="ak-base" value="' + attr(entry.baseUrl || '') + '" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" inputmode="url"></div>' +
       '<div class="ak-two"><div class="field"><label>' + t('keyType') + '</label><select name="ak-type">' +
@@ -775,6 +809,7 @@
       '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div></div>' +
       '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
       '<div class="ak-actions">' +
+      (entry.id ? '<button class="button ghost" type="button" data-action="ak-check" data-pool="' + pool + '" data-entry-id="' + attr(entry.id) + '">● ' + t('checkNow') + '</button>' : '') +
       (index > 0 ? '<button class="button ghost" type="button" data-action="ak-up" data-pool="' + pool + '" data-index="' + index + '">↑</button>' : '') +
       (index < total - 1 ? '<button class="button ghost" type="button" data-action="ak-down" data-pool="' + pool + '" data-index="' + index + '">↓</button>' : '') +
       '<button class="button ghost" type="button" data-action="ak-dup" data-pool="' + pool + '" data-index="' + index + '" title="' + attr(t('akDupHint')) + '">⧉ ' + t('duplicate') + '</button>' +
@@ -788,13 +823,13 @@
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
       '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button></div>' +
       '<p class="ak-hint">' + t('workspaceCopy') + '</p>' +
-      '<div class="ak-pool"><h3>' + t('poolText') + '</h3>' +
+      '<div class="ak-pools-stack"><div class="ak-pool ak-pool-text"><div class="ak-pool-head"><span class="ak-pool-marker text">T</span><span><h3>' + t('poolText') + '</h3><p>' + t('poolTextHint') + '</p></span></div>' +
       (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></div>' +
-      '<div class="ak-pool"><h3>' + t('poolMedia') + '</h3>' +
+      '<div class="ak-pool ak-pool-media"><div class="ak-pool-head"><span class="ak-pool-marker media">M</span><span><h3>' + t('poolMedia') + '</h3><p>' + t('poolMediaHint') + '</p></span></div>' +
       (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></div>' +
-      '</div>';
+      '</div></div>';
   }
 
   function ensureAkPools() {
@@ -807,6 +842,7 @@
     ['text', 'media'].forEach(function (pool) {
       $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
         var entry = {
+          id: String(($('[name="ak-id"]', block) || {}).value || '').trim(),
           name: String($('[name="ak-name"]', block).value || '').trim(),
           baseUrl: String($('[name="ak-base"]', block).value || '').trim().replace(/\/+$/, ''),
           type: $('[name="ak-type"]', block).value === 'gemini' ? 'gemini' : 'openai',
@@ -821,12 +857,30 @@
 
   function loadApiKeys(force) {
     if (akPools && !force) return Promise.resolve();
-    return api('GET', '/api/wa/llm-workspace').then(function (result) {
+    return Promise.all([api('GET', '/api/wa/llm-workspace'), loadAkHealth()]).then(function (results) {
+      var result = results[0];
       akPools = {
         text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
         media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
       };
     }).catch(function () { akPools = { text: [], media: [] }; });
+  }
+
+  function loadAkHealth() {
+    return api('GET', '/api/wa/llm-workspace/health').then(function (result) {
+      akHealth = {
+        text: Array.isArray(result.health && result.health.text) ? result.health.text : [],
+        media: Array.isArray(result.health && result.health.media) ? result.health.media : []
+      };
+      return akHealth;
+    }).catch(function () { return akHealth; });
+  }
+
+  function refreshAkHealth() {
+    if (document.hidden || currentView !== 'apikeys' || currentDetail) return;
+    loadAkHealth().then(function () {
+      if (currentView === 'apikeys' && !currentDetail) render();
+    });
   }
 
   /* ---------- Настройки беті (runtime controls) ---------- */
@@ -1634,8 +1688,23 @@
         var payload = akCollect();
         akPools = payload;
         api('PUT', '/api/wa/llm-workspace', payload)
-          .then(function () { toast(t('saved'), t('workspaceTitle')); })
+          .then(function (result) {
+            akPools = {
+              text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
+              media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
+            };
+            return loadAkHealth();
+          })
+          .then(function () { render(); toast(t('saved'), t('workspaceTitle')); })
           .catch(function (error) { toast(t('actionFailed'), error.message, true); });
+      } else if (name === 'ak-check') {
+        var checkPool = action.dataset.pool;
+        var checkEntryId = action.dataset.entryId;
+        action.disabled = true;
+        api('POST', '/api/wa/llm-workspace/check', { entryId: checkEntryId, pool: checkPool })
+          .then(function () { return loadAkHealth(); })
+          .then(function () { render(); toast(t('checkingProvider'), akHealthLabel(akHealthFor(checkPool, checkEntryId).status)); })
+          .catch(function (error) { action.disabled = false; toast(t('actionFailed'), error.message, true); });
       } else if (name === 'rs-add-phone') {
         var rs = rsSettings || {};
         rs.test_allowed_phones = rs.test_allowed_phones || [];
@@ -1812,7 +1881,12 @@
     $('#mobile-scrim').hidden = false;
   });
   $('#mobile-scrim').addEventListener('click', closeMobileNav);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) syncLiveStatuses(); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+      syncLiveStatuses();
+      refreshAkHealth();
+    }
+  });
 
   function syncLoginInputState(input) {
     var wrapper = input.closest('.input-with-icon');
@@ -1870,4 +1944,5 @@
   applyStaticTranslations();
   checkSession();
   window.setInterval(updateChrome, 10000);
+  window.setInterval(refreshAkHealth, 15000);
 }());

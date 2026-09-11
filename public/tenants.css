@@ -942,9 +942,25 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
 .ak-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 6px; }
 .ak-title-row h3 { margin: 0; font-size: 16px; font-weight: 650; }
 .ak-hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
-.ak-pool { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0 0 16px; }
+.ak-pools-stack { display: flex; flex-direction: column; gap: 22px; }
+.ak-pool { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0; }
 .ak-pool > h3 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+.ak-pool-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.ak-pool-head h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.ak-pool-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.ak-pool-marker { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; font-size: 13px; font-weight: 800; flex: 0 0 auto; }
+.ak-pool-marker.text { color: #2563eb; background: rgba(37,99,235,.12); }
+.ak-pool-marker.media { color: #9333ea; background: rgba(147,51,234,.12); }
 .ak-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 10px; }
+.ak-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ak-health { display: flex; align-items: center; gap: 8px; min-width: 190px; justify-content: flex-end; text-align: right; }
+.ak-health span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.ak-health strong { font-size: 12px; }
+.ak-health small { color: var(--muted); font-size: 10px; max-width: 330px; overflow-wrap: anywhere; }
+.ak-health-dot { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; box-shadow: 0 0 0 3px rgba(148,163,184,.14); flex: 0 0 auto; }
+.ak-health-dot.healthy { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.16); }
+.ak-health-dot.suspect { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.16); }
+.ak-health-dot.unavailable { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
 .ak-card .field { margin: 0; }
 .ak-card .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 .ak-card .field input, .ak-card .field select { width: 100%; min-height: 38px; }
@@ -952,3 +968,4 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
 .ak-actions .button { min-height: 32px; padding: 0 10px; font-size: 12px; width: auto; }
 .ak-add, .ak-save { min-height: 36px; width: auto; padding: 0 14px; font-size: 13px; }
 @media (min-width: 720px) { .ak-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } }
+@media (max-width: 719px) { .ak-card-head { flex-direction: column; } .ak-health { justify-content: flex-start; text-align: left; min-width: 0; } }

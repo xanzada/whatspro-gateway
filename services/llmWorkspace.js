@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { redisClient } = require('../config/redis');
 
 // The LLM key workspace: platform-wide pools the operator curates in the panel,
@@ -14,6 +15,11 @@ const DEFAULT_BASE_URL = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta'
 };
 const MAX_ENTRIES_PER_POOL = 12;
+const ENTRY_ID_PATTERN = /^llm_[A-Za-z0-9_-]{20,80}$/;
+
+function createEntryId() {
+  return `llm_${crypto.randomUUID().replace(/-/g, '')}`;
+}
 
 function clean(value, max = 200) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
@@ -31,7 +37,7 @@ function normalizeBaseUrl(value, type) {
   }
 }
 
-function normalizeEntry(raw) {
+function normalizeEntry(raw, usedIds = new Set()) {
   // Legacy rows carried a provider select (gemini | openrouter); map it onto
   // the type + baseUrl pair so old saves keep working after the panel switched
   // to a free-text Base URL for any provider.
@@ -49,7 +55,11 @@ function normalizeEntry(raw) {
   const model = clean(raw?.model, 120);
   const key = String(raw?.key ?? '').replace(/\s+/g, '').slice(0, 400);
   if (!model || !key) return null;
+  let id = clean(raw?.id, 84);
+  if (!ENTRY_ID_PATTERN.test(id) || usedIds.has(id)) id = createEntryId();
+  usedIds.add(id);
   return {
+    id,
     name: name || model,
     type,
     baseUrl: normalizeBaseUrl(baseUrl, type),
@@ -58,12 +68,12 @@ function normalizeEntry(raw) {
   };
 }
 
-function normalizePool(list) {
+function normalizePool(list, sharedIds = new Set()) {
   const raw = Array.isArray(list) ? list : [];
   const out = [];
   const seen = new Set();
   for (const item of raw) {
-    const entry = normalizeEntry(item);
+    const entry = normalizeEntry(item, sharedIds);
     if (!entry) continue;
     const fingerprint = `${entry.type}|${entry.baseUrl}|${entry.model}|${entry.key}`;
     if (seen.has(fingerprint)) continue;
@@ -75,9 +85,10 @@ function normalizePool(list) {
 }
 
 function normalizeWorkspace(body = {}) {
+  const sharedIds = new Set();
   return {
-    text: normalizePool(body?.text),
-    media: normalizePool(body?.media)
+    text: normalizePool(body?.text, sharedIds),
+    media: normalizePool(body?.media, sharedIds)
   };
 }
 
@@ -86,7 +97,14 @@ async function getWorkspace() {
     if (!redisClient.isOpen) return { text: [], media: [] };
     const raw = await redisClient.get(WORKSPACE_KEY);
     if (!raw) return { text: [], media: [] };
-    return normalizeWorkspace(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    const workspace = normalizeWorkspace(parsed);
+    // Legacy rows had no id. Persist the generated opaque id once so health
+    // observations remain attached to the same provider across restarts.
+    if (JSON.stringify(parsed) !== JSON.stringify(workspace)) {
+      await redisClient.set(WORKSPACE_KEY, JSON.stringify(workspace)).catch(() => {});
+    }
+    return workspace;
   } catch {
     // A broken stored payload must look like "no workspace", never like a
     // half-read pool that would put a truncated key on the wire.
@@ -109,5 +127,5 @@ module.exports = {
   getWorkspace,
   saveWorkspace,
   normalizeWorkspace,
-  __test: { normalizeEntry, normalizePool }
+  __test: { normalizeEntry, normalizePool, createEntryId, ENTRY_ID_PATTERN }
 };
