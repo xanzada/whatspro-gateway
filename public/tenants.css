@@ -944,6 +944,10 @@ html[data-theme="light"] .toast { background: #f5f8f6; }
 .ak-hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
 .ak-pools-stack { display: flex; flex-direction: column; gap: 22px; }
 .ak-pool { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0; }
+.ak-pool-text { border-color: rgba(59,130,246,.48); background: linear-gradient(145deg, rgba(37,99,235,.16), rgba(37,99,235,.055)); box-shadow: inset 4px 0 0 rgba(59,130,246,.82); }
+.ak-pool-media { border-color: rgba(168,85,247,.48); background: linear-gradient(145deg, rgba(147,51,234,.16), rgba(147,51,234,.055)); box-shadow: inset 4px 0 0 rgba(168,85,247,.82); }
+html[data-theme="light"] .ak-pool-text { border-color: rgba(37,99,235,.34); background: linear-gradient(145deg, rgba(219,234,254,.82), rgba(239,246,255,.62)); }
+html[data-theme="light"] .ak-pool-media { border-color: rgba(147,51,234,.34); background: linear-gradient(145deg, rgba(243,232,255,.86), rgba(250,245,255,.66)); }
 .ak-pool > h3 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
 .ak-pool-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
 .ak-pool-head h3 { margin: 0; font-size: 15px; font-weight: 700; }

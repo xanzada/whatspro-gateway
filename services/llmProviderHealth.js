@@ -168,14 +168,10 @@ function publicRecord(entry, pool, record) {
   };
 }
 
-function probeDue(record, now = Date.now(), baseIntervalMs = 300_000) {
+function probeDue(record, now = Date.now(), baseIntervalMs = 60_000) {
   if (!record?.lastCheckedAt) return true;
   const age = now - Date.parse(record.lastCheckedAt);
   if (!Number.isFinite(age) || age < 0) return true;
-  if (record.status === 'unavailable') {
-    const delay = Math.min(60 * 60_000, baseIntervalMs * (2 ** Math.min(4, Math.max(0, (record.consecutiveFailures || 1) - 1))));
-    return age >= delay;
-  }
   return age >= baseIntervalMs;
 }
 
@@ -184,7 +180,7 @@ function createLlmProviderHealth(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const timeoutMs = boundedNumber(options.timeoutMs ?? process.env.LLM_PROBE_TIMEOUT_MS, 8000, 100, 15_000);
   const concurrency = Math.round(boundedNumber(options.concurrency ?? process.env.LLM_PROBE_CONCURRENCY, 2, 1, 4));
-  const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 300_000, 60_000, 3_600_000);
+  const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 60_000, 30_000, 3_600_000);
   let mutationTail = Promise.resolve();
   let timer = null;
   let sweepInFlight = false;

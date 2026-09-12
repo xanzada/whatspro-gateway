@@ -24,6 +24,8 @@ test('panel visibly separates text and media and refreshes sanitized health whil
   assert.match(panel, /document\.hidden/);
   assert.match(css, /\.ak-health-dot\.healthy/);
   assert.match(css, /\.ak-pools-stack/);
+  assert.match(css, /\.ak-pool-text[^}]*background:/);
+  assert.match(css, /\.ak-pool-media[^}]*background:/);
 });
 
 test('outcome endpoint enforces auth, field allowlist, known ids and sanitized output', async t => {

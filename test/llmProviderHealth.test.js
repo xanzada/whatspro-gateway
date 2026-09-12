@@ -128,12 +128,12 @@ test('a provider that ignores AbortSignal is still bounded by the probe deadline
   assert.equal(report.text[0].errorCode, 'TIMEOUT');
 });
 
-test('automatic probes back off healthy and unavailable providers without disabling manual checks', () => {
+test('automatic probes recheck every provider once per minute', () => {
   const now = Date.now();
-  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 299_000).toISOString() }, now), false);
-  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 301_000).toISOString() }, now), true);
-  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 2, lastCheckedAt: new Date(now - 599_000).toISOString() }, now), false);
-  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 2, lastCheckedAt: new Date(now - 601_000).toISOString() }, now), true);
+  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 59_000).toISOString() }, now), false);
+  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 61_000).toISOString() }, now), true);
+  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 59_000).toISOString() }, now), false);
+  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 61_000).toISOString() }, now), true);
 });
 
 test('media probes exercise audio capability with an in-memory silent WAV', async () => {
