@@ -81,9 +81,31 @@ test('provider probes are bounded, concurrency-limited, and never persist secret
   assert.equal(report.text[0].errorCode, 'PAYMENT_REQUIRED');
 });
 
+test('HTTP 200 without a valid probe result is not marked healthy', async () => {
+  const redis = new MemoryRedis();
+  const health = createLlmProviderHealth({
+    redis,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ choices: [] }) }),
+    timeoutMs: 100
+  });
+  const workspace = { text: [entry('llm_empty_123456789012345', 'empty')], media: [] };
+  await health.checkAll(workspace);
+  const report = await health.getHealth(workspace);
+  assert.equal(report.text[0].status, 'suspect');
+  assert.equal(report.text[0].errorCode, 'EMPTY_RESPONSE');
+});
+
 test('runtime outcomes immediately override a recent probe and reject unknown ids', async () => {
   const redis = new MemoryRedis();
-  const health = createLlmProviderHealth({ redis, fetchImpl: async () => ({ ok: true, status: 200 }), timeoutMs: 100 });
+  const health = createLlmProviderHealth({
+    redis,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] })
+    }),
+    timeoutMs: 100
+  });
   const workspace = { text: [entry('llm_live_1234567890123456', 'live'), entry('llm_reserve_12345678901234', 'reserve')], media: [] };
   await health.checkAll(workspace);
   await health.recordOutcome(workspace, {
@@ -92,6 +114,8 @@ test('runtime outcomes immediately override a recent probe and reject unknown id
   });
   const runtime = await health.getRuntimeWorkspace(workspace);
   assert.deepEqual(runtime.text.map(item => item.name), ['reserve', 'live']);
+  assert.equal(runtime.text[0].health.status, 'healthy');
+  assert.equal(runtime.text[1].health.status, 'unavailable');
   const report = await health.getHealth(workspace);
   assert.equal(report.text[0].source, 'runtime');
   assert.equal(report.text[0].status, 'unavailable');
@@ -141,7 +165,17 @@ test('media probes exercise audio capability with an in-memory silent WAV', asyn
   const bodies = [];
   const health = createLlmProviderHealth({
     redis,
-    fetchImpl: async (_url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, status: 200 }; },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => body.messages
+          ? ({ choices: [{ message: { content: '{"ok":true}' } }] })
+          : ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] })
+      };
+    },
     timeoutMs: 100
   });
   const workspace = {

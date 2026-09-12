@@ -110,6 +110,23 @@ function observationStatus(ok, errorCode) {
   return isUnavailableCode(errorCode) ? 'unavailable' : 'suspect';
 }
 
+function parseJsonObject(value) {
+  if (value && typeof value === 'object') return value;
+  const text = String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+async function isSuccessfulProbePayload(response, type) {
+  if (!response?.ok || typeof response.json !== 'function') return false;
+  let payload;
+  try { payload = await response.json(); } catch { return false; }
+  const content = type === 'gemini'
+    ? payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('')
+    : payload?.choices?.[0]?.message?.content;
+  return parseJsonObject(content)?.ok === true;
+}
+
 function normalizeRecords(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
@@ -254,9 +271,9 @@ function createLlmProviderHealth(options = {}) {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: mediaProbe
-              ? [{ text: 'OK' }, { inlineData: { mimeType: 'audio/wav', data: SILENT_WAV_BASE64 } }]
-              : [{ text: 'OK' }] }],
-            generationConfig: { maxOutputTokens: 1 }
+              ? [{ text: 'Return only {"ok":true} as JSON after reading this audio.' }, { inlineData: { mimeType: 'audio/wav', data: SILENT_WAV_BASE64 } }]
+              : [{ text: 'Return only {"ok":true} as JSON.' }] }],
+            generationConfig: { maxOutputTokens: 16, responseMimeType: 'application/json' }
           }),
           signal: controller.signal
         }), deadline]);
@@ -268,17 +285,19 @@ function createLlmProviderHealth(options = {}) {
           body: JSON.stringify({
             model: entry.model,
             messages: [{ role: 'user', content: mediaProbe
-              ? [{ type: 'text', text: 'OK' }, { type: 'input_audio', input_audio: { data: SILENT_WAV_BASE64, format: 'wav' } }]
-              : 'OK' }],
-            max_tokens: 1,
+              ? [{ type: 'text', text: 'Return only {"ok":true} as JSON after reading this audio.' }, { type: 'input_audio', input_audio: { data: SILENT_WAV_BASE64, format: 'wav' } }]
+              : 'Return only {"ok":true} as JSON.' }],
+            response_format: { type: 'json_object' },
+            max_tokens: 16,
             temperature: 0
           }),
           signal: controller.signal
         }), deadline]);
       }
+      const validPayload = await isSuccessfulProbePayload(response, entry.type);
       return applyObservation(entry, pool, {
-        source: 'probe', ok: Boolean(response?.ok),
-        errorCode: response?.ok ? null : `HTTP_${Number(response?.status) || 0}`,
+        source: 'probe', ok: validPayload,
+        errorCode: validPayload ? null : response?.ok ? 'EMPTY_RESPONSE' : `HTTP_${Number(response?.status) || 0}`,
         latencyMs: Date.now() - startedAt,
         observedAt: new Date().toISOString()
       });
@@ -363,7 +382,24 @@ function createLlmProviderHealth(options = {}) {
   }
 
   async function getRuntimeWorkspace(workspace) {
-    return sortWorkspaceByHealth(workspace, await readRecords());
+    const records = await readRecords();
+    const sorted = sortWorkspaceByHealth(workspace, records);
+    const decorate = (entry, pool) => {
+      const record = publicRecord(entry, pool, records[entry.id]);
+      return {
+        ...entry,
+        health: {
+          status: record.status,
+          lastCheckedAt: record.lastCheckedAt,
+          latencyMs: record.latencyMs,
+          errorCode: record.errorCode
+        }
+      };
+    };
+    return {
+      text: sorted.text.map(entry => decorate(entry, 'text')),
+      media: sorted.media.map(entry => decorate(entry, 'media'))
+    };
   }
 
   function start(getWorkspace) {
@@ -393,5 +429,5 @@ module.exports = {
   sanitizeErrorCode,
   validateOutcomePayload,
   sortWorkspaceByHealth,
-  __test: { observationStatus, normalizeRecords, validObservedAt, finiteLatency, boundedNumber, probeDue, createSilentWavBase64 }
+  __test: { observationStatus, normalizeRecords, validObservedAt, finiteLatency, boundedNumber, probeDue, createSilentWavBase64, isSuccessfulProbePayload }
 };
