@@ -132,9 +132,19 @@ function sortWorkspaceByHealth(workspace, records = {}) {
   const sortPool = list => (Array.isArray(list) ? list : [])
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => {
-      const leftRank = STATUS_RANK[records[left.entry.id]?.status] ?? STATUS_RANK.unknown;
-      const rightRank = STATUS_RANK[records[right.entry.id]?.status] ?? STATUS_RANK.unknown;
-      return leftRank - rightRank || left.index - right.index;
+      const leftRecord = records[left.entry.id];
+      const rightRecord = records[right.entry.id];
+      const leftRank = STATUS_RANK[leftRecord?.status] ?? STATUS_RANK.unknown;
+      const rightRank = STATUS_RANK[rightRecord?.status] ?? STATUS_RANK.unknown;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      // Probe latency only breaks ties between providers proven healthy. This
+      // keeps the operator's order for unknown/error states while placing the
+      // fastest known-good lane on the customer hot path.
+      if (leftRecord?.status === 'healthy' && rightRecord?.status === 'healthy') {
+        const latencyDelta = (leftRecord.latencyMs ?? Number.MAX_SAFE_INTEGER) - (rightRecord.latencyMs ?? Number.MAX_SAFE_INTEGER);
+        if (latencyDelta) return latencyDelta;
+      }
+      return left.index - right.index;
     })
     .map(item => item.entry);
   return { text: sortPool(workspace?.text), media: sortPool(workspace?.media) };
@@ -172,7 +182,7 @@ function probeDue(record, now = Date.now(), baseIntervalMs = 300_000) {
 function createLlmProviderHealth(options = {}) {
   const redis = options.redis;
   const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const timeoutMs = boundedNumber(options.timeoutMs ?? process.env.LLM_PROBE_TIMEOUT_MS, 2500, 100, 10_000);
+  const timeoutMs = boundedNumber(options.timeoutMs ?? process.env.LLM_PROBE_TIMEOUT_MS, 8000, 100, 15_000);
   const concurrency = Math.round(boundedNumber(options.concurrency ?? process.env.LLM_PROBE_CONCURRENCY, 2, 1, 4));
   const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 300_000, 60_000, 3_600_000);
   let mutationTail = Promise.resolve();

@@ -46,6 +46,17 @@ test('healthy-first sorting does not mutate configured operator order', () => {
   assert.deepEqual(sorted.text.map(item => item.name), ['good', 'unknown', 'bad']);
 });
 
+test('healthy providers use measured latency only as a runtime tie-breaker', () => {
+  const workspace = { text: [entry('llm_slow_123456789012345', 'slow'), entry('llm_fast_123456789012345', 'fast')], media: [] };
+  const records = {
+    llm_slow_123456789012345: { status: 'healthy', latencyMs: 4800 },
+    llm_fast_123456789012345: { status: 'healthy', latencyMs: 700 }
+  };
+  const sorted = sortWorkspaceByHealth(workspace, records);
+  assert.deepEqual(workspace.text.map(item => item.name), ['slow', 'fast']);
+  assert.deepEqual(sorted.text.map(item => item.name), ['fast', 'slow']);
+});
+
 test('provider probes are bounded, concurrency-limited, and never persist secrets or raw bodies', async () => {
   const redis = new MemoryRedis();
   let active = 0;
