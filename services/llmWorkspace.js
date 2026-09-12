@@ -113,6 +113,14 @@ async function getWorkspace() {
 }
 
 async function saveWorkspace(body = {}) {
+  for (const pool of ['text', 'media']) {
+    const entries = Array.isArray(body?.[pool]) ? body[pool] : [];
+    if (entries.some(entry => !clean(entry?.model, 120) || !String(entry?.key ?? '').replace(/\s+/g, ''))) {
+      const error = new Error('LLM_WORKSPACE_ENTRY_INCOMPLETE');
+      error.statusCode = 400;
+      throw error;
+    }
+  }
   if (!redisClient.isOpen) {
     const error = new Error('PLATFORM_STORE_UNAVAILABLE');
     error.statusCode = 503;

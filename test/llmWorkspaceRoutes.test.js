@@ -28,6 +28,29 @@ test('panel visibly separates text and media and refreshes sanitized health whil
   assert.match(css, /\.ak-pool-media[^}]*background:/);
 });
 
+test('provider health refresh preserves API-key drafts and incomplete rows cannot disappear silently', () => {
+  const refreshBody = panel.match(/function refreshAkHealth\(\) \{([\s\S]*?)\n  \}/)?.[1] || '';
+  assert.match(refreshBody, /refreshAkHealthDom\(\)/);
+  assert.doesNotMatch(refreshBody, /render\(\)/,
+    'periodic health polling must not redraw focused key inputs');
+  assert.match(panel, /akPools = akCollect\(true\)/,
+    'editing and navigation must retain incomplete drafts in browser memory');
+  assert.match(panel, /keyFieldsRequired/,
+    'Save must explain incomplete provider rows instead of silently dropping them');
+  assert.match(panel, /beforeunload/,
+    'leaving the site with an unsaved key must show the browser warning');
+  assert.match(panel, /action\.disabled = true;[\s\S]*api\('PUT', '\/api\/wa\/llm-workspace'/,
+    'Save must be single-flight so a double click cannot race two workspace writes');
+});
+
+test('workspace persistence rejects incomplete entries instead of silently deleting them', async () => {
+  const workspace = require('../services/llmWorkspace');
+  await assert.rejects(
+    () => workspace.saveWorkspace({ text: [{ model: '', key: 'secret' }], media: [] }),
+    error => error && error.statusCode === 400 && error.message === 'LLM_WORKSPACE_ENTRY_INCOMPLETE'
+  );
+});
+
 test('outcome endpoint enforces auth, field allowlist, known ids and sanitized output', async t => {
   const token = 'llm-route-master-token-that-is-long-enough';
   const previousToken = process.env.WHATSPRO_API_TOKEN;
