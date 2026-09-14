@@ -113,7 +113,7 @@
       testMode: 'Тест режимі', testModeOn: 'Тест режимі қосулы', testModeHint: 'Қосулы болса, бот тек төмендегі нөмірлерге жауап береді. Әдеттегі қонақтарға — тынышлық.',
       addPhone: 'Нөмір қосу', receiptFilter: 'Чек фильтрі', receiptFilterOn: 'Продакшн фильтр (AI күдікті чектерді тексереді)',
       receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
-      tierFree: 'Тегін провайдер', tierPaid: 'Ақылы кілт', tierWarn: 'Ақылы анықталды!',
+      tierFree: 'Тегін провайдер', tierPaid: 'Ақылы кілт', tierWarn: 'Ақылы анықталды!', keyTierLabel: 'Тариф / Түрі', tierOptionFree: '🆓 Тегін провайдер (Free)', tierOptionPaid: '💳 Ақылы кілт (Paid)',
       tokensTotal: 'Жалпы токен', tokensText: 'Мәтін', tokensMedia: 'Медиа',
       tokensPrompt: 'Кіріс', tokensCompletion: 'Шығыс', tokensCost: 'Шығын', tokensCalls: 'Сұраныс',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
@@ -220,7 +220,7 @@
       testMode: 'Тестовый режим', testModeOn: 'Тестовый режим включён', testModeHint: 'Когда включён, бот отвечает только номерам ниже. Обычные гости — тишина.',
       addPhone: 'Добавить номер', receiptFilter: 'Фильтр чеков', receiptFilterOn: 'Продакшн-фильтр (AI проверяет подозрительные чеки)',
       receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
-      tierFree: 'Бесплатный провайдер', tierPaid: 'Платный ключ', tierWarn: 'Обнаружен платный расход!',
+      tierFree: 'Бесплатный провайдер', tierPaid: 'Платный ключ', tierWarn: 'Обнаружен платный расход!', keyTierLabel: 'Тариф / Тип', tierOptionFree: '🆓 Бесплатный провайдер (Free)', tierOptionPaid: '💳 Платный ключ (Paid)',
       tokensTotal: 'Всего токенов', tokensText: 'Текст', tokensMedia: 'Медиа',
       tokensPrompt: 'Вход', tokensCompletion: 'Выход', tokensCost: 'Расход', tokensCalls: 'Запросы',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
@@ -864,11 +864,15 @@
       '<input name="ak-id" type="hidden" value="' + attr(entry.id || '') + '">' +
       '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
       '<div class="field"><label>' + t('keyBaseUrl') + '</label><input name="ak-base" value="' + attr(entry.baseUrl || '') + '" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" inputmode="url"></div>' +
-      '<div class="ak-two"><div class="field"><label>' + t('keyType') + '</label><select name="ak-type">' +
+      '<div class="ak-three"><div class="field"><label>' + t('keyType') + '</label><select name="ak-type">' +
       '<option value="openai"' + (entry.type === 'openai' || (!entry.type && entry.type !== 'gemini' && entry.type !== 'groq' && entry.type !== 'cloudflare') ? ' selected' : '') + '>' + t('typeOpenai') + '</option>' +
       '<option value="gemini"' + (entry.type === 'gemini' ? ' selected' : '') + '>' + t('typeGemini') + '</option>' +
       '<option value="groq"' + (entry.type === 'groq' ? ' selected' : '') + '>' + (t('typeGroq') || 'Groq (Whisper)') + '</option>' +
       '<option value="cloudflare"' + (entry.type === 'cloudflare' ? ' selected' : '') + '>' + (t('typeCloudflare') || 'Cloudflare AI') + '</option>' +
+      '</select></div>' +
+      '<div class="field"><label>' + (t('keyTierLabel') || 'Тариф') + '</label><select name="ak-tier">' +
+      '<option value="free"' + (entry.tier !== 'paid' ? ' selected' : '') + '>' + (t('tierOptionFree') || '🆓 Тегін') + '</option>' +
+      '<option value="paid"' + (entry.tier === 'paid' ? ' selected' : '') + '>' + (t('tierOptionPaid') || '💳 Ақылы') + '</option>' +
       '</select></div>' +
       '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div></div>' +
       '<div class="ak-presets-row">' +
@@ -1084,11 +1088,13 @@
       $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
         var rawType = String(($('[name="ak-type"]', block) || {}).value || '').trim().toLowerCase();
         var type = ['gemini', 'groq', 'cloudflare'].includes(rawType) ? rawType : 'openai';
+        var rawTier = String(($('[name="ak-tier"]', block) || {}).value || '').trim().toLowerCase();
         var entry = {
           id: String(($('[name="ak-id"]', block) || {}).value || '').trim(),
           name: String($('[name="ak-name"]', block).value || '').trim(),
           baseUrl: String($('[name="ak-base"]', block).value || '').trim().replace(/\/+$/, ''),
           type: type,
+          tier: rawTier === 'paid' ? 'paid' : 'free',
           model: String($('[name="ak-model"]', block).value || '').trim(),
           key: String($('[name="ak-key"]', block).value || '').replace(/\s+/g, '')
         };

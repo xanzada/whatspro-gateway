@@ -66,30 +66,22 @@ function invalidOutcome(code = 'INVALID_OUTCOME') {
 }
 
 function detectKeyTier(entry, record) {
-  const model = String(entry?.model || '').toLowerCase();
-  const name = String(entry?.name || '').toLowerCase();
-  const base = String(entry?.baseUrl || '').toLowerCase();
-  const type = String(entry?.type || '').toLowerCase();
+  const explicitTier = String(entry?.tier || '').toLowerCase();
+  if (explicitTier === 'paid') {
+    return {
+      tier: 'paid',
+      isFree: false,
+      hasUnexpectedCost: false
+    };
+  }
 
-  const hasFreeMarker = /:free\b|free\/|\/free\b|-free\b|\bag\/|тегін|бесплат/i.test(model) ||
-                        /free|тегін|бесплат/i.test(name);
-  const isGoogleFree = (type === 'gemini' || base.includes('generativelanguage.googleapis.com'));
-  const isGroqFree = (type === 'groq' || base.includes('api.groq.com'));
-
+  // All keys default to FREE unless explicitly set to paid by the operator!
   const hasCost = Number(record?.cost || 0) > 0;
-  const hasUnexpectedCost = (hasFreeMarker || isGoogleFree || isGroqFree) && hasCost;
-
-  let tier = 'paid';
-  if (hasFreeMarker || isGoogleFree || isGroqFree) {
-    tier = 'free';
-  }
-  if (record?.isPaid === true && !hasFreeMarker) {
-    tier = 'paid';
-  }
+  const hasUnexpectedCost = hasCost;
 
   return {
-    tier,
-    isFree: tier === 'free',
+    tier: 'free',
+    isFree: true,
     hasUnexpectedCost
   };
 }

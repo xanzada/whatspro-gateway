@@ -60,13 +60,15 @@ function normalizeEntry(raw, usedIds = new Set()) {
   let id = clean(raw?.id, 84);
   if (!ENTRY_ID_PATTERN.test(id) || usedIds.has(id)) id = createEntryId();
   usedIds.add(id);
+  const tier = String(raw?.tier || '').trim().toLowerCase() === 'paid' ? 'paid' : 'free';
   return {
     id,
     name: name || model,
     type,
     baseUrl: normalizeBaseUrl(baseUrl, type),
     model,
-    key
+    key,
+    tier
   };
 }
 

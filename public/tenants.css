@@ -1116,3 +1116,5 @@ html[data-theme="light"] .ak-token-row {
   background: rgba(147, 51, 234, 0.1);
   border-color: rgba(147, 51, 234, 0.25);
 }
+
+@media (min-width: 720px) { .ak-three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; } }
