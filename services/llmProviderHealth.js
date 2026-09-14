@@ -332,9 +332,10 @@ function createLlmProviderHealth(options = {}) {
     await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
   }
 
-  async function checkAll(workspace) {
+  async function checkAll(workspace, targetPool) {
     const jobs = [];
-    for (const pool of ['text', 'media', 'stt', 'ocr']) {
+    const pools = targetPool && POOLS.has(targetPool) ? [targetPool] : ['text', 'media', 'stt', 'ocr'];
+    for (const pool of pools) {
       for (const entry of workspace?.[pool] || []) jobs.push({ entry, pool });
     }
     await runJobs(jobs);

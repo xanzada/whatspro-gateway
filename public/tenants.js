@@ -102,6 +102,11 @@
       apiKeys: 'API key', keyPrimary: 'негізгі', keyNameLabel: 'Атауы', keyProvider: 'Провайдер',
       keyPlaceholder: 'мысалы: DeepSeek тегін',
       keyBaseUrl: 'Base URL (провайдер мекенжайы)', keyType: 'Хаттама', typeOpenai: 'OpenAI-үйлесімді (chat/completions)', typeGemini: 'Gemini (Google)',
+      keysStatus: 'Кілттер жағдайы', checkPool: 'Тексеру', checkPoolHint: 'Осы пулдағы барлық кілттерді дәл қазір тексеру',
+      checkAll: 'Барлығын тексеру', checkAllHint: 'Барлық кілттерді дәл қазір тексеру',
+      statHealthy: 'тұрақты', statSuspect: 'тұрақсыз', statUnavailable: 'қолжетімсіз', statAvailable: 'қолжетімді',
+      testingPool: 'Тексерілуде...', testingAll: 'Тексерілуде...', testDoneTitle: 'Тексеру аяқталды', testDoneSummary: 'Кілттер жағдайы жаңартылды',
+      toggleCollapse: 'Жию / Ашу',
       akDupHint: 'Бар кілттің үлгісін көшіреді — жаңа кілтті ғана жазасыз', remove: 'Өшіру', keyUp: 'жоғары',
       settingsTitle: 'Настройки', settingsCopy: 'Платформа бойынша жұмыс режимдері. Өзгеріс 60 секунд ішінде ботқа жетеді, restart қажет емес.',
       developerPhone: 'Developer телефоны', developerHint: 'Жүйе қателіктері осы нөмірге WhatsApp хабарлама болып барады. Оператор SOS-ы — оператор чатына түседі.',
@@ -201,6 +206,11 @@
       apiKeys: 'API key', keyPrimary: 'основной', keyNameLabel: 'Название', keyProvider: 'Провайдер',
       keyPlaceholder: 'например: DeepSeek бесплатный',
       keyBaseUrl: 'Base URL (адрес провайдера)', keyType: 'Протокол', typeOpenai: 'OpenAI-совместимый (chat/completions)', typeGemini: 'Gemini (Google)',
+      keysStatus: 'Состояние ключей', checkPool: 'Проверить', checkPoolHint: 'Проверить все ключи в этом пуле прямо сейчас',
+      checkAll: 'Проверить все', checkAllHint: 'Проверить все ключи прямо сейчас',
+      statHealthy: 'стабильно', statSuspect: 'нестабильно', statUnavailable: 'недоступно', statAvailable: 'доступно',
+      testingPool: 'Проверка...', testingAll: 'Проверка...', testDoneTitle: 'Проверка завершена', testDoneSummary: 'Состояние ключей обновлено',
+      toggleCollapse: 'Свернуть / Развернуть',
       akDupHint: 'Копирует образец — впишете только новый ключ', remove: 'Убрать', keyUp: 'вверх',
       settingsTitle: 'Настройки', settingsCopy: 'Режимы работы платформы. Изменение доходит до бота за 60 секунд, перезапуск не нужен.',
       developerPhone: 'Телефон разработчика', developerHint: 'Системные сбои приходят сюда сообщением в WhatsApp. SOS оператору — в чат оператора.',
@@ -849,20 +859,110 @@
       '</div></section>';
   }
 
+  var akCollapsed = { text: false, media: false };
+
+  function akPoolStats(pool, entries) {
+    var list = Array.isArray(entries) ? entries : [];
+    var healthy = 0;
+    var suspect = 0;
+    var unavailable = 0;
+    var unknown = 0;
+    list.forEach(function (e) {
+      var h = akHealthFor(pool, e.id);
+      if (h.status === 'healthy') healthy++;
+      else if (h.status === 'suspect') suspect++;
+      else if (h.status === 'unavailable') unavailable++;
+      else unknown++;
+    });
+    return {
+      total: list.length,
+      healthy: healthy,
+      suspect: suspect,
+      unavailable: unavailable,
+      unknown: unknown,
+      available: healthy + unknown
+    };
+  }
+
+  function akStatsHtml(stats) {
+    var html = '<div class="ak-pool-stats">';
+    html += '<span class="ak-stat-pill healthy" title="' + attr(t('statHealthy')) + '">● ' + stats.healthy + ' ' + t('statHealthy') + '</span>';
+    if (stats.suspect > 0) {
+      html += '<span class="ak-stat-pill suspect" title="' + attr(t('statSuspect')) + '">▲ ' + stats.suspect + ' ' + t('statSuspect') + '</span>';
+    }
+    if (stats.unavailable > 0) {
+      html += '<span class="ak-stat-pill unavailable" title="' + attr(t('statUnavailable')) + '">✕ ' + stats.unavailable + ' ' + t('statUnavailable') + '</span>';
+    }
+    html += '<span class="ak-stat-pill available" title="' + attr(t('statAvailable')) + '">' + stats.available + '/' + stats.total + ' ' + t('statAvailable') + '</span>';
+    html += '</div>';
+    return html;
+  }
+
+  function akPoolHtml(pool, entries) {
+    var isMedia = pool === 'media';
+    var title = isMedia ? t('poolMedia') : t('poolText');
+    var hint = isMedia ? t('poolMediaHint') : t('poolTextHint');
+    var marker = isMedia ? 'M' : 'T';
+    var isCollapsed = Boolean(akCollapsed[pool]);
+    var stats = akPoolStats(pool, entries);
+
+    var headHtml = '<div class="ak-pool-head" data-action="ak-toggle-pool" data-pool="' + pool + '" title="' + attr(t('toggleCollapse')) + '">' +
+      '<div class="ak-pool-head-left">' +
+        '<span class="ak-pool-marker ' + pool + '">' + marker + '</span>' +
+        '<div class="ak-pool-titles">' +
+          '<h3>' + title + ' <span class="ak-chevron ' + (isCollapsed ? 'collapsed' : '') + '">▼</span></h3>' +
+          '<p>' + hint + '</p>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ak-pool-head-right" onclick="event.stopPropagation()">' +
+        akStatsHtml(stats) +
+        '<button class="button secondary ak-pool-test" type="button" data-action="ak-check-pool" data-pool="' + pool + '" title="' + attr(t('checkPoolHint')) + '">' +
+          '⚡ ' + t('checkPool') +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+    var bodyHtml = '<div class="ak-pool-body' + (isCollapsed ? ' collapsed' : '') + '">' +
+      (entries.length ? entries.map(function (e, i) { return akEntryHtml(pool, e, i, entries.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="' + pool + '">+ ' + t('addKey') + '</button>' +
+    '</div>';
+
+    return '<div class="ak-pool ak-pool-' + pool + (isCollapsed ? ' is-collapsed' : '') + '" data-pool-wrap="' + pool + '">' +
+      headHtml + bodyHtml +
+    '</div>';
+  }
+
   function renderApiKeys() {
     var pools = akPools || { text: [], media: [] };
     pools.text = pools.text || [];
     pools.media = pools.media || [];
+    var totalStats = {
+      total: pools.text.length + pools.media.length,
+      healthy: 0, suspect: 0, unavailable: 0, unknown: 0, available: 0
+    };
+    ['text', 'media'].forEach(function (p) {
+      var s = akPoolStats(p, pools[p]);
+      totalStats.healthy += s.healthy;
+      totalStats.suspect += s.suspect;
+      totalStats.unavailable += s.unavailable;
+      totalStats.unknown += s.unknown;
+      totalStats.available += s.available;
+    });
+
     return '<div class="page">' +
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
-      '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button></div>' +
+      '<div class="ak-title-actions">' +
+        '<button class="button secondary ak-test-all" type="button" data-action="ak-check-all" title="' + attr(t('checkAllHint')) + '">⚡ ' + t('checkAll') + '</button>' +
+        '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button>' +
+      '</div></div>' +
       '<p class="ak-hint">' + t('workspaceCopy') + '</p>' +
-      '<div class="ak-pools-stack"><div class="ak-pool ak-pool-text"><div class="ak-pool-head"><span class="ak-pool-marker text">T</span><span><h3>' + t('poolText') + '</h3><p>' + t('poolTextHint') + '</p></span></div>' +
-      (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></div>' +
-      '<div class="ak-pool ak-pool-media"><div class="ak-pool-head"><span class="ak-pool-marker media">M</span><span><h3>' + t('poolMedia') + '</h3><p>' + t('poolMediaHint') + '</p></span></div>' +
-      (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></div>' +
+      '<div class="ak-overview-bar">' +
+        '<span class="ak-overview-label">' + t('keysStatus') + ':</span>' +
+        akStatsHtml(totalStats) +
+      '</div>' +
+      '<div class="ak-pools-stack">' +
+        akPoolHtml('text', pools.text) +
+        akPoolHtml('media', pools.media) +
       '</div></div>';
   }
 
@@ -1821,13 +1921,60 @@
           })
           .then(function () { render(); toast(t('saved'), t('workspaceTitle')); })
           .catch(function (error) { action.disabled = false; toast(t('actionFailed'), error.message, true); });
+      } else if (name === 'ak-toggle-pool') {
+        var togglePool = action.dataset.pool;
+        if (!togglePool) return;
+        akCollapsed[togglePool] = !akCollapsed[togglePool];
+        var poolWrap = $('[data-pool-wrap="' + togglePool + '"]', viewEl);
+        if (poolWrap) {
+          var bodyEl = $('.ak-pool-body', poolWrap);
+          var chevEl = $('.ak-chevron', poolWrap);
+          poolWrap.classList.toggle('is-collapsed', akCollapsed[togglePool]);
+          if (bodyEl) bodyEl.classList.toggle('collapsed', akCollapsed[togglePool]);
+          if (chevEl) chevEl.classList.toggle('collapsed', akCollapsed[togglePool]);
+        }
+      } else if (name === 'ak-check-pool') {
+        var targetPool = action.dataset.pool;
+        var origPoolText = action.innerHTML;
+        action.disabled = true;
+        action.innerHTML = '⏳ ' + t('testingPool');
+        var collected = akCollect(true);
+        if (collected) { akPools.text = collected.text; akPools.media = collected.media; }
+        api('POST', '/api/wa/llm-workspace/check', { pool: targetPool })
+          .then(function () { return loadAkHealth(); })
+          .then(function () {
+            render();
+            toast(t('testDoneTitle'), t('testDoneSummary'));
+          })
+          .catch(function (error) {
+            action.disabled = false;
+            action.innerHTML = origPoolText;
+            toast(t('actionFailed'), error.message, true);
+          });
+      } else if (name === 'ak-check-all') {
+        var origAllText = action.innerHTML;
+        action.disabled = true;
+        action.innerHTML = '⏳ ' + t('testingAll');
+        var collectedAll = akCollect(true);
+        if (collectedAll) { akPools.text = collectedAll.text; akPools.media = collectedAll.media; }
+        api('POST', '/api/wa/llm-workspace/check', {})
+          .then(function () { return loadAkHealth(); })
+          .then(function () {
+            render();
+            toast(t('testDoneTitle'), t('testDoneSummary'));
+          })
+          .catch(function (error) {
+            action.disabled = false;
+            action.innerHTML = origAllText;
+            toast(t('actionFailed'), error.message, true);
+          });
       } else if (name === 'ak-check') {
         var checkPool = action.dataset.pool;
         var checkEntryId = action.dataset.entryId;
         action.disabled = true;
         api('POST', '/api/wa/llm-workspace/check', { entryId: checkEntryId, pool: checkPool })
           .then(function () { return loadAkHealth(); })
-          .then(function () { refreshAkHealthDom(); toast(t('checkingProvider'), akHealthLabel(akHealthFor(checkPool, checkEntryId).status)); })
+          .then(function () { refreshAkHealthDom(); render(); toast(t('checkingProvider'), akHealthLabel(akHealthFor(checkPool, checkEntryId).status)); })
           .catch(function (error) { action.disabled = false; toast(t('actionFailed'), error.message, true); });
       } else if (name === 'rs-add-phone') {
         var rs = rsSettings || {};
