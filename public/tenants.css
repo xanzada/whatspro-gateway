@@ -973,3 +973,13 @@ html[data-theme="light"] .ak-pool-media { border-color: rgba(147,51,234,.34); ba
 .ak-add, .ak-save { min-height: 36px; width: auto; padding: 0 14px; font-size: 13px; }
 @media (min-width: 720px) { .ak-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } }
 @media (max-width: 719px) { .ak-card-head { flex-direction: column; } .ak-health { justify-content: flex-start; text-align: left; min-width: 0; } }
+
+.ak-pool-marker.stt { color: #059669; background: rgba(5,150,105,.12); }
+.ak-pool-marker.ocr { color: #d97706; background: rgba(217,119,6,.12); }
+.ak-pool-stt { border: 1px solid rgba(5,150,105,.28); border-radius: 14px; padding: 14px; margin-bottom: 18px; }
+.ak-pool-ocr { border: 1px solid rgba(217,119,6,.28); border-radius: 14px; padding: 14px; margin-bottom: 18px; }
+html[data-theme="light"] .ak-pool-stt { border-color: rgba(5,150,105,.34); background: linear-gradient(145deg, rgba(209,250,229,.7), rgba(236,253,245,.5)); }
+html[data-theme="light"] .ak-pool-ocr { border-color: rgba(217,119,6,.34); background: linear-gradient(145deg, rgba(254,243,199,.7), rgba(255,251,235,.5)); }
+.ak-presets-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.ak-preset-btn { border: 1px dashed var(--border); background: rgba(255,255,255,.05); color: var(--muted); font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; transition: all .15s; }
+.ak-preset-btn:hover { border-color: #2563eb; color: #2563eb; background: rgba(37,99,235,.08); }

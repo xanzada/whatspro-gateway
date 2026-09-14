@@ -1,7 +1,7 @@
 'use strict';
 
 const HEALTH_KEY = 'whatspro:llm-health:v1';
-const POOLS = new Set(['text', 'media']);
+const POOLS = new Set(['text', 'media', 'stt', 'ocr']);
 const STATUS_RANK = { healthy: 0, unknown: 1, suspect: 2, unavailable: 3 };
 const RUNTIME_OBSERVATION_HOLD_MS = 60_000;
 const CANONICAL_ERROR_CODES = new Set([
@@ -121,6 +121,7 @@ async function isSuccessfulProbePayload(response, type) {
   if (!response?.ok || typeof response.json !== 'function') return false;
   let payload;
   try { payload = await response.json(); } catch { return false; }
+  if (Array.isArray(payload?.data) || Array.isArray(payload?.models)) return true;
   const content = type === 'gemini'
     ? payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('')
     : payload?.choices?.[0]?.message?.content;
@@ -164,7 +165,7 @@ function sortWorkspaceByHealth(workspace, records = {}) {
       return left.index - right.index;
     })
     .map(item => item.entry);
-  return { text: sortPool(workspace?.text), media: sortPool(workspace?.media) };
+  return { text: sortPool(workspace?.text), media: sortPool(workspace?.media), stt: sortPool(workspace?.stt), ocr: sortPool(workspace?.ocr) };
 }
 
 function findEntry(workspace, pool, entryId) {
@@ -277,6 +278,13 @@ function createLlmProviderHealth(options = {}) {
           }),
           signal: controller.signal
         }), deadline]);
+      } else if (pool === 'stt' && (entry.type === 'groq' || entry.type === 'openai')) {
+        const base = String(entry.baseUrl || '').replace(/\/+$/, '') || (entry.type === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
+        response = await Promise.race([fetchImpl(`${base}/models`, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${entry.key}` },
+          signal: controller.signal
+        }), deadline]);
       } else {
         const base = String(entry.baseUrl || '').replace(/\/+$/, '');
         response = await Promise.race([fetchImpl(`${base}/chat/completions`, {
@@ -326,7 +334,7 @@ function createLlmProviderHealth(options = {}) {
 
   async function checkAll(workspace) {
     const jobs = [];
-    for (const pool of ['text', 'media']) {
+    for (const pool of ['text', 'media', 'stt', 'ocr']) {
       for (const entry of workspace?.[pool] || []) jobs.push({ entry, pool });
     }
     await runJobs(jobs);
@@ -336,7 +344,7 @@ function createLlmProviderHealth(options = {}) {
   async function checkDue(workspace) {
     const records = await readRecords();
     const jobs = [];
-    for (const pool of ['text', 'media']) {
+    for (const pool of ['text', 'media', 'stt', 'ocr']) {
       for (const entry of workspace?.[pool] || []) {
         if (probeDue(records[entry.id], Date.now(), intervalMs)) jobs.push({ entry, pool });
       }
@@ -377,7 +385,9 @@ function createLlmProviderHealth(options = {}) {
     const records = await readRecords();
     return {
       text: (workspace?.text || []).map(entry => publicRecord(entry, 'text', records[entry.id])),
-      media: (workspace?.media || []).map(entry => publicRecord(entry, 'media', records[entry.id]))
+      media: (workspace?.media || []).map(entry => publicRecord(entry, 'media', records[entry.id])),
+      stt: (workspace?.stt || []).map(entry => publicRecord(entry, 'stt', records[entry.id])),
+      ocr: (workspace?.ocr || []).map(entry => publicRecord(entry, 'ocr', records[entry.id]))
     };
   }
 
@@ -398,7 +408,9 @@ function createLlmProviderHealth(options = {}) {
     };
     return {
       text: sorted.text.map(entry => decorate(entry, 'text')),
-      media: sorted.media.map(entry => decorate(entry, 'media'))
+      media: sorted.media.map(entry => decorate(entry, 'media')),
+      stt: (sorted.stt || []).map(entry => decorate(entry, 'stt')),
+      ocr: (sorted.ocr || []).map(entry => decorate(entry, 'ocr'))
     };
   }
 

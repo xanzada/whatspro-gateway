@@ -9,10 +9,12 @@ const { redisClient } = require('../config/redis');
 // the previous one fails. Stored whole in one Redis key: the pools are tiny,
 // read on every generation through OpenBot's 60s cache, and written rarely.
 const WORKSPACE_KEY = 'whatspro:llm-workspace:v1';
-const TYPES = new Set(['openai', 'gemini']);
+const TYPES = new Set(['openai', 'gemini', 'groq', 'cloudflare']);
 const DEFAULT_BASE_URL = {
   openai: 'https://openrouter.ai/api/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta'
+  gemini: 'https://generativelanguage.googleapis.com/v1beta',
+  groq: 'https://api.groq.com/openai/v1',
+  cloudflare: 'https://api.cloudflare.com/client/v4'
 };
 const MAX_ENTRIES_PER_POOL = 12;
 const ENTRY_ID_PATTERN = /^llm_[A-Za-z0-9_-]{20,80}$/;
@@ -88,15 +90,17 @@ function normalizeWorkspace(body = {}) {
   const sharedIds = new Set();
   return {
     text: normalizePool(body?.text, sharedIds),
-    media: normalizePool(body?.media, sharedIds)
+    media: normalizePool(body?.media, sharedIds),
+    stt: normalizePool(body?.stt, sharedIds),
+    ocr: normalizePool(body?.ocr, sharedIds)
   };
 }
 
 async function getWorkspace() {
   try {
-    if (!redisClient.isOpen) return { text: [], media: [] };
+    if (!redisClient.isOpen) return { text: [], media: [], stt: [], ocr: [] };
     const raw = await redisClient.get(WORKSPACE_KEY);
-    if (!raw) return { text: [], media: [] };
+    if (!raw) return { text: [], media: [], stt: [], ocr: [] };
     const parsed = JSON.parse(raw);
     const workspace = normalizeWorkspace(parsed);
     // Legacy rows had no id. Persist the generated opaque id once so health
@@ -108,12 +112,12 @@ async function getWorkspace() {
   } catch {
     // A broken stored payload must look like "no workspace", never like a
     // half-read pool that would put a truncated key on the wire.
-    return { text: [], media: [] };
+    return { text: [], media: [], stt: [], ocr: [] };
   }
 }
 
 async function saveWorkspace(body = {}) {
-  for (const pool of ['text', 'media']) {
+  for (const pool of ['text', 'media', 'stt', 'ocr']) {
     const entries = Array.isArray(body?.[pool]) ? body[pool] : [];
     if (entries.some(entry => !clean(entry?.model, 120) || !String(entry?.key ?? '').replace(/\s+/g, ''))) {
       const error = new Error('LLM_WORKSPACE_ENTRY_INCOMPLETE');

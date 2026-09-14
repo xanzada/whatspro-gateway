@@ -1524,7 +1524,7 @@ app.post('/api/wa/llm-workspace/check', requirePlatformAdmin, async (req, res) =
     if (!entryId && !pool) {
       return res.json({ success: true, health: await llmProviderHealth.checkAll(workspace) });
     }
-    if (!entryId || !['text', 'media'].includes(pool)) {
+    if (!entryId || !['text', 'media', 'stt', 'ocr'].includes(pool)) {
       return res.status(400).json({ error: 'INVALID_LLM_CHECK' });
     }
     const result = await llmProviderHealth.checkOne(workspace, pool, entryId);

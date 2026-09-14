@@ -110,6 +110,9 @@
       receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
       poolTextHint: 'Клиентпен мәтіндік диалог және құрал шақырулары.', poolMediaHint: 'Аудио, сурет және құжаттарды талдау.',
+      poolStt: 'Дыбысты тану (STT / Voice)', poolSttHint: 'Дауыстық хабарламаларды мәтінге айналдыру (Groq Whisper, Cloudflare, Gemini). 0% сервер жүктемесі.',
+      poolOcr: 'Чек және құжаттарды тану (OCR / Vision)', poolOcrHint: 'Суреттер мен PDF құжаттарды мәтінге айналдыру (Gemini Vision, OpenAI Vision).',
+      typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
       healthHealthy: 'Жұмыс істеп тұр', healthUnknown: 'Әлі тексерілмеді', healthSuspect: 'Тұрақсыз', healthUnavailable: 'Қолжетімсіз',
       checkNow: 'Қазір тексеру', checkedAt: 'Тексерілді', latency: 'Кідіріс', checkingProvider: 'Провайдер тексерілуде',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу', keyFieldsRequired: 'Модель мен API key өрістерін толтырыңыз.',
@@ -206,6 +209,9 @@
       receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
       poolTextHint: 'Текстовый диалог с клиентом и вызовы инструментов.', poolMediaHint: 'Анализ аудио, изображений и документов.',
+      poolStt: 'Распознавание речи (STT / Voice)', poolSttHint: 'Преобразование голосовых сообщений в текст (Groq Whisper, Cloudflare, Gemini). 0% нагрузки сервера.',
+      poolOcr: 'Распознавание чеков и документов (OCR / Vision)', poolOcrHint: 'Извлечение данных из фото чеков и PDF (Gemini Vision, OpenAI Vision).',
+      typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
       healthHealthy: 'Работает', healthUnknown: 'Ещё не проверен', healthSuspect: 'Нестабилен', healthUnavailable: 'Недоступен',
       checkNow: 'Проверить сейчас', checkedAt: 'Проверено', latency: 'Задержка', checkingProvider: 'Проверяем провайдера',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ', keyFieldsRequired: 'Заполните модель и API key.',
@@ -768,7 +774,7 @@
   /* ---------- API key беті (Жұмыс кеңістігі) ---------- */
   var akPools = null;
   var akDirty = false;
-  var akHealth = { text: [], media: [] };
+  var akHealth = { text: [], media: [], stt: [], ocr: [] };
 
   function akHealthFor(pool, entryId) {
     return (akHealth[pool] || []).find(function (item) { return item.entryId === entryId; }) || {
@@ -816,10 +822,23 @@
       '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
       '<div class="field"><label>' + t('keyBaseUrl') + '</label><input name="ak-base" value="' + attr(entry.baseUrl || '') + '" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" inputmode="url"></div>' +
       '<div class="ak-two"><div class="field"><label>' + t('keyType') + '</label><select name="ak-type">' +
-      '<option value="openai"' + (entry.type !== 'gemini' ? ' selected' : '') + '>' + t('typeOpenai') + '</option>' +
+      '<option value="openai"' + (entry.type === 'openai' || (!entry.type && entry.type !== 'gemini' && entry.type !== 'groq' && entry.type !== 'cloudflare') ? ' selected' : '') + '>' + t('typeOpenai') + '</option>' +
       '<option value="gemini"' + (entry.type === 'gemini' ? ' selected' : '') + '>' + t('typeGemini') + '</option>' +
+      '<option value="groq"' + (entry.type === 'groq' ? ' selected' : '') + '>' + (t('typeGroq') || 'Groq (Whisper)') + '</option>' +
+      '<option value="cloudflare"' + (entry.type === 'cloudflare' ? ' selected' : '') + '>' + (t('typeCloudflare') || 'Cloudflare AI') + '</option>' +
       '</select></div>' +
       '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div></div>' +
+      '<div class="ak-presets-row">' +
+      (pool === 'stt'
+        ? '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="groq-whisper">⚡ Groq Whisper Turbo</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-audio">✦ Gemini 2.5 Flash</button>'
+        : pool === 'ocr'
+        ? '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-vision">✦ Gemini 2.5 Flash Vision</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="openrouter-vision">👁 OpenRouter Qwen-VL</button>'
+        : '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="deepseek-v3">⚡ DeepSeek V3</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="glm-4">⚡ GLM 5.3 Flash</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-flash">✦ Gemini 2.5 Flash</button>'
+      ) + '</div>' +
       '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
       '<div class="ak-actions">' +
       (entry.id ? '<button class="button ghost" type="button" data-action="ak-check" data-pool="' + pool + '" data-entry-id="' + attr(entry.id) + '">● ' + t('checkNow') + '</button>' : '') +
@@ -831,7 +850,11 @@
   }
 
   function renderApiKeys() {
-    var pools = akPools || { text: [], media: [] };
+    var pools = akPools || { text: [], media: [], stt: [], ocr: [] };
+    pools.text = pools.text || [];
+    pools.media = pools.media || [];
+    pools.stt = pools.stt || [];
+    pools.ocr = pools.ocr || [];
     return '<div class="page">' +
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
       '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button></div>' +
@@ -839,6 +862,12 @@
       '<div class="ak-pools-stack"><div class="ak-pool ak-pool-text"><div class="ak-pool-head"><span class="ak-pool-marker text">T</span><span><h3>' + t('poolText') + '</h3><p>' + t('poolTextHint') + '</p></span></div>' +
       (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></div>' +
+      '<div class="ak-pool ak-pool-stt"><div class="ak-pool-head"><span class="ak-pool-marker stt">🎤</span><span><h3>' + (t('poolStt') || 'STT (Voice)') + '</h3><p>' + (t('poolSttHint') || '') + '</p></span></div>' +
+      (pools.stt.length ? pools.stt.map(function (e, i) { return akEntryHtml('stt', e, i, pools.stt.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="stt">+ ' + t('addKey') + '</button></div>' +
+      '<div class="ak-pool ak-pool-ocr"><div class="ak-pool-head"><span class="ak-pool-marker ocr">📄</span><span><h3>' + (t('poolOcr') || 'OCR (Vision)') + '</h3><p>' + (t('poolOcrHint') || '') + '</p></span></div>' +
+      (pools.ocr.length ? pools.ocr.map(function (e, i) { return akEntryHtml('ocr', e, i, pools.ocr.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
+      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="ocr">+ ' + t('addKey') + '</button></div>' +
       '<div class="ak-pool ak-pool-media"><div class="ak-pool-head"><span class="ak-pool-marker media">M</span><span><h3>' + t('poolMedia') + '</h3><p>' + t('poolMediaHint') + '</p></span></div>' +
       (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></div>' +
@@ -846,19 +875,25 @@
   }
 
   function ensureAkPools() {
-    if (!akPools) akPools = { text: [], media: [] };
+    if (!akPools) akPools = { text: [], media: [], stt: [], ocr: [] };
+    akPools.text = akPools.text || [];
+    akPools.media = akPools.media || [];
+    akPools.stt = akPools.stt || [];
+    akPools.ocr = akPools.ocr || [];
     return akPools;
   }
 
   function akCollect(includeIncomplete) {
-    var pools = { text: [], media: [] };
-    ['text', 'media'].forEach(function (pool) {
+    var pools = { text: [], media: [], stt: [], ocr: [] };
+    ['text', 'media', 'stt', 'ocr'].forEach(function (pool) {
       $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
+        var rawType = String(($('[name="ak-type"]', block) || {}).value || '').trim().toLowerCase();
+        var type = ['gemini', 'groq', 'cloudflare'].includes(rawType) ? rawType : 'openai';
         var entry = {
           id: String(($('[name="ak-id"]', block) || {}).value || '').trim(),
           name: String($('[name="ak-name"]', block).value || '').trim(),
           baseUrl: String($('[name="ak-base"]', block).value || '').trim().replace(/\/+$/, ''),
-          type: $('[name="ak-type"]', block).value === 'gemini' ? 'gemini' : 'openai',
+          type: type,
           model: String($('[name="ak-model"]', block).value || '').trim(),
           key: String($('[name="ak-key"]', block).value || '').replace(/\s+/g, '')
         };
@@ -872,19 +907,25 @@
     if (akPools && !force) return Promise.resolve();
     return Promise.all([api('GET', '/api/wa/llm-workspace'), loadAkHealth()]).then(function (results) {
       var result = results[0];
+      var ws = (result && result.workspace) || {};
       akPools = {
-        text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
-        media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
+        text: Array.isArray(ws.text) ? ws.text : [],
+        media: Array.isArray(ws.media) ? ws.media : [],
+        stt: Array.isArray(ws.stt) ? ws.stt : [],
+        ocr: Array.isArray(ws.ocr) ? ws.ocr : []
       };
       akDirty = false;
-    }).catch(function () { akPools = { text: [], media: [] }; });
+    }).catch(function () { akPools = { text: [], media: [], stt: [], ocr: [] }; });
   }
 
   function loadAkHealth() {
     return api('GET', '/api/wa/llm-workspace/health').then(function (result) {
+      var h = (result && result.health) || {};
       akHealth = {
-        text: Array.isArray(result.health && result.health.text) ? result.health.text : [],
-        media: Array.isArray(result.health && result.health.media) ? result.health.media : []
+        text: Array.isArray(h.text) ? h.text : [],
+        media: Array.isArray(h.media) ? h.media : [],
+        stt: Array.isArray(h.stt) ? h.stt : [],
+        ocr: Array.isArray(h.ocr) ? h.ocr : []
       };
       return akHealth;
     }).catch(function () { return akHealth; });
@@ -1704,6 +1745,43 @@
           akDirty = true;
         }
         render();
+      } else if (name === 'ak-apply-preset') {
+        var card = action.closest('.ak-card');
+        var preset = action.dataset.preset;
+        if (card && preset) {
+          var baseInput = card.querySelector('[name="ak-base"]');
+          var typeSelect = card.querySelector('[name="ak-type"]');
+          var modelInput = card.querySelector('[name="ak-model"]');
+          var nameInput = card.querySelector('[name="ak-name"]');
+          if (preset === 'groq-whisper') {
+            if (baseInput) baseInput.value = 'https://api.groq.com/openai/v1';
+            if (typeSelect) typeSelect.value = 'groq';
+            if (modelInput) modelInput.value = 'whisper-large-v3-turbo';
+            if (nameInput && !nameInput.value) nameInput.value = 'Groq Whisper Turbo';
+          } else if (preset === 'gemini-audio' || preset === 'gemini-vision' || preset === 'gemini-flash') {
+            if (baseInput) baseInput.value = 'https://generativelanguage.googleapis.com/v1beta';
+            if (typeSelect) typeSelect.value = 'gemini';
+            if (modelInput) modelInput.value = 'gemini-2.5-flash';
+            if (nameInput && !nameInput.value) nameInput.value = 'Google Gemini 2.5 Flash';
+          } else if (preset === 'deepseek-v3') {
+            if (baseInput) baseInput.value = 'https://openrouter.ai/api/v1';
+            if (typeSelect) typeSelect.value = 'openai';
+            if (modelInput) modelInput.value = 'deepseek/deepseek-chat';
+            if (nameInput && !nameInput.value) nameInput.value = 'DeepSeek V3';
+          } else if (preset === 'glm-4') {
+            if (baseInput) baseInput.value = 'https://openrouter.ai/api/v1';
+            if (typeSelect) typeSelect.value = 'openai';
+            if (modelInput) modelInput.value = 'zhipu/glm-5.3-flash';
+            if (nameInput && !nameInput.value) nameInput.value = 'GLM 5.3 Flash';
+          } else if (preset === 'openrouter-vision') {
+            if (baseInput) baseInput.value = 'https://openrouter.ai/api/v1';
+            if (typeSelect) typeSelect.value = 'openai';
+            if (modelInput) modelInput.value = 'qwen/qwen-2.5-vl-72b-instruct:free';
+            if (nameInput && !nameInput.value) nameInput.value = 'Qwen 2.5 VL (Free)';
+          }
+          akDirty = true;
+          toast(t('saved'), preset);
+        }
       } else if (name === 'ak-del' || name === 'ak-up' || name === 'ak-down') {
         var cur = ensureAkPools();
         var delPool = action.dataset.pool;
@@ -1721,7 +1799,7 @@
       } else if (name === 'ak-save') {
         var payload = akCollect(true);
         var incomplete = null;
-        ['text', 'media'].some(function (pool) {
+        ['text', 'media', 'stt', 'ocr'].some(function (pool) {
           incomplete = (payload[pool] || []).find(function (entry) { return !entry.model || !entry.key; }) || null;
           return Boolean(incomplete);
         });
@@ -1739,9 +1817,12 @@
         action.disabled = true;
         api('PUT', '/api/wa/llm-workspace', payload)
           .then(function (result) {
+            var savedWs = (result && result.workspace) || {};
             akPools = {
-              text: Array.isArray(result.workspace && result.workspace.text) ? result.workspace.text : [],
-              media: Array.isArray(result.workspace && result.workspace.media) ? result.workspace.media : []
+              text: Array.isArray(savedWs.text) ? savedWs.text : [],
+              media: Array.isArray(savedWs.media) ? savedWs.media : [],
+              stt: Array.isArray(savedWs.stt) ? savedWs.stt : [],
+              ocr: Array.isArray(savedWs.ocr) ? savedWs.ocr : []
             };
             akDirty = false;
             return loadAkHealth();

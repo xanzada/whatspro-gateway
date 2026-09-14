@@ -102,7 +102,10 @@ function toWhatsAppChatId(value, jidLookup = null) {
     if (!raw || isGroupOrStatusJid(raw)) return '';
 
     const phone = normalizePhone(raw);
-    if (phone && jidLookup && jidLookup.has(phone)) return jidLookup.get(phone);
+    if (phone && jidLookup && jidLookup.has(phone)) {
+        const mapped = jidLookup.get(phone);
+        if (!/@lid$/i.test(mapped)) return mapped;
+    }
     if (PHONE_JID_RE.test(raw) || LID_JID_RE.test(raw)) return raw;
     if (phone) return `${phone}@c.us`;
 
