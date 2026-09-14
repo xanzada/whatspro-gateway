@@ -1006,3 +1006,113 @@ html[data-theme="light"] .ak-pool-ocr { border-color: rgba(217,119,6,.34); backg
 .ak-presets-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
 .ak-preset-btn { border: 1px dashed var(--border); background: rgba(255,255,255,.05); color: var(--muted); font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; transition: all .15s; }
 .ak-preset-btn:hover { border-color: #2563eb; color: #2563eb; background: rgba(37,99,235,.08); }
+
+/* LLM Tier & Token Accounting Styles */
+.ak-card-title-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ak-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.ak-tier-badge.free {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.ak-tier-badge.paid {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.ak-tier-badge.warn {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.45);
+  animation: ak-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes ak-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.ak-token-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 2px;
+}
+html[data-theme="light"] .ak-token-row {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+.ak-token-col {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+}
+.ak-token-val {
+  font-size: 12px;
+  color: var(--text);
+}
+.ak-token-lbl {
+  color: var(--muted);
+  font-size: 10px;
+}
+.ak-token-col.cost .ak-token-val {
+  color: #f59e0b;
+}
+
+.ak-stat-pill.tokens {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.28);
+}
+
+.ak-overview-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ak-tokens-overview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ak-token-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+}
+.ak-token-summary-pill.total {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.25);
+}
+.ak-token-summary-pill.text {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.25);
+}
+.ak-token-summary-pill.media {
+  color: #9333ea;
+  background: rgba(147, 51, 234, 0.1);
+  border-color: rgba(147, 51, 234, 0.25);
+}

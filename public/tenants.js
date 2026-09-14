@@ -113,6 +113,9 @@
       testMode: 'Тест режимі', testModeOn: 'Тест режимі қосулы', testModeHint: 'Қосулы болса, бот тек төмендегі нөмірлерге жауап береді. Әдеттегі қонақтарға — тынышлық.',
       addPhone: 'Нөмір қосу', receiptFilter: 'Чек фильтрі', receiptFilterOn: 'Продакшн фильтр (AI күдікті чектерді тексереді)',
       receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
+      tierFree: 'Тегін провайдер', tierPaid: 'Ақылы кілт', tierWarn: 'Ақылы анықталды!',
+      tokensTotal: 'Жалпы токен', tokensText: 'Мәтін', tokensMedia: 'Медиа',
+      tokensPrompt: 'Кіріс', tokensCompletion: 'Шығыс', tokensCost: 'Шығын', tokensCalls: 'Сұраныс',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
       poolTextHint: 'Клиентпен мәтіндік диалог және құрал шақырулары.', poolMediaHint: 'Аудио, фото және PDF чектерді талдау. Кез келген LLM (GLM-5.3-flash, DeepSeek, Gemini т.б.) қоюға болады — жүйе аудио, PDF және фотоны осы модельге автоматты бейімдейді.',
       poolStt: 'Дыбысты тану (STT / Voice)', poolSttHint: 'Дауыстық хабарламаларды мәтінге айналдыру (Groq Whisper, Cloudflare, Gemini). 0% сервер жүктемесі.',
@@ -217,6 +220,9 @@
       testMode: 'Тестовый режим', testModeOn: 'Тестовый режим включён', testModeHint: 'Когда включён, бот отвечает только номерам ниже. Обычные гости — тишина.',
       addPhone: 'Добавить номер', receiptFilter: 'Фильтр чеков', receiptFilterOn: 'Продакшн-фильтр (AI проверяет подозрительные чеки)',
       receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
+      tierFree: 'Бесплатный провайдер', tierPaid: 'Платный ключ', tierWarn: 'Обнаружен платный расход!',
+      tokensTotal: 'Всего токенов', tokensText: 'Текст', tokensMedia: 'Медиа',
+      tokensPrompt: 'Вход', tokensCompletion: 'Выход', tokensCost: 'Расход', tokensCalls: 'Запросы',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
       poolTextHint: 'Текстовый диалог с клиентом и вызовы инструментов.', poolMediaHint: 'Анализ аудио, фото и PDF-чеков. Можно ставить любую модель (GLM-5.3-flash, DeepSeek, Gemini и др.) — система сама адаптирует медиа для выбранной модели.',
       poolStt: 'Распознавание речи (STT / Voice)', poolSttHint: 'Преобразование голосовых сообщений в текст (Groq Whisper, Cloudflare, Gemini). 0% нагрузки сервера.',
@@ -815,19 +821,46 @@
   function refreshAkHealthDom() {
     $$('[data-ak-block]', viewEl).forEach(function (block) {
       var idInput = $('[name="ak-id"]', block);
-      var current = $('.ak-health', block);
       var entryId = String((idInput || {}).value || '').trim();
-      if (!current || !entryId) return;
-      var holder = document.createElement('div');
-      holder.innerHTML = akHealthHtml(block.dataset.akBlock, { id: entryId });
-      current.replaceWith(holder.firstElementChild);
+      if (!entryId) return;
+      var pool = block.dataset.akBlock;
+      var health = akHealthFor(pool, entryId);
+
+      var currentHealth = $('.ak-health', block);
+      if (currentHealth) {
+        var hHolder = document.createElement('div');
+        hHolder.innerHTML = akHealthHtml(pool, { id: entryId });
+        currentHealth.replaceWith(hHolder.firstElementChild);
+      }
+
+      var currentBadge = $('.ak-tier-badge', block);
+      if (currentBadge) {
+        var bHolder = document.createElement('div');
+        bHolder.innerHTML = akTierBadgeHtml(health);
+        currentBadge.replaceWith(bHolder.firstElementChild);
+      }
+
+      var currentRow = $('.ak-token-row', block);
+      if (currentRow) {
+        var rHolder = document.createElement('div');
+        rHolder.innerHTML = akTokenRowHtml(health);
+        currentRow.replaceWith(rHolder.firstElementChild);
+      }
     });
   }
 
   function akEntryHtml(pool, entry, index, total) {
+    var health = akHealthFor(pool, entry.id);
     var badge = index === 0 ? ' · ' + t('keyPrimary') : '';
     return '<section class="ak-card" data-ak-block="' + pool + '" data-ak-index="' + index + '">' +
-      '<div class="ak-card-head"><strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong>' + akHealthHtml(pool, entry) + '</div>' +
+      '<div class="ak-card-head">' +
+        '<div class="ak-card-title-group">' +
+          '<strong>' + escapeHtml(entry.name || (t('keyNameLabel') + ' #' + (index + 1))) + badge + '</strong>' +
+          akTierBadgeHtml(health) +
+        '</div>' +
+        akHealthHtml(pool, entry) +
+      '</div>' +
+      akTokenRowHtml(health) +
       '<input name="ak-id" type="hidden" value="' + attr(entry.id || '') + '">' +
       '<div class="field"><label>' + t('keyNameLabel') + '</label><input name="ak-name" value="' + attr(entry.name || '') + '" placeholder="' + attr(t('keyPlaceholder')) + '"></div>' +
       '<div class="field"><label>' + t('keyBaseUrl') + '</label><input name="ak-base" value="' + attr(entry.baseUrl || '') + '" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" inputmode="url"></div>' +
@@ -861,18 +894,73 @@
 
   var akCollapsed = { text: false, media: false };
 
+  function formatTokens(n) {
+    var num = Number(n) || 0;
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+    return String(num);
+  }
+
+  function akTierBadgeHtml(health) {
+    if (health.hasUnexpectedCost) {
+      return '<span class="ak-tier-badge warn" title="' + attr(t('tierWarn')) + '">⚠️ ' + escapeHtml(t('tierWarn')) + '</span>';
+    }
+    if (health.isFree || health.tier === 'free') {
+      return '<span class="ak-tier-badge free" title="' + attr(t('tierFree')) + '">🆓 ' + escapeHtml(t('tierFree')) + '</span>';
+    }
+    return '<span class="ak-tier-badge paid" title="' + attr(t('tierPaid')) + '">💳 ' + escapeHtml(t('tierPaid')) + '</span>';
+  }
+
+  function akTokenRowHtml(health) {
+    var total = Number(health.totalTokens) || 0;
+    var prompt = Number(health.promptTokens) || 0;
+    var comp = Number(health.completionTokens) || 0;
+    var cost = Number(health.cost) || 0;
+    var calls = Number(health.callsCount) || 0;
+
+    var html = '<div class="ak-token-row">';
+    html += '<span class="ak-token-col"><strong class="ak-token-val">' + formatTokens(total) + '</strong> <span class="ak-token-lbl">' + escapeHtml(t('tokensTotal')) + '</span></span>';
+    html += '<span class="ak-token-col"><span class="ak-token-val">' + formatTokens(prompt) + '</span> <span class="ak-token-lbl">' + escapeHtml(t('tokensPrompt')) + '</span></span>';
+    html += '<span class="ak-token-col"><span class="ak-token-val">' + formatTokens(comp) + '</span> <span class="ak-token-lbl">' + escapeHtml(t('tokensCompletion')) + '</span></span>';
+    if (cost > 0) {
+      html += '<span class="ak-token-col cost"><strong class="ak-token-val">$' + cost.toFixed(4) + '</strong> <span class="ak-token-lbl">' + escapeHtml(t('tokensCost')) + '</span></span>';
+    }
+    html += '<span class="ak-token-col calls"><span class="ak-token-val">' + calls + '</span> <span class="ak-token-lbl">' + escapeHtml(t('tokensCalls')) + '</span></span>';
+    html += '</div>';
+    return html;
+  }
+
   function akPoolStats(pool, entries) {
     var list = Array.isArray(entries) ? entries : [];
     var healthy = 0;
     var suspect = 0;
     var unavailable = 0;
     var unknown = 0;
+    var totalTokens = 0;
+    var promptTokens = 0;
+    var completionTokens = 0;
+    var cost = 0;
+    var callsCount = 0;
+    var freeCount = 0;
+    var paidCount = 0;
+    var warnCount = 0;
+
     list.forEach(function (e) {
       var h = akHealthFor(pool, e.id);
       if (h.status === 'healthy') healthy++;
       else if (h.status === 'suspect') suspect++;
       else if (h.status === 'unavailable') unavailable++;
       else unknown++;
+
+      totalTokens += Number(h.totalTokens) || 0;
+      promptTokens += Number(h.promptTokens) || 0;
+      completionTokens += Number(h.completionTokens) || 0;
+      cost += Number(h.cost) || 0;
+      callsCount += Number(h.callsCount) || 0;
+
+      if (h.hasUnexpectedCost) warnCount++;
+      if (h.isFree) freeCount++;
+      else paidCount++;
     });
     return {
       total: list.length,
@@ -880,7 +968,15 @@
       suspect: suspect,
       unavailable: unavailable,
       unknown: unknown,
-      available: healthy + unknown
+      available: healthy + unknown,
+      totalTokens: totalTokens,
+      promptTokens: promptTokens,
+      completionTokens: completionTokens,
+      cost: cost,
+      callsCount: callsCount,
+      freeCount: freeCount,
+      paidCount: paidCount,
+      warnCount: warnCount
     };
   }
 
@@ -916,6 +1012,7 @@
       '</div>' +
       '<div class="ak-pool-head-right" onclick="event.stopPropagation()">' +
         akStatsHtml(stats) +
+        '<span class="ak-stat-pill tokens" title="' + attr(t('tokensTotal')) + '">🪙 ' + formatTokens(stats.totalTokens) + '</span>' +
         '<button class="button secondary ak-pool-test" type="button" data-action="ak-check-pool" data-pool="' + pool + '" title="' + attr(t('checkPoolHint')) + '">' +
           '⚡ ' + t('checkPool') +
         '</button>' +
@@ -936,18 +1033,17 @@
     var pools = akPools || { text: [], media: [] };
     pools.text = pools.text || [];
     pools.media = pools.media || [];
+    var textStats = akPoolStats('text', pools.text);
+    var mediaStats = akPoolStats('media', pools.media);
     var totalStats = {
       total: pools.text.length + pools.media.length,
-      healthy: 0, suspect: 0, unavailable: 0, unknown: 0, available: 0
+      healthy: textStats.healthy + mediaStats.healthy,
+      suspect: textStats.suspect + mediaStats.suspect,
+      unavailable: textStats.unavailable + mediaStats.unavailable,
+      unknown: textStats.unknown + mediaStats.unknown,
+      available: textStats.available + mediaStats.available,
+      totalTokens: textStats.totalTokens + mediaStats.totalTokens
     };
-    ['text', 'media'].forEach(function (p) {
-      var s = akPoolStats(p, pools[p]);
-      totalStats.healthy += s.healthy;
-      totalStats.suspect += s.suspect;
-      totalStats.unavailable += s.unavailable;
-      totalStats.unknown += s.unknown;
-      totalStats.available += s.available;
-    });
 
     return '<div class="page">' +
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
@@ -957,8 +1053,15 @@
       '</div></div>' +
       '<p class="ak-hint">' + t('workspaceCopy') + '</p>' +
       '<div class="ak-overview-bar">' +
-        '<span class="ak-overview-label">' + t('keysStatus') + ':</span>' +
-        akStatsHtml(totalStats) +
+        '<div class="ak-overview-col">' +
+          '<span class="ak-overview-label">' + t('keysStatus') + ':</span>' +
+          akStatsHtml(totalStats) +
+        '</div>' +
+        '<div class="ak-tokens-overview">' +
+          '<span class="ak-token-summary-pill total">🪙 ' + t('tokensTotal') + ': <strong>' + formatTokens(totalStats.totalTokens) + '</strong></span>' +
+          '<span class="ak-token-summary-pill text">💬 ' + t('tokensText') + ': <strong>' + formatTokens(textStats.totalTokens) + '</strong></span>' +
+          '<span class="ak-token-summary-pill media">📎 ' + t('tokensMedia') + ': <strong>' + formatTokens(mediaStats.totalTokens) + '</strong></span>' +
+        '</div>' +
       '</div>' +
       '<div class="ak-pools-stack">' +
         akPoolHtml('text', pools.text) +

@@ -65,9 +65,38 @@ function invalidOutcome(code = 'INVALID_OUTCOME') {
   return error;
 }
 
+function detectKeyTier(entry, record) {
+  const model = String(entry?.model || '').toLowerCase();
+  const name = String(entry?.name || '').toLowerCase();
+  const base = String(entry?.baseUrl || '').toLowerCase();
+  const type = String(entry?.type || '').toLowerCase();
+
+  const hasFreeMarker = /:free\b|free\/|\/free\b|-free\b|\bag\/|тегін|бесплат/i.test(model) ||
+                        /free|тегін|бесплат/i.test(name);
+  const isGoogleFree = (type === 'gemini' || base.includes('generativelanguage.googleapis.com'));
+  const isGroqFree = (type === 'groq' || base.includes('api.groq.com'));
+
+  const hasCost = Number(record?.cost || 0) > 0;
+  const hasUnexpectedCost = (hasFreeMarker || isGoogleFree || isGroqFree) && hasCost;
+
+  let tier = 'paid';
+  if (hasFreeMarker || isGoogleFree || isGroqFree) {
+    tier = 'free';
+  }
+  if (record?.isPaid === true && !hasFreeMarker) {
+    tier = 'paid';
+  }
+
+  return {
+    tier,
+    isFree: tier === 'free',
+    hasUnexpectedCost
+  };
+}
+
 function validateOutcomePayload(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw invalidOutcome();
-  const allowed = new Set(['entryId', 'pool', 'ok', 'latencyMs', 'errorCode', 'observedAt']);
+  const allowed = new Set(['entryId', 'pool', 'ok', 'latencyMs', 'errorCode', 'observedAt', 'promptTokens', 'completionTokens', 'totalTokens', 'cost', 'isPaid']);
   if (Object.keys(body).some(field => !allowed.has(field))) throw invalidOutcome('INVALID_OUTCOME_FIELDS');
   if (typeof body.entryId !== 'string' || !POOLS.has(body.pool) || typeof body.ok !== 'boolean') throw invalidOutcome();
   if (body.latencyMs != null && (!Number.isFinite(Number(body.latencyMs)) || Number(body.latencyMs) < 0)) throw invalidOutcome();
@@ -79,7 +108,12 @@ function validateOutcomePayload(body) {
     ok: body.ok,
     latencyMs: body.latencyMs == null ? null : finiteLatency(body.latencyMs),
     errorCode: body.ok ? null : sanitizeErrorCode(body.errorCode),
-    observedAt: body.observedAt || new Date().toISOString()
+    observedAt: body.observedAt || new Date().toISOString(),
+    promptTokens: Number.isFinite(Number(body.promptTokens)) ? Math.max(0, Math.round(Number(body.promptTokens))) : 0,
+    completionTokens: Number.isFinite(Number(body.completionTokens)) ? Math.max(0, Math.round(Number(body.completionTokens))) : 0,
+    totalTokens: Number.isFinite(Number(body.totalTokens)) ? Math.max(0, Math.round(Number(body.totalTokens))) : 0,
+    cost: Number.isFinite(Number(body.cost)) ? Math.max(0, Number(body.cost)) : 0,
+    isPaid: typeof body.isPaid === 'boolean' ? body.isPaid : null
   };
 }
 
@@ -140,7 +174,13 @@ function normalizeRecords(raw) {
       lastCheckedAt: validObservedAt(item.lastCheckedAt),
       latencyMs: finiteLatency(item.latencyMs),
       errorCode: item.errorCode ? sanitizeErrorCode(item.errorCode) : null,
-      consecutiveFailures: Math.max(0, Math.min(1000, Number(item.consecutiveFailures) || 0))
+      consecutiveFailures: Math.max(0, Math.min(1000, Number(item.consecutiveFailures) || 0)),
+      totalTokens: Math.max(0, Number(item.totalTokens) || 0),
+      promptTokens: Math.max(0, Number(item.promptTokens) || 0),
+      completionTokens: Math.max(0, Number(item.completionTokens) || 0),
+      cost: Math.max(0, Number(item.cost) || 0),
+      callsCount: Math.max(0, Number(item.callsCount) || 0),
+      isPaid: Boolean(item.isPaid)
     };
   }
   return out;
@@ -174,6 +214,7 @@ function findEntry(workspace, pool, entryId) {
 }
 
 function publicRecord(entry, pool, record) {
+  const tierInfo = detectKeyTier(entry, record);
   return {
     entryId: entry.id,
     pool,
@@ -182,7 +223,15 @@ function publicRecord(entry, pool, record) {
     lastCheckedAt: record?.lastCheckedAt || null,
     latencyMs: record?.latencyMs ?? null,
     errorCode: record?.errorCode || null,
-    consecutiveFailures: record?.consecutiveFailures || 0
+    consecutiveFailures: record?.consecutiveFailures || 0,
+    totalTokens: Number(record?.totalTokens) || 0,
+    promptTokens: Number(record?.promptTokens) || 0,
+    completionTokens: Number(record?.completionTokens) || 0,
+    cost: Number(record?.cost) || 0,
+    callsCount: Number(record?.callsCount) || 0,
+    tier: tierInfo.tier,
+    isFree: tierInfo.isFree,
+    hasUnexpectedCost: tierInfo.hasUnexpectedCost
   };
 }
 
@@ -235,13 +284,31 @@ function createLlmProviderHealth(options = {}) {
       }
       const errorCode = observation.ok ? null : sanitizeErrorCode(observation.errorCode);
       const status = observationStatus(Boolean(observation.ok), errorCode || '');
+      const prevTotal = Number(previous?.totalTokens) || 0;
+      const prevPrompt = Number(previous?.promptTokens) || 0;
+      const prevCompletion = Number(previous?.completionTokens) || 0;
+      const prevCost = Number(previous?.cost) || 0;
+      const prevCalls = Number(previous?.callsCount) || 0;
+
+      const addPrompt = Number(observation?.promptTokens) || 0;
+      const addCompletion = Number(observation?.completionTokens) || 0;
+      const addTotal = Number(observation?.totalTokens) || (addPrompt + addCompletion);
+      const addCost = Number(observation?.cost) || 0;
+      const addCalls = observation.source === 'runtime' && observation.ok ? 1 : 0;
+
       const next = {
         status,
         source: observation.source,
         lastCheckedAt: checkedAt,
         latencyMs: finiteLatency(observation.latencyMs),
         errorCode,
-        consecutiveFailures: observation.ok ? 0 : Math.min(1000, (previous?.consecutiveFailures || 0) + 1)
+        consecutiveFailures: observation.ok ? 0 : Math.min(1000, (previous?.consecutiveFailures || 0) + 1),
+        totalTokens: prevTotal + addTotal,
+        promptTokens: prevPrompt + addPrompt,
+        completionTokens: prevCompletion + addCompletion,
+        cost: Math.round((prevCost + addCost) * 1000000) / 1000000,
+        callsCount: prevCalls + addCalls,
+        isPaid: observation.isPaid != null ? observation.isPaid : (previous?.isPaid || false)
       };
       records[entry.id] = next;
       return publicRecord(entry, pool, next);
@@ -378,7 +445,12 @@ function createLlmProviderHealth(options = {}) {
       ok: outcome.ok === true,
       latencyMs: outcome.latencyMs,
       errorCode: outcome.ok === true ? null : sanitizeErrorCode(outcome.errorCode),
-      observedAt: outcome.observedAt
+      observedAt: outcome.observedAt,
+      promptTokens: outcome.promptTokens,
+      completionTokens: outcome.completionTokens,
+      totalTokens: outcome.totalTokens,
+      cost: outcome.cost,
+      isPaid: outcome.isPaid
     });
   }
 
