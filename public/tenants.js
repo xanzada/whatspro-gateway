@@ -109,7 +109,7 @@
       addPhone: 'Нөмір қосу', receiptFilter: 'Чек фильтрі', receiptFilterOn: 'Продакшн фильтр (AI күдікті чектерді тексереді)',
       receiptFilterHint: 'Өшірулі болса — барлық чек тексерусіз өтеді. Қосулы болса — AI күдіктілерді операторға бөледі.',
       workspaceEmpty: 'Кілт әлі қосылмаған.', poolText: 'Мәтін үшін кілттер', poolMedia: 'Медиа үшін кілттер',
-      poolTextHint: 'Клиентпен мәтіндік диалог және құрал шақырулары.', poolMediaHint: 'Аудио, сурет және құжаттарды талдау.',
+      poolTextHint: 'Клиентпен мәтіндік диалог және құрал шақырулары.', poolMediaHint: 'Аудио, фото және PDF чектерді талдау. Кез келген LLM (GLM-5.3-flash, DeepSeek, Gemini т.б.) қоюға болады — жүйе аудио, PDF және фотоны осы модельге автоматты бейімдейді.',
       poolStt: 'Дыбысты тану (STT / Voice)', poolSttHint: 'Дауыстық хабарламаларды мәтінге айналдыру (Groq Whisper, Cloudflare, Gemini). 0% сервер жүктемесі.',
       poolOcr: 'Чек және құжаттарды тану (OCR / Vision)', poolOcrHint: 'Суреттер мен PDF құжаттарды мәтінге айналдыру (Gemini Vision, OpenAI Vision).',
       typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
@@ -208,7 +208,7 @@
       addPhone: 'Добавить номер', receiptFilter: 'Фильтр чеков', receiptFilterOn: 'Продакшн-фильтр (AI проверяет подозрительные чеки)',
       receiptFilterHint: 'Выключен — все чеки проходят без проверки. Включён — AI отделяет подозрительные оператору.',
       workspaceEmpty: 'Ключи ещё не добавлены.', poolText: 'Ключи для текста', poolMedia: 'Ключи для медиа',
-      poolTextHint: 'Текстовый диалог с клиентом и вызовы инструментов.', poolMediaHint: 'Анализ аудио, изображений и документов.',
+      poolTextHint: 'Текстовый диалог с клиентом и вызовы инструментов.', poolMediaHint: 'Анализ аудио, фото и PDF-чеков. Можно ставить любую модель (GLM-5.3-flash, DeepSeek, Gemini и др.) — система сама адаптирует медиа для выбранной модели.',
       poolStt: 'Распознавание речи (STT / Voice)', poolSttHint: 'Преобразование голосовых сообщений в текст (Groq Whisper, Cloudflare, Gemini). 0% нагрузки сервера.',
       poolOcr: 'Распознавание чеков и документов (OCR / Vision)', poolOcrHint: 'Извлечение данных из фото чеков и PDF (Gemini Vision, OpenAI Vision).',
       typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
@@ -829,15 +829,15 @@
       '</select></div>' +
       '<div class="field"><label>Модель</label><input name="ak-model" value="' + attr(entry.model || '') + '" autocomplete="off" spellcheck="false"></div></div>' +
       '<div class="ak-presets-row">' +
-      (pool === 'stt'
-        ? '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="groq-whisper">⚡ Groq Whisper Turbo</button>' +
-          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-audio">✦ Gemini 2.5 Flash</button>'
-        : pool === 'ocr'
-        ? '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-vision">✦ Gemini 2.5 Flash Vision</button>' +
-          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="openrouter-vision">👁 OpenRouter Qwen-VL</button>'
+      (pool === 'media'
+        ? '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="glm-4">⚡ GLM 5.3 Flash</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="deepseek-v3">⚡ DeepSeek V3</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-flash">✦ Gemini 2.5 Flash</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gpt-4o-mini">⚡ GPT-4o Mini</button>'
         : '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="deepseek-v3">⚡ DeepSeek V3</button>' +
           '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="glm-4">⚡ GLM 5.3 Flash</button>' +
-          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-flash">✦ Gemini 2.5 Flash</button>'
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gemini-flash">✦ Gemini 2.5 Flash</button>' +
+          '<button class="ak-preset-btn" type="button" data-action="ak-apply-preset" data-preset="gpt-4o-mini">⚡ GPT-4o Mini</button>'
       ) + '</div>' +
       '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
       '<div class="ak-actions">' +
@@ -850,11 +850,9 @@
   }
 
   function renderApiKeys() {
-    var pools = akPools || { text: [], media: [], stt: [], ocr: [] };
+    var pools = akPools || { text: [], media: [] };
     pools.text = pools.text || [];
     pools.media = pools.media || [];
-    pools.stt = pools.stt || [];
-    pools.ocr = pools.ocr || [];
     return '<div class="page">' +
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
       '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button></div>' +
@@ -862,12 +860,6 @@
       '<div class="ak-pools-stack"><div class="ak-pool ak-pool-text"><div class="ak-pool-head"><span class="ak-pool-marker text">T</span><span><h3>' + t('poolText') + '</h3><p>' + t('poolTextHint') + '</p></span></div>' +
       (pools.text.length ? pools.text.map(function (e, i) { return akEntryHtml('text', e, i, pools.text.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="text">+ ' + t('addKey') + '</button></div>' +
-      '<div class="ak-pool ak-pool-stt"><div class="ak-pool-head"><span class="ak-pool-marker stt">🎤</span><span><h3>' + (t('poolStt') || 'STT (Voice)') + '</h3><p>' + (t('poolSttHint') || '') + '</p></span></div>' +
-      (pools.stt.length ? pools.stt.map(function (e, i) { return akEntryHtml('stt', e, i, pools.stt.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="stt">+ ' + t('addKey') + '</button></div>' +
-      '<div class="ak-pool ak-pool-ocr"><div class="ak-pool-head"><span class="ak-pool-marker ocr">📄</span><span><h3>' + (t('poolOcr') || 'OCR (Vision)') + '</h3><p>' + (t('poolOcrHint') || '') + '</p></span></div>' +
-      (pools.ocr.length ? pools.ocr.map(function (e, i) { return akEntryHtml('ocr', e, i, pools.ocr.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
-      '<button class="button ak-add" type="button" data-action="ak-add" data-pool="ocr">+ ' + t('addKey') + '</button></div>' +
       '<div class="ak-pool ak-pool-media"><div class="ak-pool-head"><span class="ak-pool-marker media">M</span><span><h3>' + t('poolMedia') + '</h3><p>' + t('poolMediaHint') + '</p></span></div>' +
       (pools.media.length ? pools.media.map(function (e, i) { return akEntryHtml('media', e, i, pools.media.length); }).join('') : '<p class="ak-hint">' + t('workspaceEmpty') + '</p>') +
       '<button class="button ak-add" type="button" data-action="ak-add" data-pool="media">+ ' + t('addKey') + '</button></div>' +
@@ -884,8 +876,8 @@
   }
 
   function akCollect(includeIncomplete) {
-    var pools = { text: [], media: [], stt: [], ocr: [] };
-    ['text', 'media', 'stt', 'ocr'].forEach(function (pool) {
+    var pools = { text: [], media: [] };
+    ['text', 'media'].forEach(function (pool) {
       $$('[data-ak-block="' + pool + '"]', viewEl).forEach(function (block) {
         var rawType = String(($('[name="ak-type"]', block) || {}).value || '').trim().toLowerCase();
         var type = ['gemini', 'groq', 'cloudflare'].includes(rawType) ? rawType : 'openai';
@@ -1773,11 +1765,11 @@
             if (typeSelect) typeSelect.value = 'openai';
             if (modelInput) modelInput.value = 'zhipu/glm-5.3-flash';
             if (nameInput && !nameInput.value) nameInput.value = 'GLM 5.3 Flash';
-          } else if (preset === 'openrouter-vision') {
+          } else if (preset === 'gpt-4o-mini') {
             if (baseInput) baseInput.value = 'https://openrouter.ai/api/v1';
             if (typeSelect) typeSelect.value = 'openai';
-            if (modelInput) modelInput.value = 'qwen/qwen-2.5-vl-72b-instruct:free';
-            if (nameInput && !nameInput.value) nameInput.value = 'Qwen 2.5 VL (Free)';
+            if (modelInput) modelInput.value = 'openai/gpt-4o-mini';
+            if (nameInput && !nameInput.value) nameInput.value = 'GPT-4o Mini';
           }
           akDirty = true;
           toast(t('saved'), preset);
@@ -1799,7 +1791,7 @@
       } else if (name === 'ak-save') {
         var payload = akCollect(true);
         var incomplete = null;
-        ['text', 'media', 'stt', 'ocr'].some(function (pool) {
+        ['text', 'media'].some(function (pool) {
           incomplete = (payload[pool] || []).find(function (entry) { return !entry.model || !entry.key; }) || null;
           return Boolean(incomplete);
         });
