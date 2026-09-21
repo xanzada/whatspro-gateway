@@ -137,7 +137,10 @@ test('runtime outcome payload rejects every extra field and returns only allowli
   }), /INVALID_OUTCOME_FIELDS/);
   assert.deepEqual(Object.keys(validateOutcomePayload({
     entryId: 'llm_live_1234567890123456', pool: 'text', ok: true, latencyMs: 9
-  })).sort(), ['entryId', 'errorCode', 'latencyMs', 'observedAt', 'ok', 'pool']);
+  })).sort(), [
+    'completionTokens', 'cost', 'entryId', 'errorCode', 'isPaid', 'latencyMs',
+    'observedAt', 'ok', 'pool', 'promptTokens', 'totalTokens'
+  ]);
 });
 
 test('a provider that ignores AbortSignal is still bounded by the probe deadline', async () => {
