@@ -46,6 +46,15 @@ test('failed media opens surface a visible error instead of failing silently', (
   assert.match(chatJs, /mediaFailed: '/);
 });
 
+// A missing display name does not prove that the number is absent from the owner's
+// phone book. Baileys may know the phone but not receive the local address-book label,
+// so the panel must describe only what it actually knows.
+test('a missing display name is not mislabeled as an unsaved contact', () => {
+  assert.match(chatJs, /unknown: 'Контакт аты белгісіз'/);
+  assert.match(chatJs, /unknown: 'Имя контакта неизвестно'/);
+  assert.doesNotMatch(chatJs, /Сақталмаған контакт|Несохранённый контакт/);
+});
+
 test('the session endpoint mints a token the guarded chat routes accept', async t => {
   const tenantStore = require('../services/tenantStore');
   const originalConfig = tenantStore.getTenantChatConfig;
