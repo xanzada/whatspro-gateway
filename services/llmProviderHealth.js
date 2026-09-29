@@ -147,11 +147,17 @@ async function isSuccessfulProbePayload(response, type) {
   if (!response?.ok || typeof response.json !== 'function') return false;
   let payload;
   try { payload = await response.json(); } catch { return false; }
-  if (Array.isArray(payload?.data) || Array.isArray(payload?.models)) return true;
-  const content = type === 'gemini'
-    ? payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('')
-    : payload?.choices?.[0]?.message?.content;
-  return parseJsonObject(content)?.ok === true;
+  if (payload?.error) return false;
+  if (Array.isArray(payload?.data) || Array.isArray(payload?.models) || Array.isArray(payload) || payload?.object === 'list') return true;
+  if (type === 'gemini') {
+    const content = payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('');
+    return parseJsonObject(content)?.ok === true;
+  }
+  if (payload?.choices) {
+    const content = payload?.choices?.[0]?.message?.content;
+    return parseJsonObject(content)?.ok === true;
+  }
+  return response.ok && typeof payload === 'object' && payload !== null && Object.keys(payload).length > 0;
 }
 
 function normalizeRecords(raw) {
@@ -227,7 +233,7 @@ function publicRecord(entry, pool, record) {
   };
 }
 
-function probeDue(record, now = Date.now(), baseIntervalMs = 60_000) {
+function probeDue(record, now = Date.now(), baseIntervalMs = 900_000) {
   if (!record?.lastCheckedAt) return true;
   const age = now - Date.parse(record.lastCheckedAt);
   if (!Number.isFinite(age) || age < 0) return true;
@@ -239,7 +245,7 @@ function createLlmProviderHealth(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const timeoutMs = boundedNumber(options.timeoutMs ?? process.env.LLM_PROBE_TIMEOUT_MS, 8000, 100, 15_000);
   const concurrency = Math.round(boundedNumber(options.concurrency ?? process.env.LLM_PROBE_CONCURRENCY, 2, 1, 4));
-  const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 60_000, 30_000, 3_600_000);
+  const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 900_000, 30_000, 3_600_000);
   let mutationTail = Promise.resolve();
   let timer = null;
   let sweepInFlight = false;
@@ -318,13 +324,12 @@ function createLlmProviderHealth(options = {}) {
         error.name = 'AbortError';
         reject(error);
       }, timeoutMs);
-      timeout.unref?.();
     });
     let response;
     try {
       const mediaProbe = pool === 'media';
       if (entry.type === 'gemini') {
-        const base = String(entry.baseUrl || '').replace(/\/+$/, '');
+        const base = String(entry.baseUrl || '').replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com/v1beta';
         const model = String(entry.model || '').replace(/^models\//, '');
         response = await Promise.race([fetchImpl(`${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(entry.key)}`, {
           method: 'POST',
@@ -337,27 +342,11 @@ function createLlmProviderHealth(options = {}) {
           }),
           signal: controller.signal
         }), deadline]);
-      } else if (pool === 'stt' && (entry.type === 'groq' || entry.type === 'openai')) {
+      } else {
         const base = String(entry.baseUrl || '').replace(/\/+$/, '') || (entry.type === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
         response = await Promise.race([fetchImpl(`${base}/models`, {
           method: 'GET',
           headers: { authorization: `Bearer ${entry.key}` },
-          signal: controller.signal
-        }), deadline]);
-      } else {
-        const base = String(entry.baseUrl || '').replace(/\/+$/, '');
-        response = await Promise.race([fetchImpl(`${base}/chat/completions`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${entry.key}`, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            model: entry.model,
-            messages: [{ role: 'user', content: mediaProbe
-              ? [{ type: 'text', text: 'Return only {"ok":true} as JSON after reading this audio.' }, { type: 'input_audio', input_audio: { data: SILENT_WAV_BASE64, format: 'wav' } }]
-              : 'Return only {"ok":true} as JSON.' }],
-            response_format: { type: 'json_object' },
-            max_tokens: 16,
-            temperature: 0
-          }),
           signal: controller.signal
         }), deadline]);
       }

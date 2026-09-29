@@ -155,28 +155,33 @@ test('a provider that ignores AbortSignal is still bounded by the probe deadline
   assert.equal(report.text[0].errorCode, 'TIMEOUT');
 });
 
-test('automatic probes recheck every provider once per minute', () => {
+test('automatic probes recheck every provider once every 15 minutes (900_000 ms)', () => {
   const now = Date.now();
-  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 59_000).toISOString() }, now), false);
-  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 61_000).toISOString() }, now), true);
-  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 59_000).toISOString() }, now), false);
-  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 61_000).toISOString() }, now), true);
+  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 899_000).toISOString() }, now), false);
+  assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 901_000).toISOString() }, now), true);
+  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 899_000).toISOString() }, now), false);
+  assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 901_000).toISOString() }, now), true);
 });
 
-test('media probes exercise audio capability with an in-memory silent WAV', async () => {
+test('media probes check openai models with zero tokens and gemini audio with silent WAV', async () => {
   const redis = new MemoryRedis();
-  const bodies = [];
+  const requests = [];
   const health = createLlmProviderHealth({
     redis,
-    fetchImpl: async (_url, options) => {
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (options.method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ object: 'list', data: [{ id: 'model-1' }] })
+        };
+      }
       const body = JSON.parse(options.body);
-      bodies.push(body);
       return {
         ok: true,
         status: 200,
-        json: async () => body.messages
-          ? ({ choices: [{ message: { content: '{"ok":true}' } }] })
-          : ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] })
+        json: async () => ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] })
       };
     },
     timeoutMs: 100
@@ -186,10 +191,46 @@ test('media probes exercise audio capability with an in-memory silent WAV', asyn
     media: [entry('llm_audio_openai_1234567890', 'audio-openai'), entry('llm_audio_gemini_1234567890', 'audio-gemini', 'gemini')]
   };
   await health.checkAll(workspace);
-  const openAiAudio = bodies[0].messages[0].content.find(item => item.type === 'input_audio').input_audio;
-  assert.equal(openAiAudio.format, 'wav');
-  assert.match(openAiAudio.data, /^UklGR/);
-  const geminiAudio = bodies[1].contents[0].parts.find(item => item.inlineData).inlineData;
+  // OpenAI media probe uses GET /models (0 tokens)
+  assert.equal(requests[0].options.method, 'GET');
+  assert.equal(requests[0].url, 'https://provider.example/v1/models');
+  assert.equal(requests[0].options.body, undefined);
+
+  // Gemini media probe exercises inline audio
+  assert.equal(requests[1].options.method, 'POST');
+  const geminiBody = JSON.parse(requests[1].options.body);
+  const geminiAudio = geminiBody.contents[0].parts.find(item => item.inlineData).inlineData;
   assert.equal(geminiAudio.mimeType, 'audio/wav');
   assert.match(geminiAudio.data, /^UklGR/);
+});
+
+test('openai-compatible providers in text and media pools probe GET /models with 0 tokens', async () => {
+  const redis = new MemoryRedis();
+  const calls = [];
+  const health = createLlmProviderHealth({
+    redis,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ object: 'list', data: [{ id: 'gemini-3.8-flash' }] })
+      };
+    },
+    timeoutMs: 100
+  });
+  const workspace = {
+    text: [entry('llm_a6api_text_1234567890', 'a6api-text')],
+    media: [entry('llm_a6api_media_123456789', 'a6api-media')]
+  };
+  const report = await health.checkAll(workspace);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].url, 'https://provider.example/v1/models');
+  assert.equal(calls[1].method, 'GET');
+  assert.equal(calls[1].url, 'https://provider.example/v1/models');
+  assert.equal(report.text[0].status, 'healthy');
+  assert.equal(report.text[0].totalTokens, 0);
+  assert.equal(report.media[0].status, 'healthy');
+  assert.equal(report.media[0].totalTokens, 0);
 });
