@@ -2582,7 +2582,7 @@ async function boot() {
   });
 
   await connectRedis();
-  llmProviderHealth.start(() => llmWorkspace.getWorkspace());
+  // llmProviderHealth.start(() => llmWorkspace.getWorkspace());
   await tenantStore.listTenantRecords().catch(error => {
     console.warn('[TENANT SNAPSHOT] startup warm-up failed:', error.message);
   });

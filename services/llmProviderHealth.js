@@ -468,17 +468,9 @@ function createLlmProviderHealth(options = {}) {
     };
   }
 
-  function start(getWorkspace) {
-    if (timer) return;
-    const sweep = async () => {
-      if (sweepInFlight) return;
-      sweepInFlight = true;
-      try { await checkDue(await getWorkspace()); } catch { /* next periodic sweep retries */ }
-      finally { sweepInFlight = false; }
-    };
-    void sweep();
-    timer = setInterval(() => { void sweep(); }, intervalMs);
-    timer.unref?.();
+  function start() {
+    // Background LLM health probes disabled to prevent burning API tokens without user traffic
+    return;
   }
 
   function stop() {

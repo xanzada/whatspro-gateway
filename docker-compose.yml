@@ -1,5 +1,4 @@
-version: '3.8'
-
+version: "3.8"
 services:
   whatspro:
     build: .
@@ -19,22 +18,30 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/health/detailed').then(async r => { const body = await r.json(); if (!r.ok || body.ok !== true) process.exit(1); }).catch(() => process.exit(1))"
+        - fetch('http://127.0.0.1:3000/health/detailed').then(async r => { const body = await r.json(); if (!r.ok || body.ok !== true) process.exit(1); }).catch(() => process.exit(1))
       interval: 30s
       timeout: 8s
       retries: 3
       start_period: 90s
-    # Every WhatsApp instance carries its own Chromium, so this container grows
-    # with the tenant list and had no ceiling at all: one runaway client could
-    # take the host down with Redis, Traefik and the bot on it. Cap it, and let
-    # Docker restart this service alone instead of the whole machine dying.
     deploy:
       resources:
         limits:
           memory: ${WHATSPRO_MEMORY_LIMIT:-2560M}
         reservations:
           memory: 512M
-
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-web.rule=Host(`whatspro.alemi.kz`)
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-web.entrypoints=web
+      - traefik.http.services.whatspro-whatspro-rqldzb-3-web.loadbalancer.server.port=3000
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-web.service=whatspro-whatspro-rqldzb-3-web
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-websecure.rule=Host(`whatspro.alemi.kz`)
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-websecure.entrypoints=websecure
+      - traefik.http.services.whatspro-whatspro-rqldzb-3-websecure.loadbalancer.server.port=3000
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-websecure.service=whatspro-whatspro-rqldzb-3-websecure
+      - traefik.http.routers.whatspro-whatspro-rqldzb-3-websecure.tls.certresolver=letsencrypt
+      - traefik.enable=true
   backup:
     build:
       context: .
@@ -56,17 +63,17 @@ services:
       - default
       - dokploy-network
     healthcheck:
-      test: ["CMD", "/usr/local/bin/backup-healthcheck"]
+      test:
+        - CMD
+        - /usr/local/bin/backup-healthcheck
       interval: 5m
       timeout: 10s
       retries: 4
       start_period: 2m
-
 volumes:
-  whatsapp_auth:
-  backup_state:
-
+  whatsapp_auth: null
+  backup_state: null
 networks:
-  default:
+  default: null
   dokploy-network:
     external: true
