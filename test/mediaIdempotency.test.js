@@ -1,53 +1,50 @@
 'use strict';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readFile } = require('fs/promises');
+const fixture = require('./helpers/mediaApiFixture.cjs')('media-idempotency-runtime');
 
-// C31 only. C32's claim was withdrawn after the existing suite refuted it: test mode with
-// an empty allow-list is fail-closed BY DESIGN - the operator explicitly enabled test mode,
-// which means "this restaurant is not ready for real guests". Letting every phone through
-// when the list is empty would have let an unfinished bot message real guests.
-
-const policy = require('../services/testModePolicy.js');
-const read = (relative) => readFile(new URL(relative, `file://${__filename}`), 'utf8');
-
-test('/api/send gives the media branch the same idempotency lease as text', async () => {
-  const server = await read('../src/server.js');
-  const mediaBranch = server.slice(
-    server.indexOf('if (media) {'),
-    server.indexOf("} else if (text) {")
-  );
-  // Before: the lease was text-only, so an HTTP timeout on Openbot's side - which retries
-  // its own outbox - delivered the same photo or Kaspi receipt PDF to the guest twice.
-  assert.match(mediaBranch, /if \(requestId\) \{/);
-  assert.match(mediaBranch, /\.update\(`media:\$\{mimeType\}:\$\{fileName\}:\$\{caption\}:\`\)/);
-  assert.match(mediaBranch, /IDEMPOTENCY_PAYLOAD_MISMATCH/);
-  assert.match(mediaBranch, /REQUEST_IN_PROGRESS/);
-  assert.match(mediaBranch, /await sendIdempotency\.release\(apiSendLease\)\.catch\(\(\) => \{\}\);/);
+test('/api/send replays accepted text and media identities without a second transport attempt', async () => {
+  for (const body of [{ text: 'synthetic text' }, fixture.media()]) {
+    fixture.nextId();
+    const before = fixture.sends;
+    const first = await fixture.invoke(body);
+    const retry = await fixture.invoke(body);
+    assert.equal(first.status, 200); assert.equal(retry.status, 200);
+    assert.equal(retry.response.replayed, true);
+    assert.equal(retry.response.messageId, 'SYNTHETIC-MEDIA-ACK');
+    assert.equal(fixture.sends, before + 1);
+    assert.equal((await fixture.record()).phase, 'accepted');
+    assert.equal('delivered' in retry.response, false, 'transport acceptance is not customer-device delivery');
+  }
 });
 
-test('the lease is taken after validation and before the actual send', async () => {
-  const server = await read('../src/server.js');
-  const mediaBranch = server.slice(
-    server.indexOf('if (media) {'),
-    server.indexOf("} else if (text) {")
-  );
-  const validations = mediaBranch.lastIndexOf('return res.status(400)');
-  const leaseTake = mediaBranch.indexOf('sendIdempotency.begin');
-  const send = mediaBranch.indexOf('await sendMedia(instanceId');
-  assert.ok(validations > 0 && leaseTake > validations && leaseTake < send,
-    `expected validate -> lease -> send, got ${validations}/${leaseTake}/${send}`);
+test('media validation precedes lease and WAL; both are durable before transport', async () => {
+  const invalid = await fixture.invoke(fixture.media({ base64: '***' }));
+  assert.equal(invalid.status, 400); assert.equal(fixture.sends, 0);
+  assert.equal(fixture.values.has(fixture.key()), false);
+  assert.equal(await fixture.hasRecord(), false);
+  fixture.setOnSend(async () => {
+    assert.equal(fixture.values.has(fixture.key()), true);
+    const saved = await fixture.record();
+    assert.equal(saved.kind, 'api_send'); assert.equal(saved.requestId, fixture.requestId);
+    assert.notEqual(saved.phase, 'accepted', 'ACK cannot be stored before transport');
+  });
+  assert.equal((await fixture.invoke(fixture.media())).status, 200);
+  assert.equal(fixture.sends, 1);
 });
 
-test('the hash covers everything that changes what the guest receives', async () => {
-  const server = await read('../src/server.js');
-  const mediaBranch = server.slice(
-    server.indexOf('if (media) {'),
-    server.indexOf("} else if (text) {")
-  );
-  // Same bytes but a different caption or filename IS a different message to the guest, so
-  // a retry under those must be a conflict, not a silent replay of the first one.
-  assert.match(mediaBranch, /media:\$\{mimeType\}:\$\{fileName\}:\$\{caption\}/);
-  assert.match(mediaBranch, /\.update\(encoded\)/);
+test('same requestId with changed media bytes, caption, filename or MIME is a conflict before send', async () => {
+  for (const changed of [
+    { base64: Buffer.from('different synthetic bytes').toString('base64') },
+    { caption: 'different caption' }, { fileName: 'different.png' }, { mimeType: 'image/jpeg' }
+  ]) {
+    fixture.nextId();
+    const before = fixture.sends;
+    assert.equal((await fixture.invoke(fixture.media())).status, 200);
+    const conflict = await fixture.invoke(fixture.media(changed));
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.response.error, 'IDEMPOTENCY_PAYLOAD_MISMATCH');
+    assert.equal(fixture.sends, before + 1);
+    assert.equal((await fixture.record()).phase, 'accepted');
+  }
 });

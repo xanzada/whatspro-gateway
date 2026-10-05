@@ -223,7 +223,7 @@ test('call handling rejects everyone, replies only to the allowed phone via bot 
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0][1], 'prestige');
   assert.equal(delivered[0][2], '77769156184');
-  assert.match(delivered[0][3], /хабарлама түрінде жазыңыз/i);
+  assert.equal(delivered[0][3], 'Қоңырауға жауап бере алмаймыз. Сұрағыңызды осы жерге жаза аласыз 🙂');
 
   const blockedCall = { from: '77022754235@c.us', reject: async () => { calls.push('reject-blocked'); } };
   const blocked = await whatsappTest.handleIncomingCall('prestige', client, blockedCall, {
@@ -533,4 +533,20 @@ test('reliable rejection injects the current call API and confirms its result', 
     if (previousWindow === undefined) delete global.window;
     else global.window = previousWindow;
   }
+});
+
+
+test('call reply follows authoritative customer Russian language and exact MASTER wording', async () => {
+  const delivered = [];
+  const result = await whatsappTest.handleIncomingCall('language-fixture', {}, { from: '77000000005@c.us' }, {
+    tenantAdmin: { findRow: async () => ({ calls_disabled: true, locale: 'kk' }) },
+    rejectCall: async () => true,
+    isPhoneAllowed: async () => true,
+    getStoredLanguage: async () => 'ru',
+    getHistory: async () => [],
+    deliverText: async (...args) => { delivered.push(args); return { success: true, ack: 1 }; }
+  });
+  assert.equal(result.rejected, true); assert.equal(result.replied, true);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0][3], 'Мы не можем ответить на звонок. Напишите, пожалуйста, сюда 🙂');
 });
