@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package*.json ./
+COPY scripts/patch-libsignal-logging.cjs ./scripts/patch-libsignal-logging.cjs
 RUN npm ci --omit=dev
 
 COPY . .
