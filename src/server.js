@@ -25,7 +25,7 @@ const { callWatcherStatus } = require('../services/callWatcher');
 const { isValidChatPhone, normalizePhone } = require('../services/phoneUtils');
 const { OPERATOR_ACTIVE_SECONDS, markOperatorActive, operatorActiveKey } = require('../services/operatorLock');
 const { chatStore, MAX_MEDIA_BYTES } = require('../services/chatStore');
-const { sosStore } = require('../services/sosStore');
+const { sosStore, operatorSosFenceLua } = require('../services/sosStore');
 const llmWorkspace = require('../services/llmWorkspace');
 const { createLlmProviderHealth, validateOutcomePayload } = require('../services/llmProviderHealth');
 const runtimeSettings = require('../services/runtimeSettings');
@@ -89,6 +89,9 @@ function resolveSendWalDir(env = process.env, cwd = process.cwd()) {
   return path.resolve(env.WHATSPRO_SEND_WAL_DIR || path.join(env.WHATSAPP_AUTH_PATH || path.join(cwd, 'whatsapp_auth'), '.send-wal'));
 }
 const SEND_WAL_DIR = resolveSendWalDir();
+// A separate directory is also a rollback fence: old operator scanners only
+// inspect root-level 64-hex files and must never retire API uncertainty records.
+const API_SEND_WAL_DIR = path.join(SEND_WAL_DIR, 'api-send');
 
 function isValidSendRequestId(value) {
   return /^[A-Za-z0-9_-]{8,128}$/.test(String(value || ''));
@@ -193,13 +196,14 @@ function createSendIdempotency(redis, options = {}) {
 
 const sendIdempotency = createSendIdempotency(redisClient);
 
-function sendWalPath(leaseKey) {
-  return path.join(SEND_WAL_DIR, `${crypto.createHash('sha256').update(String(leaseKey)).digest('hex')}.json`);
+function sendWalPath(leaseKey, directory = SEND_WAL_DIR) {
+  return path.join(directory, `${crypto.createHash('sha256').update(String(leaseKey)).digest('hex')}.json`);
 }
 
 async function writeSendWal(record) {
-  await fs.mkdir(SEND_WAL_DIR, { recursive: true, mode: 0o700 });
-  const target = sendWalPath(record.lease.key);
+  const directoryPath = record.kind === 'api_send' ? API_SEND_WAL_DIR : SEND_WAL_DIR;
+  await fs.mkdir(directoryPath, { recursive: true, mode: 0o700 });
+  const target = sendWalPath(record.lease.key, directoryPath);
   const temporary = `${target}.${process.pid}.tmp`;
   const handle = await fs.open(temporary, 'w', 0o600);
   try {
@@ -209,15 +213,19 @@ async function writeSendWal(record) {
     await handle.close();
   }
   await fs.rename(temporary, target);
-  let directory;
-  try {
-    directory = await fs.open(SEND_WAL_DIR, 'r');
-    await directory.sync();
-  } catch (error) {
-    const unsupportedOnWindows = process.platform === 'win32' && ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM'].includes(error.code);
-    if (!unsupportedOnWindows) throw error;
-  } finally {
-    if (directory) await directory.close();
+  const directories = record.kind === 'api_send'
+    ? [directoryPath, SEND_WAL_DIR, path.dirname(SEND_WAL_DIR)] : [directoryPath];
+  for (const directoryToSync of directories) {
+    let directory;
+    try {
+      directory = await fs.open(directoryToSync, 'r');
+      await directory.sync();
+    } catch (error) {
+      const unsupportedOnWindows = process.platform === 'win32' && ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM'].includes(error.code);
+      if (!unsupportedOnWindows) throw error;
+    } finally {
+      if (directory) await directory.close();
+    }
   }
   return target;
 }
@@ -232,11 +240,146 @@ async function removeSendWal(walPath) {
 // send for every tenant. Recording it as a terminal `ambiguous` phase keeps the
 // per-requestId duplicate guard (the WAL pre-check in the send route plus the pending
 // idempotency lease) while letting recovery complete.
+
+const OPERATOR_UNKNOWN_REASONS = new Set(['SEND_OUTCOME_UNKNOWN', 'TRANSPORT_ERROR',
+  'TRANSPORT_OUTCOME_UNKNOWN', 'RECOVERED_ORPHAN_INTENT']);
+const OPERATOR_SAFE_ERROR_CODES = new Set(['EACCES', 'ENOSPC', 'EIO', 'ENOENT',
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTCONN',
+  'REDIS_NOT_CONNECTED', 'REDIS_CONNECTION_CLOSED']);
+function safeOperatorReason(reason) {
+  return OPERATOR_UNKNOWN_REASONS.has(String(reason)) ? String(reason) : 'SEND_OUTCOME_UNKNOWN';
+}
+function operatorSendReference(record = {}) {
+  const identity = record?.lease?.key || String(record?.instanceId || '') + ':' + String(record?.phone || '');
+  return crypto.createHash('sha256').update(identity).digest('hex').slice(0, 16);
+}
+function logOperatorSendFailure(event, record, error) {
+  const code = OPERATOR_SAFE_ERROR_CODES.has(String(error?.code)) ? String(error.code) : 'SEND_OPERATION_FAILED';
+  console.error('[CHAT SEND] event=' + event + ' operation=' + operatorSendReference(record) + ' code=' + code);
+}
 async function markSendWalAmbiguous(record, reason) {
+  reason = safeOperatorReason(reason);
   const walPath = await writeSendWal({ ...record, phase: 'ambiguous', reason, ambiguousAt: Date.now() });
-  console.error(`[CHAT SEND WAL] ambiguous outcome recorded ${record.instanceId}/${record.phone}: ${reason}`);
+  console.error('[CHAT SEND WAL] operation=' + operatorSendReference(record) + ' reason=' + reason);
   ambiguousSendWalLogged.add(walPath);
   return walPath;
+}
+
+
+function apiSendUnknown(requestId) {
+  return { status: 409, payload: { success: false, error: 'SEND_OUTCOME_UNKNOWN',
+    attempted: true, outcomeUnknown: true, ...(requestId ? { requestId } : {}) } };
+}
+
+async function markApiSendUncertain(record, reason) {
+  await writeSendWal({ ...record, phase: 'ambiguous', reason, ambiguousAt: Date.now() });
+  // Recovery reports counts; neither customer content nor phone belongs in logs.
+  console.error('[API SEND WAL] uncertain outcome retained for reconciliation');
+}
+
+async function apiSendWalSummary() {
+  const counts = { pending: 0, uncertain: 0, accepted: 0, corrupt: 0 };
+  const files = await fs.readdir(API_SEND_WAL_DIR).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
+  for (const file of files.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+    let record;
+    try { record = JSON.parse(await fs.readFile(path.join(API_SEND_WAL_DIR, file), 'utf8')); }
+    catch { counts.corrupt++; continue; }
+    if (record?.kind !== 'api_send') continue;
+    if (record.phase === 'intent') counts.pending++;
+    else if (record.phase === 'ambiguous') counts.uncertain++;
+    else if (record.phase === 'accepted') counts.accepted++;
+    else counts.corrupt++;
+  }
+  return counts;
+}
+
+async function runApiSendWithWal({ instanceId, phone, requestId, payloadHash, send }) {
+  let lease = null;
+  let walPath = '';
+  let intent = null;
+  if (requestId) {
+    const key = 'chatwoot:send-idempotency:' + instanceId + ':' + phone + ':' + requestId;
+    walPath = sendWalPath(key, API_SEND_WAL_DIR);
+    let previous;
+    try { previous = JSON.parse(await fs.readFile(walPath, 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT') return { status: 503, payload: { success: false, error: 'SEND_RECOVERY_CORRUPT' } };
+    }
+    if (previous) {
+      if (previous?.lease?.key !== key || previous?.lease?.payloadHash !== payloadHash) {
+        return { status: 409, payload: { success: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' } };
+      }
+      if (previous.kind !== 'api_send') return { status: 409, payload: { success: false, error: 'IDEMPOTENCY_SCOPE_MISMATCH' } };
+      if (previous.phase === 'accepted' && previous.response?.success === true) {
+        return { status: 200, payload: { ...previous.response, replayed: true } };
+      }
+      if (previous.phase === 'intent' || previous.phase === 'ambiguous') {
+        if (liveSendWalPaths.has(walPath)) return { status: 409, payload: { success: false, error: 'REQUEST_IN_PROGRESS' } };
+        return apiSendUnknown(requestId);
+      }
+      return { status: 503, payload: { success: false, error: 'SEND_RECOVERY_CORRUPT' } };
+    }
+    lease = await sendIdempotency.begin(instanceId, phone, requestId, payloadHash);
+    if (lease.conflict) return { status: 409, payload: { success: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' } };
+    if (lease.response) return { status: 200, payload: { ...lease.response, replayed: true } };
+    if (!lease.acquired) return { status: 409, payload: { success: false, error: 'REQUEST_IN_PROGRESS' } };
+    // A process-local lease cannot protect concurrent gateway processes.
+    if (lease.backend !== 'redis') {
+      await sendIdempotency.release(lease);
+      return { status: 503, payload: { success: false, error: 'REDIS_IDEMPOTENCY_UNAVAILABLE' } };
+    }
+    intent = { kind: 'api_send', phase: 'intent', lease, instanceId, phone, requestId, operationStartedAt: Date.now() };
+    try { await writeSendWal(intent); }
+    catch {
+      await sendIdempotency.release(lease);
+      return { status: 507, payload: { success: false, error: 'SEND_WAL_UNAVAILABLE' } };
+    }
+    liveSendWalPaths.add(walPath);
+  }
+  const renewTimer = lease ? setInterval(() => sendIdempotency.renew(lease).catch(() => {}), 30000) : null;
+  renewTimer?.unref?.();
+  try {
+    let sendResult;
+    try { sendResult = await send(); }
+    catch (error) {
+      // An exception without a proven pre-send failure may follow network acceptance.
+      const attempted = error?.sendAttempted !== false;
+      sendResult = { success: false, attempted, outcomeUnknown: attempted };
+    }
+    const ok = isSuccessfulApiSend(sendResult);
+    const negativeAck = typeof sendResult?.ack === 'number' && sendResult.ack < 0;
+    const unknown = !ok && (sendResult?.outcomeUnknown === true || (sendResult?.attempted === true && !negativeAck));
+    if (unknown) {
+      if (intent) await markApiSendUncertain(intent, 'TRANSPORT_OUTCOME_UNKNOWN').catch(() => {
+        console.error('[API SEND WAL] uncertain update failed; durable intent retained');
+      });
+      // Never release the lease or automatically retry an attempted unknown send.
+      return apiSendUnknown(requestId);
+    }
+    if (!ok) {
+      if (lease) {
+        await sendIdempotency.release(lease);
+        await removeSendWal(walPath);
+      }
+      return { sendResult: { success: false } };
+    }
+    if (intent) {
+      const response = { success: true, messageId: String(sendResult?.messageId || '') };
+      try {
+        const acceptedAt = Date.now();
+        await writeSendWal({ ...intent, phase: 'accepted', response, acceptedAt,
+          retainedUntil: acceptedAt + SEND_RESULT_TTL_SECONDS * 1000 });
+      } catch {
+        // The network send and journal write are not atomic. Retain the intent.
+        return apiSendUnknown(requestId);
+      }
+      await sendIdempotency.complete(lease, response);
+    }
+    return { sendResult };
+  } finally {
+    if (renewTimer) clearInterval(renewTimer);
+    if (walPath) liveSendWalPaths.delete(walPath);
+  }
 }
 
 const configuredProxyHops = String(process.env.TRUST_PROXY_HOPS || '').trim();
@@ -799,26 +942,39 @@ async function applyOperatorSendEffects(data) {
   const { instanceId, phone, entry, expiresAt } = data;
   const remainingTtl = remainingOperatorTtl(expiresAt);
   const stored = await chatStore.appendMessageOnce(instanceId, phone, entry, {
-    state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true
+    state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true,
+    protectNewerSos: true, sosSnapshot: data.sosSnapshot
   });
-  if (stored.stale) return;
+  if (stored.stale || stored.sosProtected) return;
   // An operator reply means the SOS is being handled - resolve the marker so
   // the chat leaves the SOS column immediately and lives in "Оператор" until
   // the operator closes it. The marker used to survive for up to an hour and
   // pinned the chat in the SOS column even while the operator was answering
   // (operator request, 2026-08-20). The inbox refetch after the published
   // event picks up sos=false on its own.
-  await sosStore.clear(instanceId, phone).catch(() => {});
+  const clearedSos = await sosStore.clear(instanceId, phone, data.sosSnapshot, entry.createdAt);
+  const lockSnapshot = clearedSos ? { marker: '', canonical: '', active: '' } : data.sosSnapshot;
   if (remainingTtl > 0) {
     const lockScript = [
       "local deletedAt = tonumber(redis.call('GET', KEYS[1]) or '0')",
       'if deletedAt >= tonumber(ARGV[1]) then return 0 end',
+
+      "local sosMarkerKey = KEYS[4]; local sosActiveKey = KEYS[5]",
+      "local sosCasePrefix = 'operator_case:' .. ARGV[3] .. ':'",
+      "local sosInstance = ARGV[3]; local sosPhone = ARGV[4]; local sosCutoff = tonumber(ARGV[1])",
+      "local sosHasSnapshot = ARGV[5] == '1'; local sosExpectedMarker = ARGV[6]",
+      "local sosExpectedCanonical = ARGV[7]; local sosExpectedActive = ARGV[8]",
+      ...operatorSosFenceLua,
+      "if sosProtected then return 0 end",
       "redis.call('SET', KEYS[2], 'operator_panel', 'EX', ARGV[2])",
       "redis.call('SET', KEYS[3], 'muted_by_operator_panel', 'EX', ARGV[2])",
       'return 1'
     ].join('\n');
-    const locked = Number(await redisClient.sendCommand(['EVAL', lockScript, '3', `chatwoot:deleted:${instanceId}:${phone}`,
-      operatorActiveKey(instanceId, phone), `mute:${instanceId}:${phone}`, String(entry.createdAt), String(remainingTtl)]));
+    const locked = Number(await redisClient.sendCommand(['EVAL', lockScript, '5', `chatwoot:deleted:${instanceId}:${phone}`,
+      operatorActiveKey(instanceId, phone), `mute:${instanceId}:${phone}`,
+      'chatwoot:sos:' + instanceId + ':' + phone, 'operator_case_active:' + instanceId + ':' + phone,
+      String(entry.createdAt), String(remainingTtl), instanceId, phone, lockSnapshot ? '1' : '0',
+      lockSnapshot?.marker || '', lockSnapshot?.canonical || '', lockSnapshot?.active || '']));
     if (locked !== 1) return;
   }
   const events = [publishChatEvent({ type: 'chat.message', instanceId, phone, messageId: entry.id, state: stored.state || 'operator' })];
@@ -856,7 +1012,7 @@ function scheduleOperatorSendEffects(data, effectKey = '') {
         lastError = error;
       }
     }
-    console.error(`[CHAT SEND SIDE EFFECT] ${data.instanceId}/${data.phone}:`, lastError?.message || lastError);
+    logOperatorSendFailure('SIDE_EFFECT_RETRIES_EXHAUSTED', data, lastError);
     return false;
   })().finally(() => operatorEffectJobs.delete(jobKey));
   operatorEffectJobs.set(jobKey, job);
@@ -878,7 +1034,7 @@ function scheduleSendCompletion(lease, response, effectData, walPath = '') {
         timer.unref?.();
       });
     }
-    console.error(`[CHAT SEND] ${effectData.payload.instanceId}/${effectData.payload.phone}: durable completion deadline expired.`);
+    logOperatorSendFailure('COMPLETION_DEADLINE_EXPIRED', effectData.payload);
     return false;
   })().finally(() => sendCompletionJobs.delete(lease.key));
   sendCompletionJobs.set(lease.key, job);
@@ -895,8 +1051,84 @@ async function drainOperatorEffectOutbox() {
   }
 }
 
+async function recoverApiSendWal() {
+  const files = await fs.readdir(API_SEND_WAL_DIR).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
+  for (const file of files.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+    const walPath = path.join(API_SEND_WAL_DIR, file);
+    let record;
+    try { record = JSON.parse(await fs.readFile(walPath, 'utf8')); } catch { continue; }
+    if (record?.kind === 'api_send') {
+      if (record.phase === 'intent' && !liveSendWalPaths.has(walPath)
+        && Date.now() - Number(record.operationStartedAt || 0) >= SEND_INTENT_STALE_MS) {
+        await markApiSendUncertain(record, 'RECOVERED_ORPHAN_INTENT');
+      } else if (record.phase === 'accepted' && Number(record.retainedUntil) > 0
+        && Number(record.retainedUntil) <= Date.now()) {
+        await removeSendWal(walPath);
+      }
+      // Unknown outcomes survive Redis loss and TTL expiry; only accepted records age out.
+      continue;
+    }
+  }
+}
+
+
+function validAcceptedOperatorWal(record) {
+  const match = /^chatwoot:send-idempotency:([^:]+):([^:]+):([^:]+)$/.exec(record?.lease?.key || '');
+  if (!match || !isValidInstanceId(match[1]) || !isValidChatPhone(match[2]) || !isValidSendRequestId(match[3])) return false;
+  const [instanceId, phone, requestId] = match.slice(1);
+  const data = record.effectData?.payload, entry = data?.entry;
+  return record.phase === 'accepted' && !record.kind && record.lease.backend === 'redis'
+    && typeof record.lease.pendingValue === 'string' && record.lease.pendingValue.endsWith(':' + record.lease.payloadHash)
+    && isSuccessfulApiSend(record.response) && typeof record.response.messageId === 'string'
+    && record.effectData?.effectKey === 'chatwoot:operator-effect:' + instanceId + ':' + phone + ':' + requestId
+    && data?.instanceId === instanceId && data?.phone === phone && Number.isFinite(data?.expiresAt)
+    && (!Object.prototype.hasOwnProperty.call(data, 'sosSnapshot') || (data.sosSnapshot
+      && ['marker', 'canonical', 'active'].every(field => typeof data.sosSnapshot[field] === 'string')))
+    && typeof entry?.id === 'string' && entry.id.length > 0 && Number.isFinite(entry.createdAt)
+    && typeof entry.text === 'string'
+    && crypto.createHash('sha256').update(entry.text).digest('hex') === record.lease.payloadHash
+    && (!entry.instanceId || entry.instanceId === instanceId) && (!entry.phone || entry.phone === phone);
+}
+
+async function restoreAcceptedOperatorWal(record, walPath, redis = redisClient) {
+  if (!redis.isOpen || !validAcceptedOperatorWal(record)) return false;
+  let current;
+  try { current = String(await redis.sendCommand(['GET', record.lease.key]) || ''); }
+  catch (error) { logOperatorSendFailure('ACCEPTED_RECOVERY_READ_FAILED', record, error); return false; }
+  if (current.startsWith('done:')) {
+    let done;
+    try { done = JSON.parse(current.slice(5)); } catch { return false; }
+    if (done.payloadHash !== record.lease.payloadHash || !isSuccessfulApiSend(done.response)
+      || done.response.messageId !== record.response.messageId) return false;
+    // Completion atomically persisted its outbox. Only a remaining outbox needs
+    // effects; replaying a finished effect could clear a newer SOS incident.
+    let effect;
+    try { effect = await redis.sendCommand(['GET', record.effectData.effectKey]); }
+    catch (error) { logOperatorSendFailure('ACCEPTED_RECOVERY_READ_FAILED', record, error); return false; }
+    await removeSendWal(walPath);
+    if (effect) scheduleOperatorSendEffects(record.effectData.payload, record.effectData.effectKey);
+    return true;
+  }
+  if (current === record.lease.pendingValue) {
+    scheduleSendCompletion(record.lease, record.response, record.effectData, walPath);
+    return false;
+  }
+  if (!current) {
+    const completed = 'done:' + JSON.stringify({ payloadHash: record.lease.payloadHash, response: record.response, effectKey: record.effectData.effectKey });
+    const script = "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[2]); redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2]); return 1 end return 0";
+    const recovered = Number(await redis.sendCommand(['EVAL', script, '3', record.lease.key, record.effectData.effectKey,
+      OPERATOR_EFFECT_OUTBOX_KEY, completed, String(SEND_RESULT_TTL_SECONDS), JSON.stringify(record.effectData.payload), String(Date.now())]).catch(() => 0));
+    if (recovered === 1) {
+      await removeSendWal(walPath);
+      scheduleOperatorSendEffects(record.effectData.payload, record.effectData.effectKey);
+      return true;
+    }
+  }
+  return false;
+}
+
 async function recoverSendWal(redis = redisClient) {
-  if (!redis.isOpen) return;
+  await recoverApiSendWal();
   const files = await fs.readdir(SEND_WAL_DIR).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
   for (const file of files.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
     const walPath = path.join(SEND_WAL_DIR, file);
@@ -908,45 +1140,21 @@ async function recoverSendWal(redis = redisClient) {
       // on the transport-failure paths. Retire it as ambiguous instead of refusing
       // to finish recovery.
       if (Date.now() - Number(record.operationStartedAt || 0) < SEND_INTENT_STALE_MS) continue;
-      await markSendWalAmbiguous(record, 'orphaned intent record found during recovery')
-        .catch(error => console.error('[CHAT SEND WAL] ambiguous record update failed:', error?.message || error));
+      await markSendWalAmbiguous(record, 'RECOVERED_ORPHAN_INTENT')
+        .catch(error => logOperatorSendFailure('AMBIGUOUS_JOURNAL_FAILED', record, error));
       continue;
     }
     if (record?.phase === 'ambiguous') {
-      // Terminal. Kept only as long as the idempotency lease that guards a retry of
-      // the same requestId; once that is gone the record has nothing left to protect.
-      const leaseKey = record?.lease?.key || '';
-      const current = leaseKey ? String(await redis.sendCommand(['GET', leaseKey]).catch(() => '') || '') : '';
-      if (!current) {
-        await removeSendWal(walPath).catch(error => console.error('[CHAT SEND WAL] ambiguous cleanup failed:', error.message));
-        continue;
-      }
+      // Unknown is a per-request terminal guard, independent of Redis TTL/outage.
+      // Recovery finishes without replaying or automatically deleting this record.
       if (!ambiguousSendWalLogged.has(walPath)) {
-        console.error(`[CHAT SEND WAL] ambiguous outcome awaiting operator review ${record.instanceId}/${record.phone}: ${record.reason || 'unknown'}`);
+        console.error('[CHAT SEND WAL] operation=' + operatorSendReference(record)
+          + ' reason=' + safeOperatorReason(record.reason));
         ambiguousSendWalLogged.add(walPath);
       }
       continue;
     }
-    if (!record?.lease?.key || !record?.response || !record?.effectData?.effectKey) continue;
-    const current = String(await redis.sendCommand(['GET', record.lease.key]).catch(() => ''));
-    if (current.startsWith('done:')) {
-      await removeSendWal(walPath);
-      continue;
-    }
-    if (current === record.lease.pendingValue) {
-      scheduleSendCompletion(record.lease, record.response, record.effectData, walPath);
-      continue;
-    }
-    if (!current) {
-      const completed = `done:${JSON.stringify({ payloadHash: record.lease.payloadHash, response: record.response, effectKey: record.effectData.effectKey })}`;
-      const script = "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[2]); redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2]); return 1 end return 0";
-      const recovered = Number(await redis.sendCommand(['EVAL', script, '3', record.lease.key, record.effectData.effectKey,
-        OPERATOR_EFFECT_OUTBOX_KEY, completed, String(SEND_RESULT_TTL_SECONDS), JSON.stringify(record.effectData.payload), String(Date.now())]).catch(() => 0));
-      if (recovered === 1) {
-        await removeSendWal(walPath);
-        scheduleOperatorSendEffects(record.effectData.payload, record.effectData.effectKey);
-      }
-    }
+    if (record?.phase === 'accepted') await restoreAcceptedOperatorWal(record, walPath, redis);
   }
 }
 
@@ -1096,6 +1304,7 @@ app.get('/health/detailed', async (req, res, next) => {
       tenantStorage: storage,
       openbot,
       inboundWal,
+      apiSendWal: await apiSendWalSummary().catch(() => ({ pending: -1, uncertain: -1, accepted: -1, corrupt: -1 })),
       whatsapp: {
         tenants: instances.length,
         connected,
@@ -1927,7 +2136,9 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
     // is how a real conversation disappears from the panel.
     const readFailed = gatewayRows === null && openbotRows === null;
     const historyRows = (gatewayRows && gatewayRows.length) ? gatewayRows : (openbotRows || []);
-    if (!historyRows.length) {
+    // A concurrent delete may remove the transcript while a new SOS is created.
+    // The live marker keeps that escalation reachable without restoring deleted history.
+    if (!historyRows.length && !sosByPhone.has(item.phone)) {
       if (!readFailed) stalePhones.push(item.phone);
       return;
     }
@@ -2114,11 +2325,13 @@ app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUi
     if (!walRecoveryComplete) return res.status(503).json({ error: 'SEND_RECOVERY_NOT_READY' });
     if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
     const operationStartedAt = Date.now();
+    let sosSnapshot;
 
     const effectDataFor = (response, deliveryStatus = 'sent') => ({
       instanceId,
       phone,
       expiresAt: Date.now() + OPERATOR_ACTIVE_SECONDS * 1000,
+      sosSnapshot,
       entry: {
         id: String(response?.messageId || `operator:${requestId}`),
         instanceId,
@@ -2139,7 +2352,13 @@ app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUi
     const idempotencyKey = `chatwoot:send-idempotency:${instanceId}:${phone}:${requestId}`;
     try {
       const priorWal = JSON.parse(await fs.readFile(sendWalPath(idempotencyKey), 'utf8'));
+
+      if (priorWal?.lease?.key !== idempotencyKey) return res.status(503).json({ error: 'SEND_RECOVERY_CORRUPT' });
+      if (priorWal?.lease?.payloadHash !== payloadHash) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
       if (priorWal?.phase === 'intent' || priorWal?.phase === 'ambiguous') return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
+      if (!validAcceptedOperatorWal(priorWal)) return res.status(503).json({ error: 'SEND_RECOVERY_CORRUPT' });
+      const completed = await restoreAcceptedOperatorWal(priorWal, sendWalPath(idempotencyKey));
+      return res.status(completed ? 200 : 202).json({ ...priorWal.response, replayed: true, persistencePending: !completed });
     } catch (error) {
       if (error.code !== 'ENOENT') return res.status(503).json({ error: 'SEND_RECOVERY_CORRUPT' });
     }
@@ -2156,14 +2375,20 @@ app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUi
     }
     if (!lease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
 
+    try { sosSnapshot = await sosStore.effectSnapshot(instanceId, phone); }
+    catch (error) {
+      await sendIdempotency.release(lease);
+      logOperatorSendFailure('SOS_SNAPSHOT_READ_FAILED', { lease }, error);
+      return res.status(503).json({ error: 'SEND_STATE_UNAVAILABLE' });
+    }
     let walPath;
-    const intentRecord = { phase: 'intent', lease, instanceId, phone, text, operationStartedAt };
+    const intentRecord = { phase: 'intent', lease, instanceId, phone, text, operationStartedAt, sosSnapshot };
     try {
       walPath = await writeSendWal(intentRecord);
       liveSendWalPaths.add(walPath);
     } catch (error) {
       await sendIdempotency.release(lease);
-      console.error(`[CHAT SEND WAL] ${instanceId}/${phone}:`, error?.message || error);
+      logOperatorSendFailure('INTENT_JOURNAL_FAILED', intentRecord, error);
       return res.status(507).json({ error: 'SEND_WAL_UNAVAILABLE' });
     }
 
@@ -2174,18 +2399,20 @@ app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUi
       sendResult = await sendWhatsAppText(instanceId, phone, text, { skipQueue: true });
     } catch (error) {
       liveSendWalPaths.delete(walPath);
-      await markSendWalAmbiguous(intentRecord, `transport error: ${error?.message || error}`)
-        .catch(walError => console.error('[CHAT SEND WAL] ambiguous record update failed:', walError?.message || walError));
-      console.error(`[CHAT SEND] ${instanceId}/${phone}:`, error?.message || error);
+      await markSendWalAmbiguous(intentRecord, 'TRANSPORT_ERROR')
+        .catch(walError => logOperatorSendFailure('AMBIGUOUS_JOURNAL_FAILED', intentRecord, walError));
+      logOperatorSendFailure('TRANSPORT_ERROR', intentRecord, error);
       return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
     } finally {
       clearInterval(renewTimer);
     }
-    const ok = sendResult && typeof sendResult === 'object' ? sendResult.success === true : Boolean(sendResult);
-    if (!ok && sendResult?.outcomeUnknown) {
+    const ok = isSuccessfulApiSend(sendResult);
+    const unknown = !ok && (sendResult?.outcomeUnknown === true || sendResult?.queued === true
+      || Number(sendResult?.ack) < 0 || sendResult?.attempted === true);
+    if (unknown) {
       liveSendWalPaths.delete(walPath);
-      await markSendWalAmbiguous(intentRecord, 'transport reported an unknown outcome')
-        .catch(walError => console.error('[CHAT SEND WAL] ambiguous record update failed:', walError?.message || walError));
+      await markSendWalAmbiguous(intentRecord, 'TRANSPORT_OUTCOME_UNKNOWN')
+        .catch(walError => logOperatorSendFailure('AMBIGUOUS_JOURNAL_FAILED', intentRecord, walError));
       return res.status(409).json({ error: 'SEND_OUTCOME_UNKNOWN' });
     }
     if (!ok) {
@@ -2211,13 +2438,13 @@ app.post('/api/chat/send/:instanceId/:phone', resolveChatInstance, requireChatUi
     const effectKey = `chatwoot:operator-effect:${instanceId}:${phone}:${requestId}`;
     const effectData = { effectKey, payload: effectPayload };
     try { walPath = await writeSendWal({ phase: 'accepted', lease, response: responsePayload, effectData }); }
-    catch (error) { console.error(`[CHAT SEND WAL] accepted-state update failed ${instanceId}/${phone}:`, error?.message || error); }
+    catch (error) { logOperatorSendFailure('ACCEPTED_JOURNAL_FAILED', intentRecord, error); }
     const completed = await sendIdempotency.complete(lease, responsePayload, effectData);
     if (completed) {
-      await removeSendWal(walPath).catch(error => console.error('[CHAT SEND WAL] cleanup failed:', error.message));
+      await removeSendWal(walPath).catch(error => logOperatorSendFailure('JOURNAL_CLEANUP_FAILED', intentRecord, error));
       liveSendWalPaths.delete(walPath);
     }
-    if (!completed) console.error(`[CHAT SEND] ${instanceId}/${phone}: idempotency lease ownership was lost after WhatsApp accepted the message.`);
+    if (!completed) logOperatorSendFailure('ACCEPTED_LEASE_OWNERSHIP_LOST', intentRecord);
     const effectsJob = completed
       ? scheduleOperatorSendEffects(effectPayload, effectKey)
       : scheduleSendCompletion(lease, responsePayload, effectData, walPath).finally(() => liveSendWalPaths.delete(walPath));
@@ -2263,12 +2490,11 @@ app.post('/api/chat/action/:instanceId/:phone', resolveChatInstance, requireChat
   if (!allowsPhone(await getTestModePolicy(instanceId), phone)) return res.status(403).json({ error: 'TEST_MODE_PHONE_BLOCKED' });
   if (!['view', 'close', 'archive', 'restore', 'delete'].includes(action)) return res.status(400).json({ error: 'BAD_ACTION' });
   if (!redisClient.isOpen) return res.status(503).json({ error: 'REDIS_NOT_CONNECTED' });
+  const resolvesSos = ['close', 'archive', 'delete'].includes(action);
+  const sosSnapshot = resolvesSos || action === 'view' ? await sosStore.snapshot(instanceId, phone) : undefined;
   await chatStore.applyAction(instanceId, phone, action);
-  if (action === 'view') await sosStore.acknowledge(instanceId, phone);
-  // 'close' resolves the escalation the same way 'delete' does: an archived
-  // chat must not stay pinned in the SOS column for the rest of the marker TTL
-  // (operator request, 2026-08-20).
-  if (action === 'delete' || action === 'close') await sosStore.clear(instanceId, phone);
+  if (action === 'view') await sosStore.acknowledge(instanceId, phone, sosSnapshot);
+  if (resolvesSos) await sosStore.clear(instanceId, phone, sosSnapshot);
   await publishChatEvent({ type: action === 'view' ? 'sos.acknowledged' : 'chat.action', instanceId, phone, action }).catch(() => {});
   return res.json({ success: true, instanceId, phone, action });
 });
@@ -2431,7 +2657,8 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
   let sendResult = { success: true };
   let effectiveMediaType = '';
   let audioMediaData = '';
-  let apiSendLease = null;
+  let payloadHash = '';
+  let sendOperation;
   
   // 2-ӨЗГЕРІС: Медиа жіберу логикасын қауіпсіздендіру және cleanPhone қолдану
   if (media) {
@@ -2460,58 +2687,25 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
     const mediaPayload = mimeType ? `data:${mimeType};base64,${encoded}` : encoded;
     effectiveMediaType = mimeType;
     if (mimeType.startsWith('audio/')) audioMediaData = encoded;
-    // The text branch below has had an idempotency lease since the send WAL was written; the
-    // media branch never did. So an HTTP timeout on the caller's side - Openbot retrying its
-    // own outbox - delivered the same photo or Kaspi receipt PDF to the guest twice (found
-    // 2026-08-23). Same mechanism, not a second one: the hash covers the bytes, the caption
-    // and the filename, so a retry of the same upload replays while a different photo under a
-    // reused requestId is the same 409 conflict text already gives.
-    if (requestId) {
-      const payloadHash = crypto
-        .createHash('sha256')
-        .update(`media:${mimeType}:${fileName}:${caption}:`)
-        .update(encoded)
-        .digest('hex');
-      apiSendLease = await sendIdempotency.begin(instanceId, cleanPhone, requestId, payloadHash);
-      if (apiSendLease.conflict) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
-      if (apiSendLease.response) return res.json({ ...apiSendLease.response, replayed: true });
-      if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
-    }
-    try {
-      sendResult = await sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption, { skipQueue: true });
-    } catch (error) {
-      // Mirrors the text branch: a failed send must not strand the requestId, or a
-      // legitimate retry of a message that never arrived would be refused forever.
-      if (apiSendLease) await sendIdempotency.release(apiSendLease).catch(() => {});
-      throw error;
-    }
+    payloadHash = crypto.createHash('sha256')
+      .update('media:' + mimeType + ':' + fileName + ':' + caption + ':')
+      .update(encoded).digest('hex');
+    sendOperation = () => sendMedia(instanceId, cleanPhone, mediaPayload, fileName, caption, { skipQueue: true });
   } else if (text) {
-    if (requestId) {
-      const payloadHash = crypto.createHash('sha256').update(text).digest('hex');
-      apiSendLease = await sendIdempotency.begin(instanceId, cleanPhone, requestId, payloadHash);
-      if (apiSendLease.conflict) return res.status(409).json({ error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
-      if (apiSendLease.response) return res.json({ ...apiSendLease.response, replayed: true });
-      if (!apiSendLease.acquired) return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
-    }
-    try {
-      sendResult = await sendWhatsAppText(instanceId, cleanPhone, text, { skipQueue: true });
-    } catch (error) {
-      if (apiSendLease) await sendIdempotency.release(apiSendLease).catch(() => {});
-      throw error;
-    }
+    payloadHash = crypto.createHash('sha256').update(text).digest('hex');
+    sendOperation = () => sendWhatsAppText(instanceId, cleanPhone, text, { skipQueue: true });
   } else {
     return res.status(400).json({ error: 'TEXT_OR_MEDIA_REQUIRED' });
   }
 
+  const sending = await runApiSendWithWal({ instanceId, phone: cleanPhone, requestId, payloadHash, send: sendOperation });
+  if (sending.payload) return res.status(sending.status).json(sending.payload);
+  sendResult = sending.sendResult;
   const ok = isSuccessfulApiSend(sendResult);
   const responsePayload = {
     success: ok,
     messageId: String(sendResult?.messageId || '')
   };
-  if (apiSendLease) {
-    if (ok) await sendIdempotency.complete(apiSendLease, responsePayload);
-    else await sendIdempotency.release(apiSendLease);
-  }
   if (ok && (text || media)) {
     const saved = await saveChatHistoryEntry(instanceId, cleanPhone, {
       id: sendResult?.messageId || `api:${Date.now()}:${cleanPhone}`,
@@ -2538,7 +2732,8 @@ app.post('/api/send', requireApi, apiSendJsonParser, async (req, res) => {
 });
 
 function isSuccessfulApiSend(sendResult) {
-  return sendResult === true || sendResult?.success === true;
+  return sendResult === true || (sendResult?.success === true && sendResult?.outcomeUnknown !== true
+    && sendResult?.queued !== true && !(Number(sendResult?.ack) < 0));
 }
 
 app.post('/api/presence', requireApi, async (req, res) => {
@@ -2599,9 +2794,9 @@ async function boot() {
     walRecoveryComplete = true;
   } catch (error) {
     walRecoveryComplete = false;
-    console.warn('[CHAT SEND WAL] initial recovery failed:', error.message);
+    logOperatorSendFailure('INITIAL_RECOVERY_FAILED', null, error);
   }
-  await drainOperatorEffectOutbox().catch(error => console.warn('[CHAT EFFECTS] initial drain failed:', error.message));
+  await drainOperatorEffectOutbox().catch(error => logOperatorSendFailure('INITIAL_EFFECT_DRAIN_FAILED', null, error));
   const expiryTimer = setInterval(() => {
     sweepExpiredChatIndexes().catch(error => console.warn('[CHAT EXPIRY] sweep failed:', error.message));
   }, 60000);
@@ -2609,9 +2804,9 @@ async function boot() {
   const effectTimer = setInterval(() => {
     recoverSendWal().then(() => { walRecoveryComplete = true; }).catch(error => {
       walRecoveryComplete = false;
-      console.warn('[CHAT SEND WAL] recovery failed:', error.message);
+      logOperatorSendFailure('RECOVERY_FAILED', null, error);
     });
-    drainOperatorEffectOutbox().catch(error => console.warn('[CHAT EFFECTS] drain failed:', error.message));
+    drainOperatorEffectOutbox().catch(error => logOperatorSendFailure('EFFECT_DRAIN_FAILED', null, error));
   }, 5000);
   effectTimer.unref();
   
@@ -2695,6 +2890,6 @@ module.exports = {
     cachedLegacyHistoryKeys, legacyScanCache, LEGACY_SCAN_INTERVAL_MS,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requirePlatformAdmin, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
-    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, isSuccessfulApiSend, SEND_WAL_DIR, resolveSendWalDir
+    recoverSendWal, writeSendWal, sendWalPath, apiSendWalSummary, getEntryCreatedAt, isSuccessfulApiSend, SEND_WAL_DIR, API_SEND_WAL_DIR, resolveSendWalDir
   }
 };

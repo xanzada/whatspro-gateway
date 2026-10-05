@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { operatorSosFenceLua } = require('./sosStore');
 const { redisClient } = require('../config/redis');
 const { isValidChatPhone, normalizePhone } = require('./phoneUtils');
 const { parseScoredMembers, parseFieldMap } = require('./redisReply');
@@ -200,15 +201,28 @@ function createChatStore(redis, options = {}) {
     await ensureInboxSortedSet(instanceId);
     const state = CHAT_STATES.has(options.state) ? options.state : await getState(instanceId, phone);
     const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    const hasSosSnapshot = options.sosSnapshot && typeof options.sosSnapshot === 'object';
     const script = [
       "local deletedAt = tonumber(redis.call('GET', KEYS[3]) or '0')",
       'if deletedAt >= tonumber(ARGV[3]) then return -1 end',
+
+      "local protectSos = false",
+      "if ARGV[13] == '1' then",
+      "  local sosMarkerKey = KEYS[11]; local sosActiveKey = KEYS[12]",
+      "  local sosCasePrefix = 'operator_case:' .. ARGV[16] .. ':'",
+      "  local sosInstance = ARGV[16]; local sosPhone = ARGV[4]; local sosCutoff = tonumber(ARGV[3])",
+      "  local sosHasSnapshot = ARGV[14] == '1'; local sosExpectedMarker = ARGV[15]",
+      "  local sosExpectedCanonical = ARGV[17]; local sosExpectedActive = ARGV[18]",
+      ...operatorSosFenceLua,
+      "  protectSos = sosProtected",
+      "end",
       'local targetState = ARGV[5]',
       'local ttl = ARGV[6]',
       'local expiresAt = ARGV[7]',
       "if ARGV[10] == '1' and (redis.call('GET', KEYS[5]) == 'archive' or redis.call('EXISTS', KEYS[7]) == 1) then targetState = 'archive'; ttl = ARGV[11]; expiresAt = ARGV[12] end",
       "local inserted = redis.call('SADD', KEYS[2], ARGV[1])",
       "if inserted == 1 then redis.call('RPUSH', KEYS[1], ARGV[2]); if ARGV[9] ~= '' then redis.call('SET', KEYS[9], ARGV[9], 'EX', ttl); redis.call('SADD', KEYS[10], ARGV[1]); redis.call('EXPIRE', KEYS[10], ttl) end end",
+      "if protectSos then return { inserted, redis.call('GET', KEYS[5]) or 'all', 1 } end",
       "if inserted == 0 and ARGV[8] == '1' then return { 0, redis.call('GET', KEYS[5]) or targetState } end",
       "redis.call('ZADD', KEYS[4], ARGV[3], ARGV[4])",
       "redis.call('SET', KEYS[5], targetState, 'EX', ttl)",
@@ -218,23 +232,27 @@ function createChatStore(redis, options = {}) {
       "if targetState == 'archive' then redis.call('SADD', KEYS[8], ARGV[4]); redis.call('SET', KEYS[7], ARGV[3], 'EX', ttl) else redis.call('DEL', KEYS[7]); redis.call('SREM', KEYS[8], ARGV[4]) end",
       'return { inserted, targetState }'
     ].join('\n');
-    const rawResult = await command(['EVAL', script, '10', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
+    const rawResult = await command(['EVAL', script, options.protectNewerSos ? '12' : '10', keys.history(instanceId, phone), keys.messageIds(instanceId, phone),
       keys.deleted(instanceId, phone), keys.inbox(instanceId), keys.state(instanceId, phone), keys.expiry(instanceId),
       keys.archiveMarker(instanceId, phone), keys.archive(instanceId), keys.media(instanceId, normalized.id), keys.mediaIds(instanceId, phone),
+      ...(options.protectNewerSos ? ['chatwoot:sos:' + instanceId + ':' + phone, 'operator_case_active:' + instanceId + ':' + phone] : []),
       String(normalized.id), JSON.stringify(normalized), String(normalized.createdAt), phone, state, String(ttl),
       String(now() + ttl * 1000), options.preserveStateOnDuplicate ? '1' : '0', encodedMedia,
-      options.preserveArchive ? '1' : '0', String(ARCHIVE_TTL_SECONDS), String(now() + ARCHIVE_TTL_SECONDS * 1000)]);
+      options.preserveArchive ? '1' : '0', String(ARCHIVE_TTL_SECONDS), String(now() + ARCHIVE_TTL_SECONDS * 1000),
+      options.protectNewerSos ? '1' : '0', hasSosSnapshot ? '1' : '0', options.sosSnapshot?.marker || '', instanceId,
+      options.sosSnapshot?.canonical || '', options.sosSnapshot?.active || '']);
     const result = Number(Array.isArray(rawResult) ? rawResult[0] : rawResult);
     const appliedState = Array.isArray(rawResult) ? String(rawResult[1] || state) : state;
     if (result < 0) return { ...normalized, inserted: false, stale: true };
     if (result === 1 && normalized.hasMedia && !encodedMedia) {
       console.warn(`[CHAT STORE] ${instanceId}/${phone}/${normalized.id}: media data is missing`);
     }
-    if (result === 1) {
+    const sosProtected = Array.isArray(rawResult) && Number(rawResult[2]) === 1;
+    if (result === 1 && !sosProtected) {
       const appliedTtl = appliedState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
       await applyTtl(instanceId, phone, appliedTtl, appliedState);
     }
-    return { ...normalized, state: appliedState, inserted: result === 1, stale: false };
+    return { ...normalized, state: appliedState, inserted: result === 1, stale: false, ...(sosProtected ? { sosProtected: true } : {}) };
   }
 
   async function getHistory(instanceId, rawPhone, limit = 1000) {

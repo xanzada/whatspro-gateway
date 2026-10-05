@@ -43,16 +43,16 @@ test('a poisoned intent record is retired instead of blocking every send', async
   await serverTest.recoverSendWal(redis);
   const promoted = JSON.parse(await fs.readFile(walPath, 'utf8'));
   assert.equal(promoted.phase, 'ambiguous');
-  assert.match(promoted.reason, /orphaned intent/);
+  assert.equal(promoted.reason, 'RECOVERED_ORPHAN_INTENT');
 
   // Terminal: repeated passes stay quiet and keep completing.
   await serverTest.recoverSendWal(redis);
   assert.equal(JSON.parse(await fs.readFile(walPath, 'utf8')).phase, 'ambiguous');
 
-  // Once the idempotency lease it guards is gone, the record has nothing left to protect.
+  // Expiry is not evidence of a failed send: the durable per-request guard remains.
   redis.values.delete(lease.key);
   await serverTest.recoverSendWal(redis);
-  await assert.rejects(fs.readFile(walPath, 'utf8'), error => error.code === 'ENOENT');
+  assert.equal(JSON.parse(await fs.readFile(walPath, 'utf8')).phase, 'ambiguous');
 });
 
 test('a live intent record is left alone by a concurrent recovery pass', async () => {

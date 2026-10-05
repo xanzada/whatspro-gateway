@@ -834,6 +834,29 @@ function isAuthenticationFailureReason(reason) {
     return /DISCONNECTED|LOGOUT|UNPAIRED|UNPAIRED_IDLE|AUTH[_\s-]?FAIL|AUTHENTICATION|INVALID[_\s-]?(SESSION|CREDENTIAL|AUTH)|SESSION[_\s-]?CLOSED|NOT[_\s-]?LOGGED|401|403/i.test(String(reason || ''));
 }
 
+
+const SEND_SAFE_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND',
+    'EAI_AGAIN', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT', 'SEND_OPERATION_FAILED']);
+const SEND_QUEUE_REASONS = new Set(['client_not_ready', 'client_missing', 'retry_no_chat_id', ...SEND_SAFE_CODES]);
+function sendLogReference(instanceId, phone) {
+    return crypto.createHash('sha256').update(String(instanceId) + ':' + String(phone)).digest('hex').slice(0, 16);
+}
+function safeSendErrorCode(error) {
+    return SEND_SAFE_CODES.has(error?.code) ? error.code : 'SEND_OPERATION_FAILED';
+}
+function safeSendQueueReason(reason) {
+    return SEND_QUEUE_REASONS.has(reason) ? reason : 'SEND_OPERATION_FAILED';
+}
+function logSendFailure(event, instanceId, phone, error) {
+    console.error('[WHATSAPP SEND] operation=' + sendLogReference(instanceId, phone) + ' event=' + event + ' code=' + safeSendErrorCode(error));
+}
+function transportSendOutcome(message) {
+    const ack = Number(message?.ack || 0);
+    const unknown = !message || message.success === false || message.outcomeUnknown === true || message.queued === true || ack < 0;
+    return { success: !unknown, messageId: String(message?.id?.id || ''), ack,
+        ...(unknown ? { attempted: true, outcomeUnknown: true } : {}) };
+}
+
 function queueOutgoingText(instanceId, phone, text, reason = 'client_not_ready', attempts = 0) {
     if (!text) return;
 
@@ -841,14 +864,14 @@ function queueOutgoingText(instanceId, phone, text, reason = 'client_not_ready',
     queue.push({
         phone,
         text,
-        reason,
+        reason: safeSendQueueReason(reason),
         attempts,
         createdAt: Date.now()
     });
 
     while (queue.length > OUTGOING_TEXT_QUEUE_MAX) queue.shift();
     pendingTextQueues.set(instanceId, queue);
-    console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${phone}: queued text (${reason}). pending=${queue.length}`);
+    console.warn('[WHATSAPP QUEUE] operation=' + sendLogReference(instanceId, phone) + ' event=TEXT_QUEUED reason=' + safeSendQueueReason(reason) + ' pending=' + queue.length);
 }
 
 // An operator's image or PDF used to be lost outright on a transient failure:
@@ -866,14 +889,14 @@ function queueOutgoingMedia(instanceId, phone, media, reason = 'client_not_ready
             fileName: media.fileName || '',
             caption: media.caption || ''
         },
-        reason,
+        reason: safeSendQueueReason(reason),
         attempts,
         createdAt: Date.now()
     });
 
     while (queue.length > OUTGOING_TEXT_QUEUE_MAX) queue.shift();
     pendingTextQueues.set(instanceId, queue);
-    console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${phone}: queued media (${reason}). pending=${queue.length}`);
+    console.warn('[WHATSAPP QUEUE] operation=' + sendLogReference(instanceId, phone) + ' event=MEDIA_QUEUED reason=' + safeSendQueueReason(reason) + ' pending=' + queue.length);
 }
 
 function scheduleFlush(instanceId, delayMs = 1000) {
@@ -883,7 +906,7 @@ function scheduleFlush(instanceId, delayMs = 1000) {
     flushTimers.set(instanceId, setTimeout(() => {
         flushTimers.delete(instanceId);
         flushPendingOutgoingText(instanceId).catch(error => {
-            console.error(`[WHATSAPP QUEUE] ${instanceId} flush failed:`, error.message);
+            logSendFailure('QUEUE_FLUSH_FAILED', instanceId, '', error);
         });
     }, delayMs));
 }
@@ -948,7 +971,7 @@ function purgeExpiredOutgoingText(instanceId) {
     const now = Date.now();
     const alive = queue.filter(item => {
         if (now - item.createdAt <= OUTGOING_TEXT_QUEUE_TTL_MS) return true;
-        console.warn(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: dropped expired ${item.media ? 'media' : 'text'} (${item.reason}).`);
+        console.warn('[WHATSAPP QUEUE] operation=' + sendLogReference(instanceId, item.phone) + ' event=EXPIRED reason=' + safeSendQueueReason(item.reason));
         return false;
     });
 
@@ -2167,12 +2190,9 @@ async function deliverWhatsAppText(client, instanceId, phone, text) {
         error.sendAttempted = true;
         throw error;
     }
-    console.log(`📤 [SENT] ${instanceId} -> ${chatId}: Хат сәтті жіберілді.`);
-    return {
-        success: true,
-        messageId: String(message?.id?.id || ''),
-        ack: Number(message?.ack || 0)
-    };
+    const result = transportSendOutcome(message);
+    console.log('[WHATSAPP SEND] operation=' + sendLogReference(instanceId, phone) + ' event=' + (result.success ? 'ACCEPTED' : 'OUTCOME_UNKNOWN'));
+    return result;
 }
 
 
@@ -3006,9 +3026,9 @@ async function flushPendingOutgoingText(instanceId) {
                 retry.push({ ...item, attempts: item.attempts + 1, reason: 'retry_no_chat_id' });
             }
         } catch (error) {
-            console.error(`[WHATSAPP QUEUE] ${instanceId} -> ${item.phone}: retry send failed:`, error.message);
+            logSendFailure('QUEUE_RETRY_FAILED', instanceId, item.phone, error);
             if (item.attempts < 3) {
-                retry.push({ ...item, attempts: item.attempts + 1, reason: error.message });
+                retry.push({ ...item, attempts: item.attempts + 1, reason: safeSendErrorCode(error) });
             }
         }
 
@@ -3037,7 +3057,7 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
     try {
         const client = await getReadyClient(instanceId);
         if (!client) {
-            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendWhatsAppText skipped because client is not initialized.`);
+            logSendFailure('CLIENT_MISSING', instanceId, phone);
             if (!options.skipQueue) {
                 queueOutgoingText(instanceId, phone, text, 'client_missing');
                 requestReconnect(instanceId, 'outgoing_text_client_missing');
@@ -3049,13 +3069,13 @@ async function sendWhatsAppText(instanceId, phone, text, options = {}) {
         const result = await deliverWhatsAppText(client, instanceId, phone, text);
         return result || (options.skipQueue ? { success: false, attempted: false } : false);
     } catch (error) {
-        console.error(`❌ [SEND ERROR] ${instanceId} -> ${phone}:`, error.message);
+        logSendFailure('TEXT_SEND_FAILED', instanceId, phone, error);
         if (options.skipQueue) {
             const attempted = error?.sendAttempted === true;
-            return { success: false, attempted, outcomeUnknown: attempted, error: error.message };
+            return { success: false, attempted, outcomeUnknown: attempted, error: safeSendErrorCode(error) };
         }
         if (!options.skipQueue) {
-            queueOutgoingText(instanceId, phone, text, error.message);
+            queueOutgoingText(instanceId, phone, text, safeSendErrorCode(error));
             scheduleFlush(instanceId, 5000);
         }
         return false;
@@ -3100,18 +3120,14 @@ async function deliverWhatsAppMedia(client, instanceId, phone, base64Data, fileN
         throw error;
     }
 
-    return {
-        success: true,
-        messageId: String(message?.id?.id || ''),
-        ack: Number(message?.ack || 0)
-    };
+    return transportSendOutcome(message);
 }
 
 async function sendMedia(instanceId, phone, base64Data, fileName, caption, options = {}) {
     try {
         const client = await getReadyClient(instanceId);
         if (!client) {
-            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendMedia queued because client is not initialized.`);
+            logSendFailure('CLIENT_MISSING', instanceId, phone);
             if (!options.skipQueue) {
                 queueOutgoingMedia(instanceId, phone, { base64Data, fileName, caption }, 'client_missing');
                 requestReconnect(instanceId, 'outgoing_media_client_missing');
@@ -3123,13 +3139,17 @@ async function sendMedia(instanceId, phone, base64Data, fileName, caption, optio
         const result = await deliverWhatsAppMedia(client, instanceId, phone, base64Data, fileName, caption);
         return result || false;
     } catch (error) {
-        console.error(`❌ [MEDIA ERROR] ${instanceId}:`, error.message);
+        logSendFailure('MEDIA_SEND_FAILED', instanceId, phone, error);
         // An operator's image or receipt used to be dropped here. It goes back on
         // the same queue text uses, so a transient failure costs a delay and not
         // the file.
         if (!options.skipQueue) {
-            queueOutgoingMedia(instanceId, phone, { base64Data, fileName, caption }, error.message);
+            queueOutgoingMedia(instanceId, phone, { base64Data, fileName, caption }, safeSendErrorCode(error));
             scheduleFlush(instanceId, 5000);
+        }
+        if (options.skipQueue) {
+            const attempted = error?.sendAttempted === true;
+            return { success: false, attempted, outcomeUnknown: attempted };
         }
         return false;
     }
