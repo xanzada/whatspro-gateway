@@ -426,3 +426,29 @@ test('malformed matching revisions never authorize canonical SOS closure', { ski
   assert.equal(await real.get(activeKey()), 'oc_malformed_revision'); assert.equal(await real.get(unreadKey()), 'signal-malformed');
 });
 
+test('protected old reply bounds newly created history/dedup TTL while preserving newer SOS', { skip: !enabled }, async () => {
+  const {item}=await seed();const now=Date.now();
+  const entry=await chatStore.appendMessageOnce(instance,phone,{id:'old-protected-retention',text:'synthetic accepted reply',role:'operator',source:'operator_panel',createdAt:now-10000},{state:'operator',protectNewerSos:true,preserveArchive:true});
+  assert.equal(entry.sosProtected,true);
+  assert.ok(await real.ttl(historyKey())>0);assert.ok(await real.ttl(historyKey())<=86400);
+  assert.ok(await real.ttl('chatwoot:message-ids:'+instance+':'+phone)>0);
+  assert.equal((await json(caseKey(item.id))).status,'open');assert.ok(await real.get(markerKey()));
+});
+test('protected old reply preserves archive/history retention and bounds new media by remaining retention', { skip: !enabled }, async () => {
+  await seed();const now=Date.now();
+  const state='chatwoot:state:'+instance+':'+phone,archive='chatwoot:archive:'+instance+':'+phone;
+  const dedup='chatwoot:message-ids:'+instance+':'+phone,mediaIds='chatwoot:media-ids:'+instance+':'+phone;
+  await real.multi().set(state,'archive',{EX:600}).set(archive,String(now-20000),{EX:600})
+    .rPush(historyKey(),'synthetic archived history').expire(historyKey(),600).sAdd(dedup,'archived-entry').expire(dedup,600)
+    .sAdd(mediaIds,'old-media').expire(mediaIds,400).exec();
+  const historyTtl=await real.ttl(historyKey()),dedupTtl=await real.ttl(dedup),stateTtl=await real.ttl(state),archiveTtl=await real.ttl(archive),mediaIdsTtl=await real.ttl(mediaIds);
+  const entry=await chatStore.appendMessageOnce(instance,phone,{id:'old-protected-media',text:'synthetic accepted attachment',role:'operator',source:'operator_panel',createdAt:now-10000,mediaData:'aGVsbG8=',mediaType:'image/png'},{state:'operator',protectNewerSos:true,preserveArchive:true});
+  assert.equal(entry.sosProtected,true);assert.equal(await real.get(state),'archive');
+  for(const [key,prior] of [[historyKey(),historyTtl],[dedup,dedupTtl],[state,stateTtl],[archive,archiveTtl]]) {
+    const ttl=await real.ttl(key);assert.ok(ttl>0 && ttl<=prior && ttl>=prior-2,key+' retained TTL');
+  }
+  assert.ok(await real.ttl('chatwoot:media:'+instance+':old-protected-media')>0);
+  assert.ok(await real.ttl('chatwoot:media:'+instance+':old-protected-media')<=mediaIdsTtl);
+  assert.ok(await real.ttl(mediaIds)<=mediaIdsTtl,'existing media retention is not extended by stale effect');
+  assert.ok(await real.get(markerKey()));assert.equal(await real.zScore('chatwoot:inbox:'+instance,phone),null);
+});
