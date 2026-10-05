@@ -230,7 +230,7 @@
 
   async function renderPdfInto(container, bytes) {
     var lib = await loadPdfjs();
-    var doc = await lib.getDocument({ data: new Uint8Array(bytes) }).promise;
+    var doc = await lib.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false }).promise;
     container.textContent = '';
     var width = container.clientWidth || 900;
     var pages = Math.min(doc.numPages, 40);
