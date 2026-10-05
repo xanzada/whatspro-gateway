@@ -1412,14 +1412,14 @@ async function getPhoneFromLid(client, values = [], instanceId = '') {
         ]);
 
         if (phone) {
-            console.log(`✅ [LID RESOLVER] ${lid} -> ${phone}@c.us`);
+            console.log('[LID RESOLVER] operation=' + sendLogReference(instanceId, lid) + ' event=PHONE_RESOLVED');
             // Persist the mapping: later messages and every panel read path
             // resolve this lid even when the live lookup times out.
             if (instanceId) rememberLidPhone(instanceId, lid, phone).catch(() => {});
         }
         return phone;
     } catch (error) {
-        console.warn(`⚠️ [LID RESOLVER] ${lid} -> phone табылмады:`, error.message);
+        logSendFailure('LID_LOOKUP_FAILED', instanceId, lid, error);
         return '';
     }
 }
@@ -1749,9 +1749,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 ttl: OPERATOR_ACTIVE_SECONDS,
                 expiresAt: Date.now() + OPERATOR_ACTIVE_SECONDS * 1000
             });
-            console.log(`[OPERATOR LOCK] ${instanceId} -> ${phone}: direct WhatsApp reply activated handoff lock.`);
+            console.log('[OPERATOR LOCK] operation=' + sendLogReference(instanceId, phone) + ' event=HANDOFF_ACTIVATED');
         } catch (error) {
-            console.error(`[OPERATOR LOCK] ${instanceId} message_create failed:`, error.message);
+            logSendFailure('OPERATOR_MESSAGE_FAILED', instanceId, msg?.to || msg?._data?.id?.remote || '', error);
         }
     });
 
@@ -2231,7 +2231,7 @@ function claimCall(instanceId, callId, source) {
     const key = `${instanceId}:${callId || `anon-${Math.floor(now / 1000)}`}`;
     const claimedAt = seenCallIds.get(key);
     if (claimedAt !== undefined) {
-        console.log(`[WHATSAPP CALL] ${instanceId}: ${callId || '(no id)'} already handled ${now - claimedAt}ms ago, ignoring duplicate from ${source}`);
+        console.log('[WHATSAPP CALL] operation=' + sendLogReference(instanceId, callId) + ' event=DUPLICATE_IGNORED ageMs=' + (now - claimedAt));
         return false;
     }
     seenCallIds.set(key, now);
@@ -2243,7 +2243,7 @@ function dispatchIncomingCall(instanceId, client, call, source, overrides) {
     // Outgoing calls are filtered downstream too, but claiming one here would
     // make the real incoming call that follows look like a duplicate.
     if (call?.fromMe || call?.outgoing) {
-        console.log(`[WHATSAPP CALL] ${instanceId}: outgoing call ${callId || '(no id)'} from ${source}, ignoring`);
+        console.log('[WHATSAPP CALL] operation=' + sendLogReference(instanceId, callId) + ' event=OUTGOING_IGNORED');
         return Promise.resolve();
     }
     if (!claimCall(instanceId, callId, source)) return Promise.resolve();
@@ -2254,7 +2254,7 @@ function dispatchIncomingCall(instanceId, client, call, source, overrides) {
     const options = overrides
         || (source === 'call_log' ? { rejectCall: async () => false } : undefined);
     return handleIncomingCall(instanceId, client, call, options).catch(error => {
-        console.error(`[WHATSAPP CALL] ${instanceId} (source=${source}):`, error.message);
+        logSendFailure('CALL_DISPATCH_FAILED', instanceId, callId, error);
     });
 }
 
@@ -2368,14 +2368,17 @@ async function watchWppIncomingCalls(instanceId, client) {
     try {
         await page.exposeFunction(BINDING, payload => {
             const source = payload?.via === 'callstore' ? 'callstore' : (payload?.via === 'call_log' ? 'call_log' : 'wa-js');
-            console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${source}) ->`, JSON.stringify(payload));
+            console.log('[WHATSAPP CALL] operation=' + sendLogReference(instanceId, payload?.id || payload?.from || '')
+                + ' source=' + source + ' event=INCOMING_OBSERVED hasId=' + Boolean(payload?.id)
+                + ' hasFrom=' + Boolean(payload?.from) + ' isVideo=' + (payload?.isVideo === true)
+                + ' isGroup=' + (payload?.isGroup === true));
             void dispatchIncomingCall(instanceId, client, payload, source);
         });
     } catch (error) {
         // Already exposed from an earlier load of this same page: harmless.
         if (!/already exists|has been already registered/i.test(error.message || '')) {
             wppCallWatchers.delete(page);
-            console.warn(`[WHATSAPP CALL] ${instanceId}: wa-js call binding failed: ${error.message}`);
+            logSendFailure('CALL_BINDING_FAILED', instanceId, '', error);
             return false;
         }
     }
@@ -2461,7 +2464,7 @@ async function watchWppIncomingCalls(instanceId, client) {
     }, BINDING);
 
     const hooked = await subscribe().catch(err => {
-        console.warn(`[WHATSAPP CALL] ${instanceId}: wa-js call subscribe failed: ${err?.message || err}`);
+        logSendFailure('CALL_SUBSCRIBE_FAILED', instanceId, '', err);
         return false;
     });
     console.log(`[WHATSAPP CALL] ${instanceId}: wa-js incoming_call listener ${hooked ? 'attached' : 'not attached'}`);
@@ -2870,9 +2873,8 @@ async function resolveCallPhone(client, call, knownPhone = '') {
     if (typeof client?.getContactById !== 'function') return '';
     const contact = await withTimeout(client.getContactById(rawJid), 3000, 'CALL_CONTACT_LOOKUP_TIMEOUT').catch(() => null);
     
-    console.log(`[WHATSAPP CALL] getContactById(${rawJid}) returned:`, contact ? JSON.stringify({
-        id: contact.id, number: contact.number, isMe: contact.isMe, isUser: contact.isUser
-    }) : 'null');
+    console.log('[WHATSAPP CALL] operation=' + sendLogReference('', rawJid) + ' event=CONTACT_LOOKUP'
+        + ' found=' + Boolean(contact) + ' isMe=' + (contact?.isMe === true) + ' isUser=' + (contact?.isUser === true));
     
     const resolved = normalizePhoneFromCandidates([
         contact?.number,
@@ -3160,7 +3162,7 @@ async function markAsRead(instanceId, phone) {
     try {
         const client = await getReadyClient(instanceId);
         if (!client) {
-            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: markAsRead skipped because client is not initialized.`);
+            logSendFailure('READ_CLIENT_MISSING', instanceId, phone);
             return false;
         }
         const chatId = toWhatsAppChatId(phone, jidMap);
@@ -3169,7 +3171,7 @@ async function markAsRead(instanceId, phone) {
         await chat.sendSeen();
         return true;
     } catch (error) {
-        console.error(`[MARK AS READ ERROR] ${instanceId} -> ${phone}:`, error.message);
+        logSendFailure('MARK_READ_FAILED', instanceId, phone, error);
         return false;
     }
 }
@@ -3179,7 +3181,7 @@ async function sendPresence(instanceId, phone, state = 'typing') {
     try {
         const client = clients.get(instanceId);
         if (!client) {
-            console.error(`[WHATSAPP CLIENT MISSING] ${instanceId}: sendPresence skipped because client is not initialized.`);
+            logSendFailure('PRESENCE_CLIENT_MISSING', instanceId, phone);
             return false;
         }
         const chatId = toWhatsAppChatId(phone, jidMap);
@@ -3194,7 +3196,7 @@ async function sendPresence(instanceId, phone, state = 'typing') {
         await chat.sendStateTyping();
         return true;
     } catch (error) {
-        console.error(`[PRESENCE ERROR] ${instanceId} -> ${phone}:`, error.message);
+        logSendFailure('PRESENCE_FAILED', instanceId, phone, error);
         return false;
     }
 }

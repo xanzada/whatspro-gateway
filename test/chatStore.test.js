@@ -510,11 +510,17 @@ test('idempotent append warns when media metadata has no payload', async t => {
   const warnings = [];
   t.mock.method(console, 'warn', message => warnings.push(String(message)));
   const store = createChatStore(new FakeRedis(), { now: () => 1_700_000_000_000 });
-  await store.appendMessageOnce('tenant-warning', '77001234567', {
+  const appended = await store.appendMessageOnce('tenant-warning', '77001234567', {
     id: 'voice-missing', type: 'ptt', hasMedia: true, mediaType: 'audio/ogg', createdAt: 1_700_000_000_000
   }, { state: 'new' });
+  assert.equal(appended.inserted, true); assert.equal(appended.hasMedia, true);
+  const history = await store.getHistory('tenant-warning', '77001234567');
+  assert.equal(history.length, 1); assert.equal(history[0].id, 'voice-missing');
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /tenant-warning\/77001234567\/voice-missing.*media data is missing/i);
+  assert.match(warnings[0], /^\[CHAT STORE\] operation=[a-f0-9]{16} code=MEDIA_DATA_MISSING media data is missing$/);
+  for (const value of ['tenant-warning', '77001234567', 'voice-missing', 'SYNTHETIC_PRIVATE_BODY']) {
+    assert.equal(warnings[0].includes(value), false, 'diagnostic must omit private identity/body');
+  }
 });
 
 test('incoming duplicate preserves archive state and inbox ordering', async () => {

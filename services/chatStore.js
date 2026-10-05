@@ -255,7 +255,8 @@ function createChatStore(redis, options = {}) {
     const appliedState = Array.isArray(rawResult) ? String(rawResult[1] || state) : state;
     if (result < 0) return { ...normalized, inserted: false, stale: true };
     if (result === 1 && normalized.hasMedia && !encodedMedia) {
-      console.warn(`[CHAT STORE] ${instanceId}/${phone}/${normalized.id}: media data is missing`);
+      const operation = crypto.createHash('sha256').update(instanceId + ':' + phone + ':' + normalized.id).digest('hex').slice(0, 16);
+      console.warn('[CHAT STORE] operation=' + operation + ' code=MEDIA_DATA_MISSING media data is missing');
     }
     const sosProtected = Array.isArray(rawResult) && Number(rawResult[2]) === 1;
     if (result === 1 && !sosProtected) {
