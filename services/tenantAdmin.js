@@ -368,6 +368,7 @@ function contactPolicyPayload(input = {}, existing = null) {
 }
 
 async function createTenant(input, options = {}) {
+  if (input.callsDisabled !== undefined) requireCallsDisabledBoolean(input.callsDisabled);
   const misnamed = rejectedFieldNames(input);
   if (misnamed.length) throw unknownFieldError(misnamed);
   const fields = operatorFields(input);
@@ -418,6 +419,7 @@ function mergeExisting(instanceId, input = {}, existing = {}) {
 }
 
 async function updateTenant(instanceId, input, options = {}) {
+  if (input.callsDisabled !== undefined) requireCallsDisabledBoolean(input.callsDisabled);
   const existing = await findRow(instanceId);
   if (!existing) {
     const error = new Error('TENANT_NOT_FOUND');
@@ -566,7 +568,17 @@ async function setBotEnabled(instanceId, enabled) {
   return { instanceId, botEnabled: Boolean(enabled) };
 }
 
+function requireCallsDisabledBoolean(disabled) {
+  if (typeof disabled !== 'boolean') {
+    const error = new Error('CALLS_DISABLED_BOOLEAN_REQUIRED');
+    error.statusCode = 400;
+    throw error;
+  }
+  return disabled;
+}
+
 async function setCallsDisabled(instanceId, disabled) {
+  requireCallsDisabledBoolean(disabled);
   const existing = await findRow(instanceId);
   if (!existing) {
     const error = new Error('TENANT_NOT_FOUND');

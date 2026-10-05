@@ -1906,7 +1906,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
     });
 
     client.on('call', call => {
-        console.log(`[WHATSAPP CALL RAW] ${instanceId} (source=${transport}) ->`, typeof call === 'object' ? JSON.stringify(call) : String(call));
+        console.log(`[WHATSAPP CALL] ${instanceId}: source=${transport} status=${String(call?.status || 'offer')} hasId=${Boolean(call?.id)} outgoing=${Boolean(call?.fromMe || call?.outgoing)}`);
         if (transport === 'baileys') {
             // The offer arrives while the phone is still ringing and the reject
             // goes back over the same socket, so the four-source detection stack
@@ -2864,17 +2864,60 @@ async function resolveCallPhone(client, call, knownPhone = '') {
     return resolved;
 }
 
-const CALL_REJECTION_TEXT = 'Сәлеметсіз бе! 👋 Кешіріңіз, қоңырауды қабылдай алмаймыз 🙏 Сізге қалай көмектесе аламыз? Сұрағыңызды осы жерге хабарлама түрінде жазыңыз — жауап береміз! 😊';
+const CALL_CONFIG_TIMEOUT_MS = 500;
+const CALL_SOCKET_REJECT_TIMEOUT_MS = 2000;
+const CALL_CONTEXT_TIMEOUT_MS = 250;
+const CALL_REJECTION_TEXT = {
+    kk: 'Қоңырауға жауап бере алмаймыз. Сұрағыңызды осы жерге жаза аласыз 🙂',
+    ru: 'Мы не можем ответить на звонок. Напишите, пожалуйста, сюда 🙂'
+};
+
+function maskCallPhone(phone) {
+    return String(phone || '').replace(/.(?=.{4})/g, '*');
+}
+
+function callLanguageFromHistory(history, fallback) {
+    const incoming = (Array.isArray(history) ? history : [])
+        .filter(entry => entry?.direction !== 'outgoing' && entry?.fromMe !== true
+            && !['assistant', 'model', 'bot', 'operator'].includes(String(entry?.role || '').toLowerCase()))
+        .sort((a, b) => Number(b.createdAt || b.timestamp || 0) - Number(a.createdAt || a.timestamp || 0));
+    for (const entry of incoming) {
+        const text = String(entry?.text || entry?.body || '').trim();
+        if (/[әғқңөұүһі]/i.test(text) || /(?:^|\s)(?:салем|керек|рахмет|бар ма|salem|kerek|rakhmet|rahmet)(?:\s|[?.!]|$)/i.test(text)) return 'kk';
+        if (/[а-яё]/i.test(text)) return 'ru';
+    }
+    return /^ru(?:[-_]|$)/i.test(String(fallback || '')) ? 'ru' : 'kk';
+}
+
+async function callReplyLanguage(instanceId, phone, tenantRow, dependencies) {
+    // OpenBot's resolved customer language is shared, tenant+phone scoped.
+    // Read only after rejection so context cannot keep a disabled call ringing.
+    const storedLanguage = await withTimeout(Promise.resolve().then(() => dependencies.getStoredLanguage
+        ? dependencies.getStoredLanguage(instanceId, phone)
+        : redisClient.sendCommand(['GET', `lang:${instanceId}:${phone}`])),
+    CALL_CONTEXT_TIMEOUT_MS, 'CALL_LANGUAGE_TIMEOUT').catch(() => null);
+    if (storedLanguage === 'kk' || storedLanguage === 'ru') return storedLanguage;
+    const history = await withTimeout(Promise.resolve().then(async () => {
+        if (dependencies.getHistory) return dependencies.getHistory(instanceId, phone);
+        const raw = await redisClient.sendCommand(['LRANGE', `chatwoot:history:${instanceId}:${phone}`, '-12', '-1']);
+        return (Array.isArray(raw) ? raw : []).flatMap(value => {
+            try { const entry = JSON.parse(value); return entry && typeof entry === 'object' ? [entry] : []; }
+            catch { return []; }
+        });
+    }), CALL_CONTEXT_TIMEOUT_MS, 'CALL_HISTORY_TIMEOUT').catch(() => []);
+    return callLanguageFromHistory(history, tenantRow?.locale || tenantRow?.language);
+}
 
 async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
-    if (call?.fromMe === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
+    if (call?.fromMe === true || call?.outgoing === true) return { rejected: false, replied: false, phone: '', reason: 'outgoing_call' };
 
     const admin = dependencies.tenantAdmin || require('./tenantAdmin');
-    const tenantRow = await admin.findRow(instanceId).catch(() => null);
+    const tenantRow = await withTimeout(Promise.resolve().then(() => admin.findRow(instanceId)),
+        CALL_CONFIG_TIMEOUT_MS, 'CALL_CONFIG_TIMEOUT').catch(() => null);
     // Rejecting is the default. A tenant with no row yet, or a row written
     // before this column existed, is a tenant nobody has staffed for phone
     // calls — letting those ring through is the worse failure.
-    const callsDisabled = tenantRow?.calls_disabled === undefined || tenantRow?.calls_disabled === null ? true : Boolean(tenantRow.calls_disabled);
+    const callsDisabled = tenantRow?.calls_disabled !== false;
 
     if (callsDisabled) {
         console.log(`[WHATSAPP CALL] ${instanceId}: calls are disabled by configuration, rejecting and sending message.`);
@@ -2882,7 +2925,13 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
         const rejectCall = dependencies.rejectCall || rejectIncomingCallReliably;
         let rejected = false;
         try {
-            rejected = (await rejectCall(client, call)) === true;
+            // The Baileys stanza is attempted once; a stuck socket cannot hold
+            // the explanatory reply forever. The Chromium rollback ladder already
+            // bounds its individual operations and retains its existing behavior.
+            const rejecting = Promise.resolve().then(() => rejectCall(client, call));
+            rejected = (await (dependencies.rejectCall || call?.canHandleLocally
+                ? withTimeout(rejecting, CALL_SOCKET_REJECT_TIMEOUT_MS, 'CALL_SOCKET_REJECT_TIMEOUT')
+                : rejecting)) === true;
         } catch (error) {
             console.warn(`[WHATSAPP CALL] ${instanceId}: call rejection threw: ${error.message}`);
         }
@@ -2894,7 +2943,11 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
             console.warn(`[WHATSAPP CALL] ${instanceId}: rejection unconfirmed, replying anyway so the caller is not left silent.`);
         }
 
-        const policy = await (dependencies.getTestModePolicy || getTestModePolicy)(instanceId);
+        const policy = await withTimeout(Promise.resolve().then(() => dependencies.getTestModePolicy
+            ? dependencies.getTestModePolicy(instanceId)
+            : getTestModePolicy(instanceId, { findRow: async () => tenantRow })),
+        CALL_CONFIG_TIMEOUT_MS, 'CALL_POLICY_TIMEOUT').catch(() => null);
+        if (!policy) return { rejected, replied: false, phone: '', reason: 'policy_unavailable' };
         const resolvePhone = dependencies.resolvePhone || resolveCallPhone;
         const phone = await resolvePhone(client, call, policy.enabled ? (policy.devPhones?.length ? policy.devPhones : policy.devPhone) : '');
         if (!isValidChatPhone(phone)) {
@@ -2906,18 +2959,20 @@ async function handleIncomingCall(instanceId, client, call, dependencies = {}) {
             ? await dependencies.isPhoneAllowed(instanceId, phone)
             : allowsPhone(policy, phone);
         if (!allowed) {
-            console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: no reply, blocked by test-mode policy.`);
+            console.log(`[WHATSAPP CALL] ${instanceId} -> ${maskCallPhone(phone)}: no reply, blocked by test-mode policy.`);
             return { rejected, replied: false, phone, reason: 'test_mode_blocked' };
         }
 
+        const language = await callReplyLanguage(instanceId, phone, tenantRow, dependencies);
         const deliverText = dependencies.deliverText || deliverWhatsAppText;
-        const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT)
+        const sent = await deliverText(client, instanceId, phone, CALL_REJECTION_TEXT[language])
             .catch(error => {
-                console.error(`[WHATSAPP CALL] ${instanceId} -> ${phone}: greeting delivery failed: ${error.message}`);
+                console.error(`[WHATSAPP CALL] ${instanceId} -> ${maskCallPhone(phone)}: greeting delivery failed.`);
                 return null;
             });
-        console.log(`[WHATSAPP CALL] ${instanceId} -> ${phone}: rejected=${rejected} replied=${Boolean(sent)}`);
-        return { rejected, replied: Boolean(sent), phone };
+        const replied = sent === true || (sent?.success === true && !(Number(sent?.ack) < 0));
+        console.log(`[WHATSAPP CALL] ${instanceId} -> ${maskCallPhone(phone)}: rejected=${rejected} replied=${replied}`);
+        return { rejected, replied, phone };
     }
 
     console.log(`[WHATSAPP CALL] ${instanceId}: calls are enabled, allowing call to proceed.`);

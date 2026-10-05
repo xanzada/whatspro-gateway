@@ -8,6 +8,7 @@ services:
     environment:
       - REDIS_URL=${REDIS_URL:?REDIS_URL must point to the shared OpenBot Redis}
       - NODE_ENV=production
+      - WHATSPRO_SEND_WAL_DIR=/app/whatsapp_auth/.send-wal
     volumes:
       - whatsapp_auth:/app/whatsapp_auth
     networks:

@@ -666,7 +666,7 @@ class BaileysClient extends EventEmitter {
                     timestamp: event.date instanceof Date
                         ? Math.floor(event.date.getTime() / 1000)
                         : Math.floor(Date.now() / 1000),
-                    reject: () => this.rejectCall(id, from)
+                    reject: () => this.rejectCall(id, from, sock)
                 };
                 this._safeEmit('call', call);
             } catch (error) {
@@ -677,12 +677,12 @@ class BaileysClient extends EventEmitter {
 
     // Rejecting over the socket that saw the offer is the whole point, and
     // Baileys needs both ids.
-    async rejectCall(callId, from) {
+    async rejectCall(callId, from, sock = this._sock) {
         const id = String(callId || '');
         const peer = stripDevice(from || '');
         if (!id || !peer) return false;
-        if (typeof this._sock?.rejectCall !== 'function') return false;
-        await this._sock.rejectCall(id, peer);
+        if (typeof sock?.rejectCall !== 'function') return false;
+        await sock.rejectCall(id, peer);
         return true;
     }
 

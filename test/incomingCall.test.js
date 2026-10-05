@@ -44,8 +44,7 @@ test('a disabled tenant rejects the call and greets the caller', async () => {
 
   assert.deepEqual(result, { rejected: true, replied: true, phone: '77476884956' });
   assert.equal(delivered.length, 1);
-  assert.match(delivered[0].text, /Сәлеметсіз бе/);
-  assert.match(delivered[0].text, /хабарлама/i);
+  assert.equal(delivered[0].text, 'Қоңырауға жауап бере алмаймыз. Сұрағыңызды осы жерге жаза аласыз 🙂');
 });
 
 test('an enabled tenant lets the call ring through untouched', async () => {

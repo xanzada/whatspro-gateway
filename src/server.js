@@ -85,7 +85,10 @@ let walRecoveryComplete = false;
 const SEND_LEASE_TTL_SECONDS = 24 * 60 * 60;
 const SEND_RESULT_TTL_SECONDS = 24 * 60 * 60;
 const OPERATOR_EFFECT_OUTBOX_KEY = 'chatwoot:operator-effects-outbox';
-const SEND_WAL_DIR = path.resolve(process.env.WHATSPRO_SEND_WAL_DIR || path.join(process.cwd(), '.whatspro-send-wal'));
+function resolveSendWalDir(env = process.env, cwd = process.cwd()) {
+  return path.resolve(env.WHATSPRO_SEND_WAL_DIR || path.join(env.WHATSAPP_AUTH_PATH || path.join(cwd, 'whatsapp_auth'), '.send-wal'));
+}
+const SEND_WAL_DIR = resolveSendWalDir();
 
 function isValidSendRequestId(value) {
   return /^[A-Za-z0-9_-]{8,128}$/.test(String(value || ''));
@@ -1741,7 +1744,7 @@ app.post('/api/wa/tenants/:instanceId/calls-disabled', requireUiOrApi, async (re
   const instanceId = String(req.params.instanceId || '').trim();
   if (!isValidInstanceId(instanceId)) return res.status(400).json({ error: 'BAD_INSTANCE_ID' });
   try {
-    res.json({ success: true, ...(await tenantAdmin.setCallsDisabled(instanceId, Boolean(req.body?.disabled))) });
+    res.json({ success: true, ...(await tenantAdmin.setCallsDisabled(instanceId, req.body?.disabled)) });
   } catch (error) {
     return adminError(res, error);
   }
@@ -2692,6 +2695,6 @@ module.exports = {
     cachedLegacyHistoryKeys, legacyScanCache, LEGACY_SCAN_INTERVAL_MS,
     hasApiToken, requireApi, requireMasterApi, requireUiOrApi, requirePlatformAdmin, requireChatUiOrApi, requestedInstanceId, withinApiScope,
     issueConnectToken, readConnectToken, signSession,
-    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, isSuccessfulApiSend, SEND_WAL_DIR
+    recoverSendWal, writeSendWal, sendWalPath, getEntryCreatedAt, isSuccessfulApiSend, SEND_WAL_DIR, resolveSendWalDir
   }
 };
