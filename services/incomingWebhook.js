@@ -8,6 +8,7 @@ const {
   enqueueIncoming,
   listIncoming,
   updateIncoming,
+  readIncomingState,
   safeIncomingErrorCode,
   safeIncomingLastError,
   incomingLogReference,
@@ -303,6 +304,7 @@ async function forwardIncomingWhatsAppMessage(payload) {
     }
   } catch (error) {
     logIncomingFailure('ENQUEUE_FAILED', { payload }, error);
+    if (error.preventVolatileDelivery) throw error;
     record = {
       id: `volatile:${Date.now()}`,
       payload,
@@ -328,6 +330,12 @@ async function processIncomingRecord(record, dependencies = {}) {
   activeWalRecords.add(record.id);
   const started = Date.now();
   try {
+    if (!String(record.id).startsWith('volatile:')) {
+      const state = await readIncomingState(record.id);
+      if (state?.pendingRedis === false) record.pendingRedis = false;
+      if (state?.pendingOpenBot === false) record.pendingOpenBot = false;
+      record.attempts = Math.max(Number(record.attempts || 0), Number(state?.attempts || 0));
+    }
     record.lastError = safeIncomingLastError(record.lastError);
     if (record.pendingRedis) {
       try {
@@ -371,7 +379,10 @@ async function processIncomingRecord(record, dependencies = {}) {
 
 async function drainIncomingWal(limit = 25) {
   const records = await listIncoming(limit);
-  for (const record of records) await processIncomingRecord(record);
+  for (const record of records) {
+    try { await processIncomingRecord(record); }
+    catch (error) { logIncomingFailure('RECORD_DRAIN_FAILED', record, error); }
+  }
   return records.length;
 }
 
