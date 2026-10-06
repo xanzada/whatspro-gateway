@@ -7,7 +7,11 @@ const { isPhoneAllowed } = require('./testModePolicy');
 const {
   enqueueIncoming,
   listIncoming,
-  updateIncoming
+  updateIncoming,
+  safeIncomingErrorCode,
+  safeIncomingLastError,
+  incomingLogReference,
+  logIncomingFailure
 } = require('./incomingWal');
 
 const activeWalRecords = new Set();
@@ -276,7 +280,8 @@ async function forwardToOpenBot(payload) {
     })
   });
 
-  console.log(`[OPENBOT WEBHOOK] delivered status=${response.status} elapsed=${Date.now() - started}ms instance=${payload.instanceId || payload.instance || '-'} messageId=${payload.messageId || '-'}`);
+  console.log('[OPENBOT WEBHOOK] operation=' + incomingLogReference({ payload }) + ' event=DELIVERED status=' +
+    (Number.isFinite(Number(response.status)) ? Number(response.status) : 0) + ' elapsedMs=' + (Date.now() - started));
   return { delivered: true, status: response.status };
 }
 
@@ -297,7 +302,7 @@ async function forwardIncomingWhatsAppMessage(payload) {
       };
     }
   } catch (error) {
-    console.error('[INBOUND WAL] enqueue failed:', error.message);
+    logIncomingFailure('ENQUEUE_FAILED', { payload }, error);
     record = {
       id: `volatile:${Date.now()}`,
       payload,
@@ -308,7 +313,7 @@ async function forwardIncomingWhatsAppMessage(payload) {
   }
 
   void processIncomingRecord(record).catch(error => {
-    console.error(`[INBOUND WAL] background delivery failed id=${record.id}:`, error.message);
+    logIncomingFailure('BACKGROUND_DELIVERY_FAILED', record, error);
   });
 
   return {
@@ -323,17 +328,18 @@ async function processIncomingRecord(record, dependencies = {}) {
   activeWalRecords.add(record.id);
   const started = Date.now();
   try {
+    record.lastError = safeIncomingLastError(record.lastError);
     if (record.pendingRedis) {
       try {
         const redisResult = await (dependencies.saveIncomingMessage || saveIncomingMessage)(record.payload);
         if (redisResult?.saved || (redisResult?.skipped && redisResult.reason !== 'redis_not_connected')) {
           record.pendingRedis = false;
         } else {
-          record.lastError = String(redisResult?.reason || 'redis_not_connected');
+          record.lastError = safeIncomingErrorCode(redisResult?.reason || 'redis_not_connected');
         }
       } catch (error) {
-        record.lastError = `redis:${error.message}`;
-        console.error(`[INBOX REDIS] failed elapsed=${Date.now() - started}ms error=${error.message}`);
+        record.lastError = 'redis:' + safeIncomingErrorCode(error);
+        logIncomingFailure('REDIS_DELIVERY_FAILED', record, error);
       }
     }
 
@@ -346,11 +352,11 @@ async function processIncomingRecord(record, dependencies = {}) {
         } else {
           const result = await (dependencies.forwardToOpenBot || forwardToOpenBot)(record.payload);
           if (result?.delivered) record.pendingOpenBot = false;
-          else record.lastError = String(result?.reason || 'openbot_not_delivered');
+          else record.lastError = safeIncomingErrorCode(result?.reason || 'openbot_not_delivered');
         }
       } catch (error) {
-        record.lastError = `openbot:${error.message}`;
-        console.error(`[OPENBOT WEBHOOK BACKGROUND] failed elapsed=${Date.now() - started}ms error=${error.message}`);
+        record.lastError = 'openbot:' + safeIncomingErrorCode(error);
+        logIncomingFailure('OPENBOT_DELIVERY_FAILED', record, error);
       }
     }
 
@@ -371,9 +377,9 @@ async function drainIncomingWal(limit = 25) {
 
 function startIncomingWalWorker() {
   if (drainTimer) return drainTimer;
-  void drainIncomingWal().catch(error => console.warn('[INBOUND WAL] initial drain failed:', error.message));
+  void drainIncomingWal().catch(error => logIncomingFailure('INITIAL_DRAIN_FAILED', {}, error));
   drainTimer = setInterval(() => {
-    void drainIncomingWal().catch(error => console.warn('[INBOUND WAL] drain failed:', error.message));
+    void drainIncomingWal().catch(error => logIncomingFailure('DRAIN_FAILED', {}, error));
   }, Math.max(1000, Number(process.env.WHATSPRO_INBOUND_WAL_INTERVAL_MS || 5000)));
   drainTimer.unref?.();
   return drainTimer;

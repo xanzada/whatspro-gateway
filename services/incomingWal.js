@@ -17,6 +17,30 @@ const maxAgeMs = Math.max(60_000, Number(process.env.WHATSPRO_INBOUND_WAL_MAX_AG
 const tombstoneTtlMs = Math.max(60_000, Number(process.env.WHATSPRO_INBOUND_WAL_TOMBSTONE_TTL_MS || 24 * 60 * 60 * 1000));
 // An aged undelivered record is reported once, not on every 5s drain pass.
 const agedRecordsLogged = new Set();
+const safeCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN',
+  'EIO', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT', 'INCOMING_OPERATION_FAILED',
+  'INCOMING_WAL_RECORD_WRITE_FAILED', 'INCOMING_WAL_COMPLETION_MARKER_FAILED',
+  'INCOMING_WAL_REMOVE_FAILED', 'INCOMING_WAL_READ_FAILED',
+  'redis_not_connected', 'openbot_not_delivered', 'OPENBOT_WEBHOOK_URL_missing',
+  'missing_instance_or_phone', 'non_conversational', 'test_mode_blocked', 'stale_message', 'duplicate_message']);
+
+function safeIncomingErrorCode(value) {
+  const code = typeof value === 'string' ? value : value?.code;
+  return safeCodes.has(code) ? code : 'INCOMING_OPERATION_FAILED';
+}
+function safeIncomingLastError(value) {
+  if (!value) return '';
+  const text = String(value);
+  const stage = text.startsWith('redis:') ? 'redis:' : text.startsWith('openbot:') ? 'openbot:' : '';
+  return stage + safeIncomingErrorCode(stage ? text.slice(stage.length) : text);
+}
+function incomingLogReference(record) {
+  return crypto.createHash('sha256').update(String(record?.id || recordId(record?.payload || record || {}))).digest('hex').slice(0, 16);
+}
+function logIncomingFailure(event, record, error) {
+  console.warn('[INBOUND WAL] operation=' + incomingLogReference(record) + ' event=' + event + ' code=' + safeIncomingErrorCode(error));
+}
+
 
 function recordId(payload) {
   const instance = String(payload?.instanceId || payload?.instance || '').trim();
@@ -63,14 +87,14 @@ async function enqueueIncoming(payload) {
     nextAttemptAt: Number(existing?.nextAttemptAt || 0),
     pendingRedis: existing?.pendingRedis !== false,
     pendingOpenBot: existing?.pendingOpenBot !== false,
-    lastError: String(existing?.lastError || '')
+    lastError: safeIncomingLastError(existing?.lastError)
   };
   await atomicWrite(filePath, record);
   return record;
 }
 
 async function updateIncoming(record) {
-  const next = { ...record, updatedAt: Date.now() };
+  const next = { ...record, updatedAt: Date.now(), lastError: safeIncomingLastError(record.lastError) };
   if (!next.pendingRedis && !next.pendingOpenBot) {
     await completeIncoming(next.id);
     return null;
@@ -145,7 +169,10 @@ async function readAllIncoming() {
       }
       if (!agedRecordsLogged.has(record.id)) {
         agedRecordsLogged.add(record.id);
-        console.warn(`[INBOUND WAL] record still undelivered after ${Math.round(maxAgeMs / 3600000)}h, keeping it id=${record.id} attempts=${record.attempts || 0} lastError=${record.lastError || '-'}`);
+      const attempts = Number(record.attempts);
+      console.warn('[INBOUND WAL] operation=' + incomingLogReference(record) + ' event=AGED_UNDELIVERED attempts=' +
+        (Number.isFinite(attempts) ? Math.max(0, Math.min(1000000, attempts)) : 0) + ' code=' +
+        safeIncomingErrorCode(record.lastError.replace(/^(redis|openbot):/, '')));
       }
     }
     records.push(record);
@@ -186,5 +213,9 @@ module.exports = {
   recordId,
   removeIncoming,
   updateIncoming,
+  safeIncomingErrorCode,
+  safeIncomingLastError,
+  incomingLogReference,
+  logIncomingFailure,
   __test: { walPath, tombstonePath, hasTombstone, completeIncoming, readAllIncoming }
 };
