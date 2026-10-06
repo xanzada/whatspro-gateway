@@ -138,7 +138,7 @@ test('documents are drawn onto canvas instead of handed to the browser', () => {
   const code = chatJs.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
   assert.match(code, /showMediaViewer\(\{ isDocument: true, bytes: bytes, directUrl: mediaUrl\(id\) \}\)/);
   assert.match(code, /async function renderPdfInto/);
-  assert.match(code, /lib\.getDocument\(\{ data: new Uint8Array\(bytes\) \}\)/);
+  assert.match(code, /lib\.getDocument\(\{ data: new Uint8Array\(bytes\), isEvalSupported: false \}\)/);
   assert.match(code, /container\.appendChild\(canvas\)/);
   assert.doesNotMatch(code, /if \(opened\)/);
   assert.doesNotMatch(code, /opened = window\.open/);
