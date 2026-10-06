@@ -37,7 +37,7 @@ test('OpenBot failure does not lose the copy already saved for Chat', async () =
   const result = await processIncomingRecord(record, {
     saveIncomingMessage: async () => ({ saved: true }),
     shouldSkipOpenBot: async () => false,
-    forwardToOpenBot: async () => { throw new Error('ECONNREFUSED'); }
+    forwardToOpenBot: async () => { throw Object.assign(new Error('SYNTHETIC_PRIVATE_CANARY'), { code: 'ECONNREFUSED' }); }
   });
   assert.equal(result.pendingRedis, false);
   assert.equal(result.pendingOpenBot, true);
