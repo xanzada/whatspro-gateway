@@ -628,10 +628,7 @@ function scheduleMediaPersist(instanceId, phone, msg) {
                     permanentMediaFailures.add(failureKey);
                     return;
                 }
-                console.warn(
-                    `[MEDIA RETRY] ${instanceId}: ${msg?.id?.id || '-'} ` +
-                    `${error?.message || error}`
-                );
+                logSendFailure('MEDIA_RETRY_FAILED', instanceId, phone, error);
             }
         }, delayMs);
     });
@@ -1778,7 +1775,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 deliveryStatus
             });
         } catch (error) {
-            console.warn(`[MESSAGE ACK] ${instanceId}:`, error.message);
+            logSendFailure('MESSAGE_ACK_FAILED', instanceId, msg?.to || msg?._data?.id?.remote || '', error);
         }
     });
 
@@ -1841,7 +1838,9 @@ async function startWhatsAppInstance(instanceId, options = {}) {
             }
         } catch (err) {}
 
-        console.log(`📥 [${instanceId}] Жаңа хат: ${msg.from} -> ${msg.body}`);
+        console.log('[WHATSAPP INBOUND] operation=' + sendLogReference(instanceId, cleanNumber || msg?.from || '')
+            + ' event=MESSAGE_RECEIVED type=' + (['chat', 'ptt', 'audio', 'image', 'document', 'video', 'sticker'].includes(msg?.type) ? msg.type : 'other')
+            + ' hasMedia=' + Boolean(msg?.hasMedia) + ' hasText=' + (typeof msg?.body === 'string' && msg.body.length > 0));
 
        
         scheduleMediaPersist(instanceId, cleanNumber, msg);
@@ -1854,7 +1853,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 if (!shouldRetryMediaError(error)) {
                     permanentMediaFailures.add(`${instanceId}:${cleanNumber}:${String(msg?.id?.id || '')}`);
                 }
-                console.warn(`[MEDIA CACHE] ${instanceId}: media download skipped: ${error.message}`);
+                logSendFailure('MEDIA_CACHE_FAILED', instanceId, cleanNumber, error);
             }
         }
 
@@ -1924,7 +1923,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 });
             }
         } catch (error) {
-            console.error(`❌ [ADAPTER ERROR] ${instanceId}:`, error);
+            logSendFailure('ADAPTER_ERROR', instanceId, cleanNumber, error);
         }
     });
 
