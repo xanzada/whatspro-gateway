@@ -1549,19 +1549,24 @@
     var data = existing ? {
       brand: existing.brand || '', address: existing.address || '', whatsappPhone: existing.whatsappPhone || '',
       workHours: existing.workHours || defaults.workHours, domain: existing.domain || '',
-      systemPrompt: existing.systemPrompt || '', alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
+      systemPrompt: existing.systemPrompt || '', promptMode: existing.promptMode === 'custom' ? 'custom' : 'shared',
+      alemiApiUrl: existing.alemiApiUrl || 'https://hub.alemi.kz',
       alemiInstance: existing.alemiInstance || existing.instanceId || '', alemiSecret: String(existing.alemiSecret || ''),
       alemiSecretSet: Boolean(existing.alemiSecretSet) || Boolean(existing.secrets && existing.secrets.alemiSecret),
       allowSavedContacts: existing.allowSavedContacts === undefined ? false : Boolean(existing.allowSavedContacts),
       allowUnsavedContacts: existing.allowUnsavedContacts === undefined ? true : Boolean(existing.allowUnsavedContacts),
       ignoredContactsText: Array.isArray(existing.ignoredContacts) ? existing.ignoredContacts.join(', ') : String(existing.ignoredContacts || ''),
       startNow: existing.startNow !== false
-    } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '',
+    } : { brand: '', address: '', whatsappPhone: '', workHours: defaults.workHours, domain: '', systemPrompt: '', promptMode: 'shared',
       alemiApiUrl: 'https://hub.alemi.kz', alemiInstance: '', alemiSecret: '', alemiSecretSet: false,
       // Defaults mirror the platform-wide behaviour this panel inherited:
       // saved contacts were ignored, strangers were served.
       allowSavedContacts: false, allowUnsavedContacts: true, ignoredContactsText: '', startNow: true };
     var editingId = !cloneSourceId && existing && existing.instanceId;
+    // Shared rows carry resolved text too. Compare with this wizard's original
+    // text so unrelated edits and back navigation keep the restaurant's mode.
+    var originalPrompt = String(data.systemPrompt).replace(/\r\n/g, '\n').trim();
+    var originalPromptMode = data.promptMode;
     function draw() {
       var body = '';
       if (step === 0) body = '<div class="form-grid"><div class="field full"><label for="wizard-brand">' + t('restaurantName') +
@@ -1584,7 +1589,7 @@
         attr(data.alemiSecret) + '" autocomplete="off" spellcheck="false">' + secretActions('wizard-alemi-secret') + '</div>' +
         '<small>' + (data.alemiSecretSet ? t('alemiSecretStored') + '. ' : '') + t('alemiSecretHint') +
         '</small></div><div class="field full"><label for="wizard-prompt">' + t('systemPrompt') + ' <span class="optional">(' + t('optional') +
-        ')</span></label><textarea id="wizard-prompt" name="systemPrompt" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
+        ')</span></label><textarea id="wizard-prompt" name="systemPrompt" maxlength="20000" placeholder="AI assistant…">' + escapeHtml(data.systemPrompt) +
         '</textarea><small>' + t('promptHint') + '</small></div>' +
         '<div class="field full"><label>' + t('contactPolicy') + '</label><div class="checkbox-row">' +
         '<label class="checkbox" for="wizard-allow-saved"><input id="wizard-allow-saved" type="checkbox" name="allowSavedContacts" ' + (data.allowSavedContacts ? 'checked' : '') +
@@ -1616,6 +1621,10 @@
       $$('input, textarea', modalRoot).forEach(function (input) {
         if (input.type === 'checkbox') data[input.name] = input.checked;
         else data[input.name] = input.value;
+        if (input.name === 'systemPrompt') {
+          var prompt = String(input.value).replace(/\r\n/g, '\n').trim();
+          data.promptMode = prompt === originalPrompt ? originalPromptMode : (prompt ? 'custom' : 'shared');
+        }
       });
       if (!data.alemiInstance && data.brand) data.alemiInstance = editingId || slugify(data.brand);
       if (!editingId && data.brand && !data.domain && step === 1 && defaults.domainSuffix) data.domain = slugify(data.brand) + '.' + defaults.domainSuffix;
@@ -1673,7 +1682,7 @@
     var payload = {
       instanceId: generatedId, brand: data.brand, whatsappPhone: data.whatsappPhone || '',
       domain: data.domain || '', address: data.address || '', workHours: data.workHours || '',
-      adminPhone: data.whatsappPhone || '', promptMode: data.systemPrompt ? 'custom' : 'shared',
+      adminPhone: data.whatsappPhone || '', promptMode: data.promptMode,
       systemPrompt: data.systemPrompt || '', alemiApiUrl: data.alemiApiUrl,
       alemiInstance: data.alemiInstance || generatedId, alemiSecret: data.alemiSecret || '', active: true,
       ...contactPolicyFromData(data)
@@ -1711,7 +1720,7 @@
     var payload = {
       brand: data.brand, whatsappPhone: data.whatsappPhone || '', domain: data.domain || '',
       address: data.address || '', workHours: data.workHours || '', adminPhone: data.whatsappPhone || '',
-      promptMode: data.systemPrompt ? 'custom' : 'shared', systemPrompt: data.systemPrompt || '',
+      promptMode: data.promptMode, systemPrompt: data.systemPrompt || '',
       alemiApiUrl: data.alemiApiUrl, alemiInstance: data.alemiInstance || instanceId,
       alemiSecret: data.alemiSecret || '', active: true, ...contactPolicyFromData(data)
     };
@@ -1752,7 +1761,7 @@
       whatsappPhone: '',
       workHours: detail.workHours || defaults.workHours,
       domain: '',
-      systemPrompt: detail.systemPrompt || '',
+      systemPrompt: detail.systemPrompt || '', promptMode: detail.promptMode,
       alemiApiUrl: detail.alemiApiUrl || 'https://hub.alemi.kz',
       alemiInstance: '', alemiSecret: '', alemiSecretSet: false,
       startNow: true
