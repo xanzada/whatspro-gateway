@@ -6,6 +6,8 @@ const { parseScoredMembers, parseFieldMap } = require('./redisReply');
 
 const STANDARD_TTL_SECONDS = 24 * 60 * 60;
 const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
+const OPERATOR_TTL_SECONDS = 3 * 60 * 60;
+const ttlForState = state => state === 'archive' ? ARCHIVE_TTL_SECONDS : state === 'operator' ? OPERATOR_TTL_SECONDS : STANDARD_TTL_SECONDS;
 const LID_MAP_TTL_SECONDS = 30 * 24 * 60 * 60;
 const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
@@ -24,6 +26,7 @@ const keys = {
   messageIds: (instanceId, phone) => `chatwoot:message-ids:${instanceId}:${phone}`,
   deleted: (instanceId, phone) => `chatwoot:deleted:${instanceId}:${phone}`,
   receipts: (instanceId, phone) => `chatwoot:receipts:${instanceId}:${phone}`,
+  retention: (instanceId, phone) => `chatwoot:retention:${instanceId}:${phone}`,
   expiry: instanceId => `chatwoot:expiry:${instanceId}`,
   operator: (instanceId, phone) => `operator_active:${instanceId}:${phone}`,
   mute: (instanceId, phone) => `mute:${instanceId}:${phone}`,
@@ -96,13 +99,48 @@ function createChatStore(redis, options = {}) {
     return archiveMarker ? 'archive' : 'all';
   }
 
+
+  // Visible operator retention is separate from durable delivery/case obligations.
+  // All identity/state/activity reads and changes occur in one Redis transaction.
+  async function enforceOperatorRetention(instanceId, phone) {
+    const script = [
+      "-- operatorRetentionPolicy",
+      "if redis.call('GET', KEYS[2]) ~= 'operator' or redis.call('EXISTS', KEYS[7]) == 1 then return 0 end",
+      "local cutoff = tonumber(ARGV[2]); local origin = nil",
+      "local stamp = redis.call('GET', KEYS[1]) or ''",
+      "if stamp ~= '' then origin = tonumber(string.match(stamp, '^operator:(%d+)$')); if not origin then return 0 end",
+      "else",
+      "  local score = tonumber(redis.call('ZSCORE', KEYS[3], ARGV[1])); local activity = tonumber(redis.call('ZSCORE', KEYS[4], ARGV[1]))",
+      "  if not score or not activity or score % 1 ~= 0 or activity % 1 ~= 0 or score > 9007199254740991 or activity > 9007199254740991 then return 0 end",
+      "  origin = math.max(score - tonumber(ARGV[3]) * 1000, activity)",
+      "end",
+      "if not origin or origin <= 0 or origin % 1 ~= 0 or origin > cutoff or origin > 9007199254740991 then return 0 end",
+      "local expiresAt = origin + tonumber(ARGV[4]) * 1000",
+      "if expiresAt > cutoff then",
+      "  local remaining = math.max(1, math.ceil((expiresAt - cutoff) / 1000))",
+      "  for _, key in ipairs({KEYS[2], KEYS[5], KEYS[6], KEYS[8], KEYS[9], KEYS[10]}) do if redis.call('EXISTS', key) == 1 then local ttl = redis.call('TTL', key); if ttl < 0 or ttl > remaining then redis.call('EXPIRE', key, remaining) end end end",
+      "  local media = redis.pcall('SMEMBERS', KEYS[8]); if type(media) == 'table' and not media.err then for _, id in ipairs(media) do local key = ARGV[5] .. id; local ttl = redis.call('TTL', key); if ttl < 0 or ttl > remaining then redis.call('EXPIRE', key, remaining) end end end",
+      "  redis.call('SET', KEYS[1], 'operator:' .. string.format('%.0f', origin), 'EX', remaining)",
+      "  redis.call('ZADD', KEYS[3], expiresAt, ARGV[1]); return 2",
+      "end",
+      "local media = redis.pcall('SMEMBERS', KEYS[8]); if type(media) == 'table' and not media.err then for _, id in ipairs(media) do redis.call('DEL', ARGV[5] .. id) end end",
+      "redis.call('DEL', KEYS[1], KEYS[2], KEYS[5], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10])",
+      "redis.call('ZREM', KEYS[3], ARGV[1]); redis.call('ZREM', KEYS[4], ARGV[1]); redis.call('ZREM', KEYS[11], ARGV[1]); redis.call('SREM', KEYS[12], ARGV[1]); return 1"
+    ].join('\n');
+    return command(['EVAL', script, '12', keys.retention(instanceId, phone), keys.state(instanceId, phone),
+      keys.expiry(instanceId), keys.inbox(instanceId), keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
+      keys.archiveMarker(instanceId, phone), keys.mediaIds(instanceId, phone), keys.messageIds(instanceId, phone),
+      keys.receipts(instanceId, phone), keys.viewed(instanceId), keys.archive(instanceId),
+      phone, String(now()), String(STANDARD_TTL_SECONDS), String(OPERATOR_TTL_SECONDS), 'chatwoot:media:' + instanceId + ':'], 0);
+  }
+
   async function ttlFor(instanceId, phone) {
-    return (await getState(instanceId, phone)) === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    return ttlForState(await getState(instanceId, phone));
   }
 
   async function setState(instanceId, phone, state) {
     if (!CHAT_STATES.has(state)) throw new Error('INVALID_CHAT_STATE');
-    const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    const ttl = ttlForState(state);
     // Same reason as applyTtl: this only needs the media ids, not the transcript.
     const history = await getHistory(instanceId, phone, TTL_MEDIA_SCAN_LIMIT);
     const ids = await mediaIds(instanceId, phone, history);
@@ -112,6 +150,7 @@ function createChatStore(redis, options = {}) {
     ];
     const script = [
       "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
+      "redis.call('SET', ARGV[6], ARGV[2] .. ':' .. ARGV[4], 'EX', ARGV[3])",
       "if ARGV[2] == 'archive' then redis.call('SADD', KEYS[2], ARGV[1]); redis.call('SET', KEYS[3], ARGV[4], 'EX', ARGV[3]) else redis.call('SREM', KEYS[2], ARGV[1]); redis.call('DEL', KEYS[3]) end",
       "redis.call('ZADD', KEYS[4], ARGV[5], ARGV[1])",
       "for i = 5, #KEYS do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], ARGV[3]) end end",
@@ -119,7 +158,7 @@ function createChatStore(redis, options = {}) {
     ].join('\n');
     await command(['EVAL', script, String(4 + ttlKeys.length), keys.state(instanceId, phone), keys.archive(instanceId),
       keys.archiveMarker(instanceId, phone), keys.expiry(instanceId), ...ttlKeys,
-      phone, state, String(ttl), String(now()), String(now() + ttl * 1000)]);
+      phone, state, String(ttl), String(now()), String(now() + ttl * 1000), keys.retention(instanceId, phone)]);
     return state;
   }
 
@@ -147,12 +186,13 @@ function createChatStore(redis, options = {}) {
     const expiryKeys = [...new Set([...chatKeys, ...ids.map(id => keys.media(instanceId, id))])];
     const ttlScript = [
       "if ARGV[1] ~= '' and redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end",
+      "redis.call('SET', ARGV[5], (redis.call('GET', KEYS[1]) or 'all') .. ':' .. ARGV[6], 'EX', ARGV[4])",
       "redis.call('ZADD', KEYS[2], ARGV[2], ARGV[3])",
       "for i = 3, #KEYS do redis.call('EXPIRE', KEYS[i], ARGV[4]) end",
       'return 1'
     ].join('\n');
     const result = await command(['EVAL', ttlScript, String(2 + expiryKeys.length), keys.state(instanceId, phone), keys.expiry(instanceId),
-      ...expiryKeys, expectedState, String(now() + ttl * 1000), phone, String(ttl)], 0);
+      ...expiryKeys, expectedState, String(now() + ttl * 1000), phone, String(ttl), keys.retention(instanceId, phone), String(now())], 0);
     return Number(result) === 1;
   }
 
@@ -200,7 +240,7 @@ function createChatStore(redis, options = {}) {
     const encodedMedia = entry.mediaData ? encodeMedia(entry.mediaData, entry.mediaType) : '';
     await ensureInboxSortedSet(instanceId);
     const state = CHAT_STATES.has(options.state) ? options.state : await getState(instanceId, phone);
-    const ttl = state === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+    const ttl = ttlForState(state);
     const hasSosSnapshot = options.sosSnapshot && typeof options.sosSnapshot === 'object';
     const script = [
       "local deletedAt = tonumber(redis.call('GET', KEYS[3]) or '0')",
@@ -236,6 +276,7 @@ function createChatStore(redis, options = {}) {
       "if inserted == 0 and ARGV[8] == '1' then return { 0, redis.call('GET', KEYS[5]) or targetState } end",
       "redis.call('ZADD', KEYS[4], ARGV[3], ARGV[4])",
       "redis.call('SET', KEYS[5], targetState, 'EX', ttl)",
+      "redis.call('SET', 'chatwoot:retention:' .. ARGV[16] .. ':' .. ARGV[4], targetState .. ':' .. string.format('%.0f', tonumber(expiresAt) - tonumber(ttl) * 1000), 'EX', ttl)",
       "redis.call('ZADD', KEYS[6], expiresAt, ARGV[4])",
       "redis.call('EXPIRE', KEYS[1], ttl)",
       "redis.call('EXPIRE', KEYS[2], ttl)",
@@ -260,7 +301,7 @@ function createChatStore(redis, options = {}) {
     }
     const sosProtected = Array.isArray(rawResult) && Number(rawResult[2]) === 1;
     if (result === 1 && !sosProtected) {
-      const appliedTtl = appliedState === 'archive' ? ARCHIVE_TTL_SECONDS : STANDARD_TTL_SECONDS;
+      const appliedTtl = ttlForState(appliedState);
       await applyTtl(instanceId, phone, appliedTtl, appliedState);
     }
     return { ...normalized, state: appliedState, inserted: result === 1, stale: false, ...(sosProtected ? { sosProtected: true } : {}) };
@@ -268,6 +309,7 @@ function createChatStore(redis, options = {}) {
 
   async function getHistory(instanceId, rawPhone, limit = 1000) {
     const phone = normalizePhone(rawPhone);
+    await enforceOperatorRetention(instanceId, phone);
     const [rows, legacyRows, receiptReply] = await Promise.all([
       command(['LRANGE', keys.history(instanceId, phone), String(-limit), '-1'], []),
       command(['LRANGE', keys.legacyHistory(instanceId, phone), String(-limit), '-1'], []),
@@ -434,6 +476,7 @@ function createChatStore(redis, options = {}) {
         ]);
         continue;
       }
+      if (Number(await enforceOperatorRetention(instanceId, phone)) === 1) continue;
       result.push({ phone, updatedAt: row.score });
     }
     return result;
@@ -441,6 +484,9 @@ function createChatStore(redis, options = {}) {
 
   async function pruneExpired(instanceId) {
     const cutoff = now();
+    // Old operator expiry scores used 24h. The atomic policy rechecks current state.
+    const operatorCandidates = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff + (STANDARD_TTL_SECONDS - OPERATOR_TTL_SECONDS) * 1000)], []);
+    await Promise.all(operatorCandidates.filter(isPhone).map(phone => enforceOperatorRetention(instanceId, phone)));
     const expiredPhones = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff)], []);
     const pruneScript = [
       "local score = redis.call('ZSCORE', KEYS[1], ARGV[1])",
@@ -448,7 +494,7 @@ function createChatStore(redis, options = {}) {
       "local maxTtl = math.max(redis.call('TTL', KEYS[5]), redis.call('TTL', KEYS[6]), redis.call('TTL', KEYS[7]), redis.call('TTL', KEYS[8]))",
       "if maxTtl > 0 then redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + maxTtl * 1000, ARGV[1]); return 2 end",
       "local hasChat = redis.call('EXISTS', KEYS[5]) + redis.call('EXISTS', KEYS[6]) + redis.call('EXISTS', KEYS[7]) + redis.call('EXISTS', KEYS[8])",
-      "if hasChat > 0 then local repairTtl = ARGV[3]; if redis.call('GET', KEYS[7]) == 'archive' or redis.call('EXISTS', KEYS[8]) == 1 then repairTtl = ARGV[4] end; for i = 5, 8 do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], repairTtl) end end; redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + tonumber(repairTtl) * 1000, ARGV[1]); return 3 end",
+      "if hasChat > 0 then local repairTtl = ARGV[3]; if redis.call('GET', KEYS[7]) == 'archive' or redis.call('EXISTS', KEYS[8]) == 1 then repairTtl = ARGV[4] elseif redis.call(\'GET\', KEYS[7]) == \'operator\' then repairTtl = ARGV[5] end; for i = 5, 8 do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], repairTtl) end end; redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + tonumber(repairTtl) * 1000, ARGV[1]); return 3 end",
       "redis.call('ZREM', KEYS[1], ARGV[1])",
       "redis.call('ZREM', KEYS[2], ARGV[1])",
       "redis.call('ZREM', KEYS[3], ARGV[1])",
@@ -459,7 +505,7 @@ function createChatStore(redis, options = {}) {
       const result = await command(['EVAL', pruneScript, '8', keys.expiry(instanceId), keys.inbox(instanceId),
         keys.viewed(instanceId), keys.archive(instanceId), keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
         keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone), phone, String(cutoff),
-        String(STANDARD_TTL_SECONDS), String(ARCHIVE_TTL_SECONDS)], null);
+        String(STANDARD_TTL_SECONDS), String(ARCHIVE_TTL_SECONDS), String(OPERATOR_TTL_SECONDS)], null);
       if (result !== null) return;
       const score = Number(await command(['ZSCORE', keys.expiry(instanceId), phone], Infinity));
       if (score > cutoff) return;
@@ -483,7 +529,13 @@ function createChatStore(redis, options = {}) {
     if (normalizedAction === 'view') {
       const currentState = await getState(instanceId, phone);
       await Promise.all([
-        currentState === 'new' ? setState(instanceId, phone, 'all') : Promise.resolve(currentState),
+        currentState === 'new' ? command(['EVAL', [
+          '-- viewWithoutRetentionRefresh',
+          "if redis.call('GET', KEYS[1]) ~= 'new' then return 0 end",
+          "redis.call('SET', KEYS[1], 'all', 'KEEPTTL')",
+          "local stamp = redis.call('GET', KEYS[2]); if stamp and string.match(stamp, '^new:%d+$') then redis.call('SET', KEYS[2], 'all:' .. string.sub(stamp, 5), 'KEEPTTL') end",
+          'return 1'
+        ].join('\n'), '2', keys.state(instanceId, phone), keys.retention(instanceId, phone)], 0) : Promise.resolve(currentState),
         command(['ZADD', keys.viewed(instanceId), String(now()), phone])
       ]);
     } else if (normalizedAction === 'archive') {
@@ -547,6 +599,7 @@ const chatStore = createChatStore(redisClient);
 
 module.exports = {
   STANDARD_TTL_SECONDS,
+  OPERATOR_TTL_SECONDS,
   ARCHIVE_TTL_SECONDS,
   LID_MAP_TTL_SECONDS,
   MAX_MEDIA_BYTES,

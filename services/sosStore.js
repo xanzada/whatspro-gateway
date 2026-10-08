@@ -4,11 +4,17 @@ const { redisClient } = require('../config/redis');
 const { isValidChatPhone, normalizePhone } = require('./phoneUtils');
 const { parseScoredMembers } = require('./redisReply');
 
-// Kept in step with Openbot's operatorCase.service.ts: the writer sets these keys with
-// this TTL, this reader prunes the index by the same clock. One hour dropped a night
-// complaint out of the SOS column before the morning shift ever saw it (owner report,
-// 2026-08-27).
-const SOS_TTL_SECONDS = 24 * 60 * 60;
+// SOS attention lasts one hour; identified legacy signal storage is clamped on read.
+// Canonical cases and delivery plans retain their independent durable lifetimes.
+const SOS_TTL_SECONDS = 60 * 60;
+function signalStartedAt(marker, timestamp) {
+  const value = marker.startedAt ?? marker.createdAt;
+  if (!(typeof value === 'number' || typeof value === 'string' && /^\d+$/.test(value))) return null;
+  let started = Number(value);
+  if (!Number.isSafeInteger(started) || started <= 0) return null;
+  if (started < 1e12) started *= 1000;
+  return Number.isSafeInteger(started) && started <= timestamp ? started : null;
+}
 const keys = {
   index: instanceId => `chatwoot:sos:${instanceId}`,
   marker: (instanceId, phone) => `chatwoot:sos:${instanceId}:${phone}`,
@@ -56,36 +62,95 @@ function createSosStore(redis, options = {}) {
     }
   }
 
+
+  async function clampLegacySignal(instanceId, phone, raw, marker, deadline, timestamp) {
+    const caseId = marker.caseId, signalId = marker.signalId;
+    if (typeof caseId !== 'string' || !/^[A-Za-z0-9_-]{1,96}$/.test(caseId) ||
+        typeof signalId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(signalId)) return;
+    const startedAt = signalStartedAt(marker, timestamp);
+    if (startedAt === null || !Number.isSafeInteger(deadline)) return;
+    const script = [
+      '-- SOS_LEGACY_SIGNAL_RETENTION_CLAMP: attention only; canonical and delivery data stay unchanged',
+      "for i=1,5 do local t=redis.call('TYPE',KEYS[i]).ok; local wanted=i==3 and 'zset' or 'string'; if t~='none' and t~=wanted then return 0 end end",
+      "local current=redis.call('GET',KEYS[1]); if not current or current~=ARGV[1] then return 0 end",
+      "local ok,marker=pcall(cjson.decode,current); if not ok or type(marker)~='table' or marker.caseId~=ARGV[4] or marker.signalId~=ARGV[5] then return 0 end",
+      "local caseRaw=redis.call('GET',KEYS[4]); if not caseRaw then return 0 end",
+      "local decoded,item=pcall(cjson.decode,caseRaw)",
+      "if not decoded or type(item)~='table' or item.id~=ARGV[4] or item.instanceId~=ARGV[3] or item.status~='open'",
+      "  or type(item.phone)~='string' or string.gsub(item.phone,'%D','')~=ARGV[2] then return 0 end",
+      "local active=redis.call('GET',KEYS[5]) or ''; if active~='' and active~=ARGV[4] then return 0 end",
+      "if marker.caseRevision~=nil or item.revision~=nil then",
+      "  if type(marker.caseRevision)~='string' or marker.caseRevision=='' or marker.caseRevision~=item.revision then return 0 end",
+      "else",
+      "  local updated=tonumber(item.updatedAt or item.createdAt); if not updated or updated<=0 or updated~=math.floor(updated) then return 0 end",
+      "  if updated<1000000000000 then updated=updated*1000 end",
+      "  if updated>9007199254740991 or updated>tonumber(ARGV[8]) then return 0 end",
+      "end",
+      "local unread=redis.call('GET',KEYS[2]); if unread and unread~=ARGV[5] then return 0 end",
+      "local remaining=tonumber(ARGV[6])-tonumber(ARGV[7])",
+      "if remaining<=0 then redis.call('DEL',KEYS[1],KEYS[2]); redis.call('ZREM',KEYS[3],ARGV[2]); return 1 end",
+      "local wall=redis.call('TIME'); local wallMs=tonumber(wall[1])*1000+math.floor(tonumber(wall[2])/1000)",
+      "for i=1,2 do local ttl=redis.call('PTTL',KEYS[i]); if ttl==-1 or (ttl>=0 and wallMs+ttl>tonumber(ARGV[6])) then redis.call('PEXPIREAT',KEYS[i],ARGV[6]) end end",
+      "local score=tonumber(redis.call('ZSCORE',KEYS[3],ARGV[2])); if score and score>tonumber(ARGV[6]) then redis.call('ZADD',KEYS[3],ARGV[6],ARGV[2]) end",
+      "return 2"
+    ].join('\n');
+    await command(['EVAL', script, '5', keys.marker(instanceId, phone), keys.unread(instanceId, phone),
+      keys.index(instanceId), 'operator_case:' + instanceId + ':' + caseId, 'operator_case_active:' + instanceId + ':' + phone,
+      raw, phone, instanceId, caseId, signalId, String(deadline), String(timestamp), String(startedAt)]);
+  }
+
   async function list(instanceId, limit = 1000) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error('INVALID_SOS_VISIBLE_LIMIT');
     const timestamp = now();
     await command(['ZREMRANGEBYSCORE', keys.index(instanceId), '-inf', String(timestamp)], 0);
-    const rows = await command(['ZRANGEBYSCORE', keys.index(instanceId), String(timestamp + 1), '+inf', 'WITHSCORES', 'LIMIT', '0', String(limit)], []);
-    const entries = [];
-    for (const row of parseScoredMembers(rows)) {
-      const phone = normalizePhone(row.member);
-      const expiresAt = row.score;
-      if (!validPhone(phone)) continue;
-      const [raw, unread] = await Promise.all([
-        command(['GET', keys.marker(instanceId, phone)], ''),
-        command(['EXISTS', keys.unread(instanceId, phone)], 0)
-      ]);
-      if (!raw || expiresAt <= timestamp) {
-        await command(['ZREM', keys.index(instanceId), phone], 0);
-        continue;
+    const entries = [], orphans = [], clamps = [];
+    let scanned = 0, exhausted = false;
+    // Apply the requested limit after origin admission; retain invisible legacy markers.
+    // Defer our removals so they cannot shift the next page's offset.
+    while (entries.length < limit && scanned < 10000 && !exhausted) {
+      const size = Math.min(100, 10000 - scanned);
+      const reply = await command(['ZRANGEBYSCORE', keys.index(instanceId), String(timestamp + 1), '+inf', 'WITHSCORES', 'LIMIT', String(scanned), String(size)]);
+      const rows = parseScoredMembers(reply);
+      scanned += rows.length; exhausted = rows.length < size;
+      for (const row of rows) {
+        if (entries.length >= limit) break;
+        const phone = normalizePhone(row.member);
+        const expiresAt = row.score;
+        if (!validPhone(phone)) continue;
+        const [raw, unread] = await Promise.all([
+          command(['GET', keys.marker(instanceId, phone)], ''),
+          command(['EXISTS', keys.unread(instanceId, phone)], 0)
+        ]);
+        if (!raw || expiresAt <= timestamp) {
+          orphans.push(phone);
+          continue;
+        }
+        const marker = parseJson(raw);
+        const startedAt = signalStartedAt(marker, timestamp);
+        const visibleUntil = startedAt === null ? null : Math.min(expiresAt, startedAt + SOS_TTL_SECONDS * 1000);
+        if (visibleUntil !== null) clamps.push({phone, raw, marker, deadline: visibleUntil});
+        // Preserve unknown legacy markers; never fabricate a new visibility period.
+        if (visibleUntil === null || visibleUntil <= timestamp) continue;
+        entries.push({
+          phone,
+          sos: true,
+          sosUnread: Number(unread) === 1,
+          sosCreatedAt: startedAt,
+          sosExpiresAt: visibleUntil,
+          sosKind: String(marker.kind || ''),
+          sosSummary: String(marker.summary || ''),
+          sosCaseId: String(marker.caseId || ''),
+          sosSignalId: String(marker.signalId || '')
+        });
       }
-      const marker = parseJson(raw);
-      entries.push({
-        phone,
-        sos: true,
-        sosUnread: Number(unread) === 1,
-        sosCreatedAt: Number(marker.startedAt || marker.createdAt || 0),
-        sosExpiresAt: expiresAt,
-        sosKind: String(marker.kind || ''),
-        sosSummary: String(marker.summary || ''),
-        sosCaseId: String(marker.caseId || ''),
-        sosSignalId: String(marker.signalId || '')
-      });
     }
+    // Clamp only after retrieval so index score changes cannot shift our page offsets.
+    for (const item of clamps) await clampLegacySignal(instanceId, item.phone, item.raw, item.marker, item.deadline, timestamp);
+    for (const phone of orphans) {
+      // A newly installed marker must survive a deferred orphan cleanup.
+      await command(['EVAL', "if redis.call('EXISTS',KEYS[1]) == 0 then return redis.call('ZREM',KEYS[2],ARGV[1]) end return 0", '2', keys.marker(instanceId, phone), keys.index(instanceId), phone], 0);
+    }
+    if (!exhausted && entries.length < limit) throw new Error('SOS_VISIBLE_SCAN_INCOMPLETE');
     return entries;
   }
 

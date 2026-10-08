@@ -2154,7 +2154,7 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
     const openbotRows = openbotHistories[index];
     // A failed read must never be treated as an empty chat: deleting index state on a blip
     // is how a real conversation disappears from the panel.
-    const readFailed = gatewayRows === null && openbotRows === null;
+    const readFailed = gatewayRows === null || openbotRows === null;
     const historyRows = (gatewayRows && gatewayRows.length) ? gatewayRows : (openbotRows || []);
     // A concurrent delete may remove the transcript while a new SOS is created.
     // The live marker keeps that escalation reachable without restoring deleted history.

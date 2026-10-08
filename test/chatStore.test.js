@@ -84,6 +84,14 @@ class FakeRedis {
     if (command === 'SMEMBERS') return value?.type === 'set' ? [...value.value] : [];
     if (command === 'SISMEMBER') return value?.type === 'set' && value.value.has(args[2]) ? 1 : 0;
     if (command === 'RENAME') { this.data.set(args[2], value); this.data.delete(key); return 'OK'; }
+    if (command === 'EVAL' && args[1].includes('viewWithoutRetentionRefresh')) {
+      const current = this.data.get(args[3]);
+      if (current?.value !== 'new') return 0;
+      current.value = 'all';
+      const stamp = this.data.get(args[4]);
+      if (stamp?.value?.startsWith('new:')) stamp.value = 'all:' + stamp.value.slice(4);
+      return 1;
+    }
     if (command === 'EVAL' && args[1].includes("ARGV[2] == 'archive'")) {
       const keyCount = Number(args[2]);
       const argumentStart = 3 + keyCount;
@@ -173,7 +181,7 @@ class FakeRedis {
       if (maxTtl > 0) { expiry.value.set(phone, cutoff + maxTtl * 1000); return 2; }
       if (authoritativeKeys.some(item => this.data.has(item))) {
         const state = this.data.get(authoritativeKeys[2])?.value;
-        const ttl = state === 'archive' || this.data.has(authoritativeKeys[3]) ? Number(args[14]) : Number(args[13]);
+        const ttl = state === 'archive' || this.data.has(authoritativeKeys[3]) ? Number(args[14]) : state === 'operator' ? Number(args[15]) : Number(args[13]);
         for (const item of authoritativeKeys) if (this.data.has(item)) this.expires.set(item, ttl);
         expiry.value.set(phone, cutoff + ttl * 1000); return 3;
       }
@@ -460,7 +468,7 @@ test('idempotent operator append repairs metadata and respects delete tombstones
   redis.expires.delete(store.keys.history('acme', '77001234567'));
   assert.equal((await store.appendMessageOnce('acme', '77001234567', entry, { state: 'operator' })).inserted, false);
   assert.equal(redis.data.get(store.keys.inbox('acme')).value.has('77001234567'), true);
-  assert.equal(redis.expires.get(store.keys.history('acme', '77001234567')), STANDARD_TTL_SECONDS);
+  assert.equal(redis.expires.get(store.keys.history('acme', '77001234567')), 10800);
 
   now += 1000;
   await store.applyAction('acme', '77001234567', 'delete');
@@ -566,4 +574,95 @@ test('stale archive TTL propagation cannot override a newer incoming message', a
   assert.equal(await store.getState('tenant-ttl-race', '77001234567'), 'new');
   assert.equal(redis.expires.get(store.keys.media('tenant-ttl-race', 'voice-before')), STANDARD_TTL_SECONDS);
   assert.equal(redis.expires.get(store.keys.media('tenant-ttl-race', 'voice-after')), STANDARD_TTL_SECONDS);
+});
+
+
+// Direct user policy: Operator 3h, All/New 24h, Archive 72h.
+test('chat retention policy: operator writes, media, state and expiry use three hours', async () => {
+  const now = 1_700_000_000_000;
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => now });
+  const phone = '77001234567';
+  await store.appendMessageOnce('retention', phone, {
+    id: 'operator-audio', role: 'operator', hasMedia: true,
+    mediaData: 'YWJj', mediaType: 'audio/ogg', createdAt: now
+  }, { state: 'operator' });
+  for (const key of [store.keys.history('retention', phone), store.keys.state('retention', phone),
+    store.keys.messageIds('retention', phone), store.keys.mediaIds('retention', phone),
+    store.keys.media('retention', 'operator-audio')]) assert.equal(redis.expires.get(key), 10800, key);
+  assert.equal(Number(await redis.sendCommand(['ZSCORE', store.keys.expiry('retention'), phone])), now + 10800_000);
+  await store.storeMedia('retention', phone, 'late-media', 'YWJj', 'audio/ogg');
+  assert.equal(redis.expires.get(store.keys.media('retention', 'late-media')), 10800);
+  await store.appendMessage('retention', phone, { id: 'ordinary-append', role: 'operator' });
+  assert.equal(redis.expires.get(store.keys.history('retention', phone)), 10800);
+});
+
+test('chat retention policy: archive, restore and operator transitions retain distinct windows', async () => {
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => 1_700_000_000_000 });
+  const phone = '77001234567';
+  await store.appendMessageOnce('transitions', phone, { id: 'm', hasMedia: true, mediaData: 'YWJj' }, { state: 'all' });
+  assert.equal(redis.expires.get(store.keys.history('transitions', phone)), 86400);
+  await store.appendMessageOnce('transitions', phone, { id: 'reply', role: 'operator' }, { state: 'operator' });
+  assert.equal(redis.expires.get(store.keys.media('transitions', 'm')), 10800);
+  await store.applyAction('transitions', phone, 'archive');
+  assert.equal(redis.expires.get(store.keys.media('transitions', 'm')), 259200);
+  await store.appendMessageOnce('transitions', phone, { id: 'archived-reply', role: 'operator' },
+    { state: 'operator', preserveArchive: true, preserveStateOnDuplicate: true });
+  assert.equal(await store.getState('transitions', phone), 'archive');
+  assert.equal(redis.expires.get(store.keys.history('transitions', phone)), 259200);
+  await store.applyAction('transitions', phone, 'restore');
+  assert.equal(redis.expires.get(store.keys.media('transitions', 'm')), 86400);
+});
+
+test('chat retention policy: duplicate accepted operator reply does not refresh three-hour expiry', async () => {
+  let now = 1_700_000_000_000;
+  const redis = new FakeRedis();
+  const store = createChatStore(redis, { now: () => now });
+  const phone = '77001234567', entry = { id: 'once', role: 'operator', createdAt: now };
+  await store.appendMessageOnce('duplicate-retention', phone, entry, { state: 'operator', preserveStateOnDuplicate: true });
+  const before = await redis.sendCommand(['ZSCORE', store.keys.expiry('duplicate-retention'), phone]);
+  now += 3600_000;
+  const duplicate = await store.appendMessageOnce('duplicate-retention', phone, entry,
+    { state: 'operator', preserveStateOnDuplicate: true });
+  assert.equal(duplicate.inserted, false);
+  assert.equal(await redis.sendCommand(['ZSCORE', store.keys.expiry('duplicate-retention'), phone]), before);
+  assert.equal(Number(before), entry.createdAt + 10800_000);
+});
+
+test('chat retention policy: no-TTL operator metadata repairs to three hours', async () => {
+  const now = 1_700_000_000_000, phone = '77001234567';
+  const redis = new FakeRedis(), store = createChatStore(redis, { now: () => now });
+  await store.appendMessageOnce('operator-repair', phone, { id: 'repair', role: 'operator', createdAt: now }, { state: 'operator' });
+  for (const key of [store.keys.history('operator-repair', phone), store.keys.messageIds('operator-repair', phone),
+    store.keys.state('operator-repair', phone)]) redis.expires.delete(key);
+  redis.data.get(store.keys.expiry('operator-repair')).value.set(phone, now - 1);
+  await store.pruneExpired('operator-repair');
+  assert.equal(redis.expires.get(store.keys.history('operator-repair', phone)), 10800);
+  assert.equal(redis.expires.get(store.keys.state('operator-repair', phone)), 10800);
+  assert.equal(Number(await redis.sendCommand(['ZSCORE', store.keys.expiry('operator-repair'), phone])), now + 10800_000);
+});
+
+test('chat retention policy: a stale archive propagation cannot widen a newer operator window', async () => {
+  const now = 1_700_000_000_000, phone = '77001234567';
+  const redis = new FakeRedis(), store = createChatStore(redis, { now: () => now });
+  await store.appendMessageOnce('operator-race', phone, { id: 'first', hasMedia: true, mediaData: 'YWJj', createdAt: now });
+  redis.afterSetState = async () => {
+    await store.appendMessageOnce('operator-race', phone, { id: 'reply', role: 'operator', createdAt: now + 1 }, { state: 'operator' });
+  };
+  await store.applyAction('operator-race', phone, 'archive');
+  assert.equal(await store.getState('operator-race', phone), 'operator');
+  assert.equal(redis.expires.get(store.keys.history('operator-race', phone)), 10800);
+  assert.equal(redis.expires.get(store.keys.media('operator-race', 'first')), 10800);
+});
+
+test('chat retention policy: delayed delivery receipts inherit remaining lifetime without refreshing it', async () => {
+  const redis = new FakeRedis(), store = createChatStore(redis, { now: () => 1_700_000_000_000 });
+  const phone = '77001234567';
+  await store.appendMessageOnce('receipt-retention', phone, { id: 'receipt', role: 'operator' }, { state: 'operator' });
+  for (const key of [store.keys.history('receipt-retention', phone), store.keys.state('receipt-retention', phone)])
+    redis.expires.set(key, 2500);
+  assert.equal(await store.updateMessageReceipt('receipt-retention', phone, 'receipt', 'read'), true);
+  assert.equal(redis.expires.get(store.keys.receipts('receipt-retention', phone)), 2500);
+  assert.equal(redis.expires.get(store.keys.history('receipt-retention', phone)), 2500);
 });

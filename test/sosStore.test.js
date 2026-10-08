@@ -65,7 +65,7 @@ test('an active SOS survives a listing and reaches the operator', async () => {
   assert.equal(rows[0].phone, PHONE);
   assert.equal(rows[0].sos, true);
   assert.equal(rows[0].sosUnread, true, 'the light is on until the operator opens it');
-  assert.equal(rows[0].sosExpiresAt, NOW + 3_600_000, 'the score must survive as a real number');
+  assert.equal(rows[0].sosExpiresAt, JSON.parse(MARKER).startedAt + 3_600_000, 'visible hour starts at the admitted signal origin');
   assert.equal(rows[0].sosSummary, 'Оператор қажет');
   assert.equal(redis.log.includes('ZREM'), false, 'a live SOS must never be removed from the index');
 });
@@ -100,7 +100,7 @@ test('the sixty-minute window is what the score carries', async () => {
   });
   const store = createSosStore(redis, { now: () => NOW });
   const rows = await store.list('prestige');
-  assert.equal(Math.round((rows[0].sosExpiresAt - NOW) / 60000), 60, 'exactly one hour left');
+  assert.equal(Math.round((rows[0].sosExpiresAt - NOW) / 60000), 59, 'one minute elapsed since the admitted signal origin');
   assert.equal(rows[0].sosUnread, false, 'no unread key means the light is already acknowledged');
 });
 
@@ -150,4 +150,67 @@ test('every WITHSCORES shape a client may return is read the same way', () => {
   assert.deepEqual(parseScoredMembers(['77015550101', '1785000000000']), expected, 'flat RESP2 list');
   assert.deepEqual(parseScoredMembers([]), []);
   assert.deepEqual(parseScoredMembers(null), []);
+});
+
+
+test('SOS retention policy: visibility ends at one hour and preserves the durable marker/index', async () => {
+  const started = NOW - 3600_000;
+  const marker = JSON.stringify({ caseId: 'retained-case', startedAt: started, expiresAt: started + 86400_000 });
+  const redis = createRedis({ strings: { ['chatwoot:sos:prestige:' + PHONE]: marker },
+    zsets: { 'chatwoot:sos:prestige': { [PHONE]: started + 86400_000 } } });
+  let time = NOW - 1;
+  const store = createSosStore(redis, { now: () => time });
+  const visible = await store.list('prestige');
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].sosExpiresAt, NOW);
+  time = NOW;
+  assert.deepEqual(await store.list('prestige'), []);
+  assert.equal(await store.snapshot('prestige', PHONE), marker);
+  assert.equal(redis.log.includes('ZREM'), false, 'display expiry is not canonical-case resolution');
+});
+
+test('SOS retention policy: seconds and milliseconds share the same admitted signal origin', async () => {
+  for (const value of [NOW - 60_000, String((NOW - 60_000) / 1000)]) {
+    const redis = createRedis({ strings: { ['chatwoot:sos:prestige:' + PHONE]: JSON.stringify({ startedAt: value }) },
+      zsets: { 'chatwoot:sos:prestige': { [PHONE]: NOW + 86400_000 } } });
+    const rows = await createSosStore(redis, { now: () => NOW }).list('prestige');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].sosCreatedAt, NOW - 60_000);
+    assert.equal(rows[0].sosExpiresAt, NOW - 60_000 + 3600_000);
+  }
+});
+
+test('SOS retention policy: unknown, malformed and future origins are preserved without invented visibility', async () => {
+  for (const value of [undefined, null, '', 'unknown', -1, NOW + 1, NOW + 0.5]) {
+    const marker = JSON.stringify({ caseId: 'unknown-preserved', startedAt: value });
+    const redis = createRedis({ strings: { ['chatwoot:sos:prestige:' + PHONE]: marker },
+      zsets: { 'chatwoot:sos:prestige': { [PHONE]: NOW + 86400_000 } } });
+    const store = createSosStore(redis, { now: () => NOW });
+    assert.deepEqual(await store.list('prestige'), [], 'unproven origin does not get a fabricated new hour');
+    assert.equal(await store.snapshot('prestige', PHONE), marker);
+    assert.equal(redis.log.includes('ZREM'), false);
+  }
+});
+
+test('SOS retention policy: a fresh replacement remains visible after the older signal hour', async () => {
+  const redis = createRedis({ strings: { ['chatwoot:sos:prestige:' + PHONE]: JSON.stringify({
+    startedAt: NOW - 10_000, caseId: 'newer', signalId: 'newer-signal' }) },
+    zsets: { 'chatwoot:sos:prestige': { [PHONE]: NOW + 86400_000 } } });
+  const rows = await createSosStore(redis, { now: () => NOW }).list('prestige');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sosCaseId, 'newer');
+  assert.equal(rows[0].sosExpiresAt, NOW - 10_000 + 3600_000);
+});
+
+test('SOS retention policy: exhausted retrieval bound is explicit rather than an empty visible list', async () => {
+  let pages = 0;
+  const redis = {async sendCommand(args) {
+    if (args[0] === 'ZRANGEBYSCORE') {pages++; return Array.from({length: 100}, (_, i) => [String(77000000000 + i), NOW + 86400000]);}
+    if (args[0] === 'GET') return JSON.stringify({caseId: 'oc_unknown', signalId: 'unknown'});
+    if (args[0] === 'EXISTS') return 1;
+    return 0;
+  }};
+  const ss = createSosStore(redis, {now: () => NOW});
+  await assert.rejects(ss.list('prestige', 1), /SOS_VISIBLE_SCAN_INCOMPLETE/);
+  assert.equal(pages, 100);
 });
