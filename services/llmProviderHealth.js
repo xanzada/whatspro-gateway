@@ -242,13 +242,8 @@ function probeDue(record, now = Date.now(), baseIntervalMs = 900_000) {
 
 function createLlmProviderHealth(options = {}) {
   const redis = options.redis;
-  const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const timeoutMs = boundedNumber(options.timeoutMs ?? process.env.LLM_PROBE_TIMEOUT_MS, 8000, 100, 15_000);
-  const concurrency = Math.round(boundedNumber(options.concurrency ?? process.env.LLM_PROBE_CONCURRENCY, 2, 1, 4));
-  const intervalMs = boundedNumber(options.intervalMs ?? process.env.LLM_PROBE_INTERVAL_MS, 900_000, 30_000, 3_600_000);
   let mutationTail = Promise.resolve();
   let timer = null;
-  let sweepInFlight = false;
 
   async function readRecords() {
     if (!redis?.isOpen) return {};
@@ -313,104 +308,17 @@ function createLlmProviderHealth(options = {}) {
     });
   }
 
-  async function probe(entry, pool) {
-    const startedAt = Date.now();
-    const controller = new AbortController();
-    let timeout;
-    const deadline = new Promise((_, reject) => {
-      timeout = setTimeout(() => {
-        controller.abort();
-        const error = new Error('PROBE_TIMEOUT');
-        error.name = 'AbortError';
-        reject(error);
-      }, timeoutMs);
-    });
-    let response;
-    try {
-      const mediaProbe = pool === 'media';
-      if (entry.type === 'gemini') {
-        const base = String(entry.baseUrl || '').replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com/v1beta';
-        const model = String(entry.model || '').replace(/^models\//, '');
-        response = await Promise.race([fetchImpl(`${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(entry.key)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: mediaProbe
-              ? [{ text: 'Return only {"ok":true} as JSON after reading this audio.' }, { inlineData: { mimeType: 'audio/wav', data: SILENT_WAV_BASE64 } }]
-              : [{ text: 'Return only {"ok":true} as JSON.' }] }],
-            generationConfig: { maxOutputTokens: 16, responseMimeType: 'application/json' }
-          }),
-          signal: controller.signal
-        }), deadline]);
-      } else {
-        const base = String(entry.baseUrl || '').replace(/\/+$/, '') || (entry.type === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1');
-        response = await Promise.race([fetchImpl(`${base}/models`, {
-          method: 'GET',
-          headers: { authorization: `Bearer ${entry.key}` },
-          signal: controller.signal
-        }), deadline]);
-      }
-      const validPayload = await isSuccessfulProbePayload(response, entry.type);
-      return applyObservation(entry, pool, {
-        source: 'probe', ok: validPayload,
-        errorCode: validPayload ? null : response?.ok ? 'EMPTY_RESPONSE' : `HTTP_${Number(response?.status) || 0}`,
-        latencyMs: Date.now() - startedAt,
-        observedAt: new Date().toISOString()
-      });
-    } catch (error) {
-      const code = error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
-      return applyObservation(entry, pool, {
-        source: 'probe', ok: false, errorCode: code,
-        latencyMs: Date.now() - startedAt,
-        observedAt: new Date().toISOString()
-      });
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
+  // WhatsPro stores keys and passive outcomes; only OpenBot uses provider keys.
+  // Retain old API names for callers, but refuse before workspace/key access.
+  async function probe() {
+    const error = new Error('ACTIVE_LLM_KEY_CHECKS_DISABLED');
+    error.statusCode = 403;
+    throw error;
   }
 
-  async function runJobs(jobs) {
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < jobs.length) {
-        const job = jobs[cursor++];
-        await probe(job.entry, job.pool);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
-  }
-
-  async function checkAll(workspace, targetPool) {
-    const jobs = [];
-    const pools = targetPool && POOLS.has(targetPool) ? [targetPool] : ['text', 'media', 'stt', 'ocr'];
-    for (const pool of pools) {
-      for (const entry of workspace?.[pool] || []) jobs.push({ entry, pool });
-    }
-    await runJobs(jobs);
-    return getHealth(workspace);
-  }
-
-  async function checkDue(workspace) {
-    const records = await readRecords();
-    const jobs = [];
-    for (const pool of ['text', 'media', 'stt', 'ocr']) {
-      for (const entry of workspace?.[pool] || []) {
-        if (probeDue(records[entry.id], Date.now(), intervalMs)) jobs.push({ entry, pool });
-      }
-    }
-    await runJobs(jobs);
-    return getHealth(workspace);
-  }
-
-  async function checkOne(workspace, pool, entryId) {
-    const entry = findEntry(workspace, pool, entryId);
-    if (!entry) {
-      const error = new Error('UNKNOWN_LLM_ENTRY');
-      error.statusCode = 404;
-      throw error;
-    }
-    return probe(entry, pool);
-  }
+  async function checkAll(workspace, targetPool) { return probe(); }
+  async function checkDue(workspace) { return probe(); }
+  async function checkOne(workspace, pool, entryId) { return probe(); }
 
   async function recordOutcome(workspace, outcome) {
     const pool = String(outcome?.pool || '');

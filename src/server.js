@@ -1256,11 +1256,11 @@ app.get('/health/detailed', async (req, res, next) => {
     backend: 'unavailable',
     tenants: 0,
     initialized: false,
-    error: error.message
+    error: 'PLATFORM_STORE_UNAVAILABLE'
   }));
   const inboundWal = await incomingWalSummary().catch(error => ({
     pending: -1,
-    error: error.message
+    error: 'INCOMING_WAL_UNAVAILABLE'
   }));
   const openbotUrl = getOpenBotWebhookUrl();
   let openbot = { ok: false, target: openbotUrl ? 'configured' : 'missing', status: 'not_checked' };
@@ -1277,7 +1277,7 @@ app.get('/health/detailed', async (req, res, next) => {
       openbot = {
         ok: false,
         target: (() => { try { return new URL(openbotUrl).host; } catch { return 'invalid'; } })(),
-        status: error.message
+        status: 'OPENBOT_HEALTH_UNAVAILABLE'
       };
     }
   }
@@ -1504,7 +1504,7 @@ app.get('/api/wa/tenants', requirePlatformAdmin, async (req, res) => {
   try {
     records = await tenantStore.listTenantRecords();
   } catch (error) {
-    return res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
+    return publicServiceError(res, error, 'PLATFORM_STORE_UNAVAILABLE', 503);
   }
   const sessions = await listInstances().catch(() => []);
   // The credential probe is what turns "the hub returns 401" from a log line nobody reads
@@ -1587,7 +1587,7 @@ app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
   try {
     records = await tenantStore.listTenantRecords();
   } catch (error) {
-    return res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
+    return publicServiceError(res, error, 'PLATFORM_STORE_UNAVAILABLE', 503);
   }
   const sessions = await listInstances().catch(() => []);
   const report = evaluateAll(records, { sessions });
@@ -1612,11 +1612,47 @@ async function readSharedPrompt() {
 
 function adminError(res, error) {
   const status = Number(error?.statusCode || 0);
-  if (status >= 400 && status < 600) {
+  if (status >= 400 && status < 500) {
     return res.status(status).json({ error: error.message, fields: error.fields || undefined });
   }
-  console.error('[TENANT:ADMIN]', error?.message || error);
-  return res.status(502).json({ error: 'TENANT_WRITE_FAILED', message: error?.message || String(error) });
+  const safeStatus = Number.isInteger(status) && status >= 500 && status < 600 ? status : 502;
+  console.error('[TENANT:ADMIN]', { code: 'TENANT_WRITE_FAILED', status: safeStatus });
+  return res.status(safeStatus).json({ error: 'TENANT_WRITE_FAILED' });
+}
+
+// Direct service failures expose only a workflow code, never upstream text.
+function publicServiceError(res, error, fallback = 'PLATFORM_STORE_UNAVAILABLE', fixedStatus = null) {
+  const declaredStatus = Number(error?.statusCode || 0);
+  const status = fixedStatus === 503 ? 503 : (Number.isInteger(declaredStatus) && declaredStatus >= 400 && declaredStatus < 600 ? declaredStatus : 503);
+  const known = { BAD_INSTANCE_ID: 400, MEMORY_FIELDS_INVALID: 400, TENANT_NOT_FOUND: 404,
+    ALEMI_INSTANCE_ALREADY_EXISTS: 409, TENANT_ALREADY_EXISTS: 409 };
+  const code = typeof error?.message === 'string' && Object.hasOwn(known, error.message) && known[error.message] === status ? error.message : null;
+  if (code) {
+    const fields = Array.isArray(error.fields) ? error.fields.filter(field => field === 'alemiInstance').slice(0, 16) : undefined;
+    return res.status(status).json({ error: code, ...(fields?.length ? { fields } : {}) });
+  }
+  console.error('[PLATFORM:REQUEST]', { code: fallback, status });
+  return res.status(status).json({ error: fallback });
+}
+
+// LLM workspace errors may contain provider credentials in an upstream failure.
+// Only known workflow codes and bounded field identifiers are public.
+function llmWorkspaceError(res, error) {
+  const declaredStatus = Number(error?.statusCode || 0);
+  const status = Number.isInteger(declaredStatus) && declaredStatus >= 400 && declaredStatus < 600 ? declaredStatus : 502;
+  const known = {
+    INVALID_OUTCOME: 400, INVALID_OUTCOME_FIELDS: 400,
+    LLM_WORKSPACE_ENTRY_INCOMPLETE: 400, UNKNOWN_LLM_ENTRY: 404,
+    PLATFORM_STORE_UNAVAILABLE: 503, ACTIVE_LLM_KEY_CHECKS_DISABLED: 403
+  };
+  const code = typeof error?.message === 'string' && Object.hasOwn(known, error.message) && known[error.message] === status ? error.message : null;
+  if (code) {
+    const identifiers = new Set(['text', 'media', 'stt', 'ocr', 'id', 'entryId', 'pool', 'ok', 'name', 'type', 'model', 'key', 'baseUrl', 'latencyMs', 'errorCode', 'observedAt', 'promptTokens', 'completionTokens', 'totalTokens', 'cost', 'isPaid']);
+    const fields = Array.isArray(error.fields) ? error.fields.filter(field => typeof field === 'string' && identifiers.has(field)).slice(0, 16) : undefined;
+    return res.status(status).json({ error: code, ...(fields?.length ? { fields } : {}) });
+  }
+  console.error('[LLM:WORKSPACE]', { code: 'LLM_WORKSPACE_REQUEST_FAILED', status });
+  return res.status(status).json({ error: 'LLM_WORKSPACE_REQUEST_FAILED' });
 }
 
 // The form derives an id and a domain while you type. It has to ask what the
@@ -1634,7 +1670,7 @@ app.get('/api/wa/platform-storage', requirePlatformAdmin, async (req, res) => {
   try {
     res.json({ success: true, ...(await tenantStore.getStorageSummary()) });
   } catch (error) {
-    res.status(503).json({ error: 'PLATFORM_STORE_UNAVAILABLE', message: error?.message || String(error) });
+    publicServiceError(res, error, 'PLATFORM_STORE_UNAVAILABLE', 503);
   }
 });
 
@@ -1644,7 +1680,7 @@ app.get('/api/wa/runtime-configs', requireMasterApi, async (req, res) => {
     const publicBase = publicApiBase(req);
     res.json({ success: true, configs: configs.map(config => tenantAdmin.runtimeListTenant(config, publicBase)) });
   } catch (error) {
-    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+    publicServiceError(res, error);
   }
 });
 
@@ -1654,7 +1690,7 @@ app.get('/api/wa/runtime-configs/:instanceId', requireMasterApi, async (req, res
     if (!config) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
     res.json({ success: true, config: tenantAdmin.runtimeTenant(config, publicApiBase(req)) });
   } catch (error) {
-    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+    publicServiceError(res, error);
   }
 });
 
@@ -1662,7 +1698,7 @@ app.get('/api/wa/runtime-configs/:instanceId/memories', requireMasterApi, async 
   try {
     res.json({ success: true, memories: await tenantMemoryStore.listMemories(req.params.instanceId) });
   } catch (error) {
-    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+    publicServiceError(res, error);
   }
 });
 
@@ -1670,7 +1706,7 @@ app.post('/api/wa/runtime-configs/:instanceId/memories', requireMasterApi, async
   try {
     res.status(201).json({ success: true, memory: await tenantMemoryStore.addMemory(req.params.instanceId, req.body || {}) });
   } catch (error) {
-    res.status(error?.statusCode || 503).json({ error: error?.message || 'PLATFORM_STORE_UNAVAILABLE' });
+    publicServiceError(res, error);
   }
 });
 
@@ -1706,7 +1742,7 @@ app.get('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
       : await llmProviderHealth.getRuntimeWorkspace(configured);
     res.json({ success: true, workspace });
   } catch (error) {
-    return adminError(res, error);
+    return llmWorkspaceError(res, error);
   }
 });
 
@@ -1715,7 +1751,7 @@ app.put('/api/wa/llm-workspace', requirePlatformAdmin, async (req, res) => {
     const workspace = await llmWorkspace.saveWorkspace(req.body || {});
     res.json({ success: true, workspace });
   } catch (error) {
-    return adminError(res, error);
+    return llmWorkspaceError(res, error);
   }
 });
 
@@ -1724,29 +1760,13 @@ app.get('/api/wa/llm-workspace/health', requirePlatformAdmin, async (req, res) =
     const workspace = await llmWorkspace.getWorkspace();
     res.json({ success: true, health: await llmProviderHealth.getHealth(workspace) });
   } catch (error) {
-    return adminError(res, error);
+    return llmWorkspaceError(res, error);
   }
 });
 
-app.post('/api/wa/llm-workspace/check', requirePlatformAdmin, async (req, res) => {
-  try {
-    const workspace = await llmWorkspace.getWorkspace();
-    const entryId = String(req.body?.entryId || '');
-    const pool = String(req.body?.pool || '');
-    if (!entryId && !pool) {
-      return res.json({ success: true, health: await llmProviderHealth.checkAll(workspace) });
-    }
-    if (!entryId && ['text', 'media', 'stt', 'ocr'].includes(pool)) {
-      return res.json({ success: true, health: await llmProviderHealth.checkAll(workspace, pool) });
-    }
-    if (!entryId || !['text', 'media', 'stt', 'ocr'].includes(pool)) {
-      return res.status(400).json({ error: 'INVALID_LLM_CHECK' });
-    }
-    const result = await llmProviderHealth.checkOne(workspace, pool, entryId);
-    res.json({ success: true, result });
-  } catch (error) {
-    return adminError(res, error);
-  }
+app.post('/api/wa/llm-workspace/check', requirePlatformAdmin, async (_req, res) => {
+  // Local refusal precedes workspace retrieval: never validate provider keys here.
+  return res.status(403).json({ success: false, error: 'ACTIVE_LLM_KEY_CHECKS_DISABLED' });
 });
 
 app.post('/api/wa/llm-workspace/outcomes', requirePlatformAdmin, async (req, res) => {
@@ -1758,7 +1778,7 @@ app.post('/api/wa/llm-workspace/outcomes', requirePlatformAdmin, async (req, res
     const result = await llmProviderHealth.recordOutcome(workspace, body);
     res.json({ success: true, result });
   } catch (error) {
-    return adminError(res, error);
+    return llmWorkspaceError(res, error);
   }
 });
 
@@ -2009,7 +2029,7 @@ app.get('/api/wa/connect/:token/status', async (req, res) => {
       expiresAt: scoped.expiresAt
     });
   } catch (error) {
-    res.status(error?.statusCode || 503).json({ error: error?.message || 'CONNECT_STATUS_UNAVAILABLE' });
+    publicServiceError(res, error, 'CONNECT_STATUS_UNAVAILABLE');
   }
 });
 

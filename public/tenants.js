@@ -122,7 +122,7 @@
       poolOcr: 'Чек және құжаттарды тану (OCR / Vision)', poolOcrHint: 'Суреттер мен PDF құжаттарды мәтінге айналдыру (Gemini Vision, OpenAI Vision).',
       typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
       healthHealthy: 'Жұмыс істеп тұр', healthUnknown: 'Әлі тексерілмеді', healthSuspect: 'Тұрақсыз', healthUnavailable: 'Қолжетімсіз',
-      checkNow: 'Қазір тексеру', checkedAt: 'Тексерілді', latency: 'Кідіріс', checkingProvider: 'Провайдер тексерілуде',
+      checkNow: 'Қазір тексеру', checkedAt: 'Соңғы нәтиже', latency: 'Кідіріс', checkingProvider: 'Провайдер тексерілуде',
       keyName: 'Атауы (мысалы: DeepSeek тегін)', addKey: 'Кілт қосу', keyFieldsRequired: 'Модель мен API key өрістерін толтырыңыз.',
       allowSavedContacts: 'Сақталған контактілерге жауап береді', allowUnsavedContacts: 'Сақталмаған нөмірлерге жауап береді',
       ignoredContacts: 'Еленбейтін контактілер', ignoredHint: 'Атауы (мысалы: мама, папа) немесе нөмірі — үтірмен немесе жаңа жолмен.',
@@ -229,7 +229,7 @@
       poolOcr: 'Распознавание чеков и документов (OCR / Vision)', poolOcrHint: 'Извлечение данных из фото чеков и PDF (Gemini Vision, OpenAI Vision).',
       typeGroq: 'Groq (Whisper API / Llama)', typeCloudflare: 'Cloudflare Workers AI',
       healthHealthy: 'Работает', healthUnknown: 'Ещё не проверен', healthSuspect: 'Нестабилен', healthUnavailable: 'Недоступен',
-      checkNow: 'Проверить сейчас', checkedAt: 'Проверено', latency: 'Задержка', checkingProvider: 'Проверяем провайдера',
+      checkNow: 'Проверить сейчас', checkedAt: 'Последний результат', latency: 'Задержка', checkingProvider: 'Проверяем провайдера',
       keyName: 'Название (например: DeepSeek бесплатный)', addKey: 'Добавить ключ', keyFieldsRequired: 'Заполните модель и API key.',
       allowSavedContacts: 'Отвечать сохранённым контактам', allowUnsavedContacts: 'Отвечать несохранённым номерам',
       ignoredContacts: 'Игнорируемые контакты', ignoredHint: 'Имя (например: мама, папа) или номер — через запятую или с новой строки.',
@@ -888,7 +888,6 @@
       ) + '</div>' +
       '<div class="field"><label>API key</label><input name="ak-key" value="' + attr(entry.key || '') + '" autocomplete="off" spellcheck="false"></div>' +
       '<div class="ak-actions">' +
-      (entry.id ? '<button class="button ghost" type="button" data-action="ak-check" data-pool="' + pool + '" data-entry-id="' + attr(entry.id) + '">● ' + t('checkNow') + '</button>' : '') +
       (index > 0 ? '<button class="button ghost" type="button" data-action="ak-up" data-pool="' + pool + '" data-index="' + index + '">↑</button>' : '') +
       (index < total - 1 ? '<button class="button ghost" type="button" data-action="ak-down" data-pool="' + pool + '" data-index="' + index + '">↓</button>' : '') +
       '<button class="button ghost" type="button" data-action="ak-dup" data-pool="' + pool + '" data-index="' + index + '" title="' + attr(t('akDupHint')) + '">⧉ ' + t('duplicate') + '</button>' +
@@ -1017,9 +1016,6 @@
       '<div class="ak-pool-head-right" onclick="event.stopPropagation()">' +
         akStatsHtml(stats) +
         '<span class="ak-stat-pill tokens" title="' + attr(t('tokensTotal')) + '">🪙 ' + formatTokens(stats.totalTokens) + '</span>' +
-        '<button class="button secondary ak-pool-test" type="button" data-action="ak-check-pool" data-pool="' + pool + '" title="' + attr(t('checkPoolHint')) + '">' +
-          '⚡ ' + t('checkPool') +
-        '</button>' +
       '</div>' +
     '</div>';
 
@@ -1052,7 +1048,6 @@
     return '<div class="page">' +
       '<div class="ak-title-row"><h3>' + t('workspaceTitle') + '</h3>' +
       '<div class="ak-title-actions">' +
-        '<button class="button secondary ak-test-all" type="button" data-action="ak-check-all" title="' + attr(t('checkAllHint')) + '">⚡ ' + t('checkAll') + '</button>' +
         '<button class="button primary ak-save" type="button" data-action="ak-save">' + t('save') + '</button>' +
       '</div></div>' +
       '<p class="ak-hint">' + t('workspaceCopy') + '</p>' +
@@ -2042,49 +2037,6 @@
           if (bodyEl) bodyEl.classList.toggle('collapsed', akCollapsed[togglePool]);
           if (chevEl) chevEl.classList.toggle('collapsed', akCollapsed[togglePool]);
         }
-      } else if (name === 'ak-check-pool') {
-        var targetPool = action.dataset.pool;
-        var origPoolText = action.innerHTML;
-        action.disabled = true;
-        action.innerHTML = '⏳ ' + t('testingPool');
-        var collected = akCollect(true);
-        if (collected) { akPools.text = collected.text; akPools.media = collected.media; }
-        api('POST', '/api/wa/llm-workspace/check', { pool: targetPool })
-          .then(function () { return loadAkHealth(); })
-          .then(function () {
-            render();
-            toast(t('testDoneTitle'), t('testDoneSummary'));
-          })
-          .catch(function (error) {
-            action.disabled = false;
-            action.innerHTML = origPoolText;
-            toast(t('actionFailed'), error.message, true);
-          });
-      } else if (name === 'ak-check-all') {
-        var origAllText = action.innerHTML;
-        action.disabled = true;
-        action.innerHTML = '⏳ ' + t('testingAll');
-        var collectedAll = akCollect(true);
-        if (collectedAll) { akPools.text = collectedAll.text; akPools.media = collectedAll.media; }
-        api('POST', '/api/wa/llm-workspace/check', {})
-          .then(function () { return loadAkHealth(); })
-          .then(function () {
-            render();
-            toast(t('testDoneTitle'), t('testDoneSummary'));
-          })
-          .catch(function (error) {
-            action.disabled = false;
-            action.innerHTML = origAllText;
-            toast(t('actionFailed'), error.message, true);
-          });
-      } else if (name === 'ak-check') {
-        var checkPool = action.dataset.pool;
-        var checkEntryId = action.dataset.entryId;
-        action.disabled = true;
-        api('POST', '/api/wa/llm-workspace/check', { entryId: checkEntryId, pool: checkPool })
-          .then(function () { return loadAkHealth(); })
-          .then(function () { refreshAkHealthDom(); render(); toast(t('checkingProvider'), akHealthLabel(akHealthFor(checkPool, checkEntryId).status)); })
-          .catch(function (error) { action.disabled = false; toast(t('actionFailed'), error.message, true); });
       } else if (name === 'rs-add-phone') {
         var rs = rsSettings || {};
         rs.test_allowed_phones = rs.test_allowed_phones || [];

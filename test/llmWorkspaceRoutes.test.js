@@ -9,7 +9,7 @@ const server = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), '
 const panel = fs.readFileSync(path.join(__dirname, '..', 'public', 'tenants.js'), 'utf8');
 const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'tenants.css'), 'utf8');
 
-test('LLM workspace exposes health, manual check, and strict runtime outcome routes', () => {
+test('LLM workspace exposes passive health, locally refused manual check, and strict runtime outcomes', () => {
   assert.match(server, /app\.get\('\/api\/wa\/llm-workspace\/health', requirePlatformAdmin/);
   assert.match(server, /app\.post\('\/api\/wa\/llm-workspace\/check', requirePlatformAdmin/);
   assert.match(server, /app\.post\('\/api\/wa\/llm-workspace\/outcomes', requirePlatformAdmin/);
@@ -19,7 +19,7 @@ test('LLM workspace exposes health, manual check, and strict runtime outcome rou
 test('panel visibly separates text and media and refreshes sanitized health while visible', () => {
   assert.match(panel, /ak-pools-stack/);
   assert.match(panel, /ak-health-dot/);
-  assert.match(panel, /data-action="ak-check"/);
+  assert.doesNotMatch(panel, /data-action="ak-check(?:-pool|-all)?"/);
   assert.match(panel, /\/api\/wa\/llm-workspace\/health/);
   assert.match(panel, /document\.hidden/);
   assert.match(css, /\.ak-health-dot\.healthy/);

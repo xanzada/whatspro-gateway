@@ -57,45 +57,25 @@ test('healthy providers use measured latency only as a runtime tie-breaker', () 
   assert.deepEqual(sorted.text.map(item => item.name), ['fast', 'slow']);
 });
 
-test('provider probes are bounded, concurrency-limited, and never persist secrets or raw bodies', async () => {
-  const redis = new MemoryRedis();
-  let active = 0;
-  let peak = 0;
-  const fetchImpl = async (_url, options) => {
-    active += 1;
-    peak = Math.max(peak, active);
-    assert.equal(JSON.stringify(options).includes('secret-'), true, 'credential is used only on the outbound request');
-    await new Promise(resolve => setTimeout(resolve, 10));
-    active -= 1;
-    return { ok: false, status: 402, text: async () => 'RAW BODY WITH secret-leak' };
-  };
-  const health = createLlmProviderHealth({ redis, fetchImpl, concurrency: 2, timeoutMs: 100 });
-  const workspace = { text: [entry('llm_a_12345678901234567890', 'a'), entry('llm_b_12345678901234567890', 'b'), entry('llm_c_12345678901234567890', 'c')], media: [] };
-  await health.checkAll(workspace);
-  assert.equal(peak, 2);
-  const stored = redis.data.get('whatspro:llm-health:v1');
-  assert.equal(stored.includes('secret-'), false);
-  assert.equal(stored.includes('RAW BODY'), false);
-  const report = await health.getHealth(workspace);
-  assert.equal(report.text[0].status, 'unavailable');
-  assert.equal(report.text[0].errorCode, 'PAYMENT_REQUIRED');
+test('active provider checks are refused without outbound requests or health writes', async () => {
+  const redis = new MemoryRedis(); const calls = [];
+  const health = createLlmProviderHealth({ redis, fetchImpl: async (...args) => { calls.push(args); throw new Error('FORBIDDEN_SYNTHETIC_FETCH'); } });
+  const workspace = { text: [entry('llm_a_12345678901234567890', 'a')], media: [] };
+  await assert.rejects(() => health.checkAll(workspace), /ACTIVE_LLM_KEY_CHECKS_DISABLED/);
+  assert.deepEqual(calls, []); assert.equal(redis.data.size, 0);
+  const report = await health.getHealth(workspace); assert.equal(report.text[0].status, 'unknown');
 });
 
-test('HTTP 200 without a valid probe result is not marked healthy', async () => {
-  const redis = new MemoryRedis();
-  const health = createLlmProviderHealth({
-    redis,
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ choices: [] }) }),
-    timeoutMs: 100
-  });
+test('disabled checks never manufacture a healthy observation', async () => {
+  const redis = new MemoryRedis(); let calls = 0;
+  const health = createLlmProviderHealth({ redis, fetchImpl: async () => { calls += 1; return { ok: true, status: 200 }; } });
   const workspace = { text: [entry('llm_empty_123456789012345', 'empty')], media: [] };
-  await health.checkAll(workspace);
+  await assert.rejects(() => health.checkAll(workspace), /ACTIVE_LLM_KEY_CHECKS_DISABLED/);
   const report = await health.getHealth(workspace);
-  assert.equal(report.text[0].status, 'suspect');
-  assert.equal(report.text[0].errorCode, 'EMPTY_RESPONSE');
+  assert.equal(calls, 0); assert.equal(report.text[0].status, 'unknown'); assert.equal(report.text[0].lastCheckedAt, null);
 });
 
-test('runtime outcomes immediately override a recent probe and reject unknown ids', async () => {
+test('runtime outcomes immediately rank providers and reject unknown ids', async () => {
   const redis = new MemoryRedis();
   const health = createLlmProviderHealth({
     redis,
@@ -107,7 +87,7 @@ test('runtime outcomes immediately override a recent probe and reject unknown id
     timeoutMs: 100
   });
   const workspace = { text: [entry('llm_live_1234567890123456', 'live'), entry('llm_reserve_12345678901234', 'reserve')], media: [] };
-  await health.checkAll(workspace);
+  await health.recordOutcome(workspace, { entryId: workspace.text[1].id, pool: 'text', ok: true, latencyMs: 9, observedAt: new Date().toISOString() });
   await health.recordOutcome(workspace, {
     entryId: workspace.text[0].id, pool: 'text', ok: false, latencyMs: 18,
     errorCode: 'payment required: raw provider message', observedAt: new Date().toISOString()
@@ -143,19 +123,16 @@ test('runtime outcome payload rejects every extra field and returns only allowli
   ]);
 });
 
-test('a provider that ignores AbortSignal is still bounded by the probe deadline', async () => {
-  const redis = new MemoryRedis();
-  const health = createLlmProviderHealth({ redis, fetchImpl: async () => new Promise(() => {}), timeoutMs: 100 });
+test('disabled checks do not invoke a provider that would never settle', async () => {
+  const redis = new MemoryRedis(); let calls = 0;
+  const health = createLlmProviderHealth({ redis, fetchImpl: async () => { calls += 1; return new Promise(() => {}); } });
   const workspace = { text: [entry('llm_hang_1234567890123456', 'hang')], media: [] };
-  const started = Date.now();
-  await health.checkAll(workspace);
-  assert.equal(Date.now() - started < 500, true);
-  const report = await health.getHealth(workspace);
-  assert.equal(report.text[0].status, 'suspect');
-  assert.equal(report.text[0].errorCode, 'TIMEOUT');
+  await assert.rejects(() => health.checkAll(workspace), /ACTIVE_LLM_KEY_CHECKS_DISABLED/);
+  assert.equal(calls, 0); assert.equal(redis.data.size, 0);
+  const report = await health.getHealth(workspace); assert.equal(report.text[0].status, 'unknown');
 });
 
-test('automatic probes recheck every provider once every 15 minutes (900_000 ms)', () => {
+test('historical probeDue metadata predicate remains pure; automatic scheduling is disabled', () => {
   const now = Date.now();
   assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 899_000).toISOString() }, now), false);
   assert.equal(probeDue({ status: 'healthy', lastCheckedAt: new Date(now - 901_000).toISOString() }, now), true);
@@ -163,74 +140,19 @@ test('automatic probes recheck every provider once every 15 minutes (900_000 ms)
   assert.equal(probeDue({ status: 'unavailable', consecutiveFailures: 9, lastCheckedAt: new Date(now - 901_000).toISOString() }, now), true);
 });
 
-test('media probes check openai models with zero tokens and gemini audio with silent WAV', async () => {
-  const redis = new MemoryRedis();
-  const requests = [];
-  const health = createLlmProviderHealth({
-    redis,
-    fetchImpl: async (url, options) => {
-      requests.push({ url, options });
-      if (options.method === 'GET') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ object: 'list', data: [{ id: 'model-1' }] })
-        };
-      }
-      const body = JSON.parse(options.body);
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] })
-      };
-    },
-    timeoutMs: 100
-  });
-  const workspace = {
-    text: [],
-    media: [entry('llm_audio_openai_1234567890', 'audio-openai'), entry('llm_audio_gemini_1234567890', 'audio-gemini', 'gemini')]
-  };
-  await health.checkAll(workspace);
-  // OpenAI media probe uses GET /models (0 tokens)
-  assert.equal(requests[0].options.method, 'GET');
-  assert.equal(requests[0].url, 'https://provider.example/v1/models');
-  assert.equal(requests[0].options.body, undefined);
-
-  // Gemini media probe exercises inline audio
-  assert.equal(requests[1].options.method, 'POST');
-  const geminiBody = JSON.parse(requests[1].options.body);
-  const geminiAudio = geminiBody.contents[0].parts.find(item => item.inlineData).inlineData;
-  assert.equal(geminiAudio.mimeType, 'audio/wav');
-  assert.match(geminiAudio.data, /^UklGR/);
+test('media key checks perform neither models GET nor Gemini generation', async () => {
+  const redis = new MemoryRedis(); const requests = [];
+  const health = createLlmProviderHealth({ redis, fetchImpl: async (...args) => { requests.push(args); throw new Error('FORBIDDEN_SYNTHETIC_FETCH'); } });
+  const workspace = { text: [], media: [entry('llm_audio_openai_1234567890', 'audio-openai'), entry('llm_audio_gemini_1234567890', 'audio-gemini', 'gemini')] };
+  await assert.rejects(() => health.checkAll(workspace), /ACTIVE_LLM_KEY_CHECKS_DISABLED/);
+  assert.deepEqual(requests, []); assert.equal(redis.data.size, 0);
 });
 
-test('openai-compatible providers in text and media pools probe GET /models with 0 tokens', async () => {
-  const redis = new MemoryRedis();
-  const calls = [];
-  const health = createLlmProviderHealth({
-    redis,
-    fetchImpl: async (url, options) => {
-      calls.push({ url, method: options.method });
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ object: 'list', data: [{ id: 'gemini-3.8-flash' }] })
-      };
-    },
-    timeoutMs: 100
-  });
-  const workspace = {
-    text: [entry('llm_a6api_text_1234567890', 'a6api-text')],
-    media: [entry('llm_a6api_media_123456789', 'a6api-media')]
-  };
-  const report = await health.checkAll(workspace);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].method, 'GET');
-  assert.equal(calls[0].url, 'https://provider.example/v1/models');
-  assert.equal(calls[1].method, 'GET');
-  assert.equal(calls[1].url, 'https://provider.example/v1/models');
-  assert.equal(report.text[0].status, 'healthy');
-  assert.equal(report.text[0].totalTokens, 0);
-  assert.equal(report.media[0].status, 'healthy');
-  assert.equal(report.media[0].totalTokens, 0);
+test('text and media keys retain passive unknown health without validating models', async () => {
+  const redis = new MemoryRedis(); const calls = [];
+  const health = createLlmProviderHealth({ redis, fetchImpl: async (...args) => { calls.push(args); throw new Error('FORBIDDEN_SYNTHETIC_FETCH'); } });
+  const workspace = { text: [entry('llm_a6api_text_1234567890', 'a6api-text')], media: [entry('llm_a6api_media_123456789', 'a6api-media')] };
+  await assert.rejects(() => health.checkAll(workspace), /ACTIVE_LLM_KEY_CHECKS_DISABLED/);
+  const report = await health.getHealth(workspace);
+  assert.deepEqual(calls, []); assert.equal(report.text[0].status, 'unknown'); assert.equal(report.text[0].totalTokens, 0); assert.equal(report.media[0].status, 'unknown'); assert.equal(report.media[0].totalTokens, 0);
 });
