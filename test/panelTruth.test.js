@@ -39,16 +39,105 @@ test('the row is re-verified before it is overwritten', async () => {
 });
 
 // ---------------------------------------------------------------------------- C28
-test('a failed history read never deletes a chat from the inbox', async () => {
+test('a failed history read never deletes a chat from the inbox', async (t) => {
   const server = await read('../src/server.js');
-  // The reads must be distinguishable from "no history": .catch(() => []) made one transient
-  // Redis error look like a dead chat, and the sweep then ZREM'd the inbox entry, the viewed
-  // marker, the archive membership and the archive marker. The conversation vanished from the
-  // panel while its messages sat in Redis.
-  assert.match(server, /chatHistoryKey\(instanceId, item\.phone\), '-500', '-1'\]\)\.catch\(\(\) => null\)/);
-  assert.match(server, /openbotHistoryKey\(instanceId, item\.phone\), '-500', '-1'\]\)\.catch\(\(\) => null\)/);
-  assert.match(server, /const readFailed = gatewayRows === null && openbotRows === null;/);
-  assert.match(server, /if \(!readFailed\) stalePhones\.push\(item\.phone\);/);
+  const start = server.indexOf("app.get('/api/chat/inbox/:instanceId',");
+  const end = server.indexOf("app.get('/api/chat/events/:instanceId',", start);
+  assert.ok(start >= 0 && end > start, 'the complete production inbox route is present');
+  const registration = server.slice(start, end);
+  // Execute the production callback unchanged. Only its Redis and presentation boundaries
+  // are controlled; no copy of its read-failure predicate or cleanup decision is used here.
+  const axes = [
+    { name: 'canonical rejects, legacy is empty', canonical: null, legacy: [] },
+    { name: 'canonical is empty, legacy rejects', canonical: [], legacy: null },
+    { name: 'both history reads reject', canonical: null, legacy: null },
+    { name: 'both reads succeed empty', canonical: [], legacy: [], prune: true },
+    { name: 'canonical nonempty takes priority', canonical: ['canonical-row'], legacy: ['legacy-row'], selected: ['canonical-row'] },
+    { name: 'legacy nonempty remains the fallback', canonical: [], legacy: ['legacy-row'], selected: ['legacy-row'] },
+    { name: 'live SOS survives uncertain history', canonical: null, legacy: [], sos: true, selected: [] },
+  ];
+  for (const axis of axes) await t.test(axis.name, async () => {
+    const instanceId = 'panel-truth-private-fixture';
+    const phone = '77000000000';
+    const keys = { history: 'fixture:canonical', legacy: 'fixture:legacy',
+      inbox: 'fixture:inbox', archive: 'fixture:archive', viewed: 'fixture:viewed', marker: 'fixture:marker' };
+    const state = { inbox: new Map([[phone, '1700000000000']]), archive: new Set([phone]),
+      viewed: new Map([[phone, '1699999999000']]), marker: new Map([[keys.marker, 'original-archive-marker']]) };
+    const snapshot = () => ({ inbox: [...state.inbox], archive: [...state.archive],
+      viewed: [...state.viewed], marker: [...state.marker] });
+    const before = snapshot();
+    const commands = [];
+    const selectedHistories = [];
+    let callback;
+    const context = {
+      app: { get(path, ...handlers) {
+        assert.equal(path, '/api/chat/inbox/:instanceId');
+        assert.equal(callback, undefined, 'register exactly one route');
+        callback = handlers.at(-1);
+      } },
+      resolveChatInstance() {}, requireChatUiOrApi() {},
+      isValidInstanceId: (value) => value === instanceId,
+      parseLimit: () => 100,
+      getTestModePolicy: async () => ({ enabled: false }), allowsPhone: (_policy, value) => value === phone,
+      readInboxEntries: async () => [{ phone, updatedAt: 1700000000000 }],
+      cachedLegacyHistoryKeys: async () => [],
+      sosStore: { list: async () => axis.sos ? [{ phone, sosCreatedAt: 1700000000000,
+        sosExpiresAt: 1700003600000, sosUnread: true, sosCaseId: 'fixture-case', sosKind: 'operator' }] : [] },
+      chatStore: { resolveLidPhone: async (_instance, value) => value, getState: async () => 'archive' },
+      normalizePhone: (value) => value, isValidChatPhone: (value) => value === phone,
+      chatHistoryKey: () => keys.history, openbotHistoryKey: () => keys.legacy,
+      chatInboxKey: () => keys.inbox, chatArchiveKey: () => keys.archive,
+      chatViewedKey: () => keys.viewed, chatArchiveMarkerKey: () => keys.marker,
+      summarizeChat(item, rows) {
+        selectedHistories.push(Array.from(rows));
+        return { phone: item.phone, updatedAt: item.updatedAt, unread: true, closed: true };
+      },
+      redisClient: { isOpen: true, async sendCommand(args) {
+        commands.push(Array.from(args));
+        const [command, key, member] = args;
+        if (command === 'SMEMBERS' && key === keys.archive) return [...state.archive];
+        if (command === 'ZSCORE' && key === keys.viewed) return state.viewed.get(member) || null;
+        if (command === 'LRANGE' && (key === keys.history || key === keys.legacy)) {
+          assert.deepEqual(Array.from(args.slice(2)), ['-500', '-1']);
+          const rows = key === keys.history ? axis.canonical : axis.legacy;
+          if (rows === null) throw new Error('synthetic private Redis read failure');
+          return rows.slice();
+        }
+        if (command === 'ZREM' && key === keys.inbox) return Number(state.inbox.delete(member));
+        if (command === 'SREM' && key === keys.archive) return Number(state.archive.delete(member));
+        if (command === 'ZREM' && key === keys.viewed) return Number(state.viewed.delete(member));
+        if (command === 'DEL' && key === keys.marker) return Number(state.marker.delete(key));
+        assert.fail(`unexpected Redis boundary command: ${command}`);
+      } },
+    };
+    require('node:vm').runInNewContext(registration, context, { timeout: 1000, filename: 'production-inbox-route.js' });
+    assert.equal(typeof callback, 'function');
+    let reply;
+    await callback({ params: { instanceId }, query: { limit: '100' } }, {
+      status(code) { assert.fail(`unexpected HTTP status ${code}`); }, json(value) { reply = value; },
+    });
+    assert.equal(reply.success, true);
+    assert.equal(reply.instanceId, instanceId);
+    assert.equal(commands.filter(([command]) => command === 'LRANGE').length, 2);
+    const cleanup = commands.filter(([command]) => ['ZREM', 'SREM', 'DEL'].includes(command));
+    if (axis.prune) {
+      assert.deepEqual(cleanup, [['ZREM', keys.inbox, phone], ['SREM', keys.archive, phone],
+        ['ZREM', keys.viewed, phone], ['DEL', keys.marker]]);
+      assert.deepEqual(snapshot(), { inbox: [], archive: [], viewed: [], marker: [] });
+      assert.equal(reply.items.length, 0);
+    } else {
+      assert.deepEqual(cleanup, [], 'an uncertain or nonempty history must not remove metadata');
+      assert.deepEqual(snapshot(), before, 'preserve every original metadata value');
+      assert.equal(reply.items.length, axis.selected ? 1 : 0);
+    }
+    if (axis.selected) assert.deepEqual(selectedHistories, [axis.selected]);
+    else assert.deepEqual(selectedHistories, []);
+    if (axis.sos) {
+      assert.equal(reply.items[0].sos, true);
+      assert.equal(reply.items[0].sosUnread, true);
+      assert.equal(reply.items[0].sosCaseId, 'fixture-case');
+    }
+  });
 });
 
 test('a genuinely empty chat is still swept', async () => {
