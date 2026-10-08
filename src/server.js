@@ -1197,6 +1197,22 @@ async function cachedLegacyHistoryKeys(instanceId) {
   }
 }
 
+// Recovery must examine original model-history timestamps before display normalization.
+function legacyHistoryLastAt(historyRows, at) {
+  let latest = 0;
+  for (const row of historyRows) {
+    const entry = parseHistoryEntry(row);
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const raw = entry.createdAt ?? entry.timestamp ?? entry.time;
+    if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^[0-9]+$/.test(raw))) continue;
+    let value = Number(raw);
+    if (!Number.isSafeInteger(value) || value <= 0) continue;
+    if (value < 1e12) value *= 1000;
+    if (Number.isSafeInteger(value) && value <= at) latest = Math.max(latest, value);
+  }
+  return latest;
+}
+
 function summarizeChat(item, historyRows, viewedAt, archived) {
   const history = historyRows.map(parseHistoryEntry).filter(Boolean).map(normalizeChatEntry);
   const last = [...history].reverse().find(entry => entryPreview(entry)) || history[history.length - 1] || null;
@@ -2120,34 +2136,41 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
   for (const row of sosRows) {
     row.phone = await chatStore.resolveLidPhone(instanceId, row.phone).catch(() => row.phone);
   }
-  for (const row of [...sosRows.map(row => ({ phone: row.phone, updatedAt: row.sosCreatedAt || 0 })), ...inboxRows, ...legacyHistoryKeys]) {
+  const recoveryBudget = 10000;
+  let recoveryTruncated = false;
+  for (const row of [...sosRows.map(row => ({ phone: row.phone, updatedAt: row.sosCreatedAt || 0 })), ...inboxRows,
+    ...legacyHistoryKeys.map(row => ({ ...row, legacyOnly: true }))]) {
     // A linked-device LID resolves to the real phone before the dedupe check,
     // so a ghost LID chat merges into the real conversation instead of
     // haunting the panel as a second, unloadable entry (live bug, 2026-08-21).
     const phone = await chatStore.resolveLidPhone(instanceId, row.phone).catch(() => normalizePhone(row.phone));
     if (!isValidChatPhone(phone) || !allowsPhone(testModePolicy, phone) || seen.has(phone)) continue;
     seen.add(phone);
-    candidates.push({ phone, updatedAt: Number(row.updatedAt) || 0 });
-    if (candidates.length >= limit) break;
+    if (candidates.length >= recoveryBudget) { recoveryTruncated = true; break; }
+    candidates.push({ phone, updatedAt: Number(row.updatedAt) || 0, legacyOnly: Boolean(row.legacyOnly) });
   }
 
   const sosByPhone = new Map(sosRows.map(row => [row.phone, row]));
-  const [archiveRows, histories, openbotHistories, viewedScores, states] = await Promise.all([
-    redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []),
+  const archiveRows = await redisClient.sendCommand(['SMEMBERS', chatArchiveKey(instanceId)]).catch(() => []);
+  const archiveSet = new Set((archiveRows || []).map(normalizePhone).filter(Boolean));
+  const items = [];
+  const stalePhones = [];
+  for (let offset = 0; offset < candidates.length && items.length < limit; offset += 100) {
+    const batch = candidates.slice(offset, offset + 100);
+    const [histories, openbotHistories, viewedScores, states, deadlines] = await Promise.all([
     // null, not [], on failure. An errored read used to be indistinguishable from "no
     // history", and the sweep below deletes the inbox index entry for a chat with no
     // history - so one transient Redis error made a live conversation vanish from the
     // operator panel and could resurface an archived chat as active (found 2026-08-23).
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
-    Promise.all(candidates.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null))),
-    Promise.all(candidates.map(item => chatStore.getState(instanceId, item.phone)))
+    Promise.all(batch.map(item => redisClient.sendCommand(['LRANGE', chatHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
+    Promise.all(batch.map(item => redisClient.sendCommand(['LRANGE', openbotHistoryKey(instanceId, item.phone), '-500', '-1']).catch(() => null))),
+    Promise.all(batch.map(item => redisClient.sendCommand(['ZSCORE', chatViewedKey(instanceId), item.phone]).catch(() => null))),
+    Promise.all(batch.map(item => chatStore.getState(instanceId, item.phone))),
+    Promise.all(batch.map(item => item.legacyOnly ? chatStore.getRetentionSnapshot(instanceId, item.phone) : null))
   ]);
-  const archiveSet = new Set((archiveRows || []).map(normalizePhone).filter(Boolean));
-  const items = [];
-  const stalePhones = [];
 
-  candidates.forEach((item, index) => {
+  batch.forEach((item, index) => {
+    if (items.length >= limit) return;
     // The gateway timeline is canonical. OpenBot history is an internal model
     // memory and is used only to recover older chats that have no gateway rows.
     const gatewayRows = histories[index];
@@ -2162,8 +2185,16 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
       if (!readFailed) stalePhones.push(item.phone);
       return;
     }
+    const at = Date.now();
+    const rawLastAt = item.legacyOnly ? legacyHistoryLastAt(historyRows, at) : 0;
+    if (item.legacyOnly && !sosByPhone.has(item.phone)) {
+      // null is an uncertain/malformed stored origin. 0 is a bare legacy chat.
+      const deadline = deadlines[index].deadline;
+      if (readFailed || deadline === null || (deadline > 0 ? deadline <= at : !rawLastAt || rawLastAt + 86400000 <= at)) return;
+    }
     const summary = summarizeChat(item, historyRows, Number(viewedScores[index]) || 0, archiveSet.has(item.phone));
-    const state = states[index] || (summary.closed ? 'archive' : summary.hasOperator ? 'operator' : summary.unread ? 'new' : 'all');
+    if (item.legacyOnly && deadlines[index].deadline === 0) summary.lastAt = rawLastAt;
+    const state = (item.legacyOnly ? deadlines[index].state : states[index]) || (summary.closed ? 'archive' : summary.hasOperator ? 'operator' : summary.unread ? 'new' : 'all');
     const sos = sosByPhone.get(item.phone) || null;
     items.push({
       ...summary,
@@ -2188,6 +2219,7 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
       sosCaseId: String(sos?.sosCaseId || '')
     });
   });
+  }
 
   await Promise.all(stalePhones.map(phone => Promise.all([
     redisClient.sendCommand(['ZREM', chatInboxKey(instanceId), phone]).catch(() => 0),
@@ -2198,7 +2230,7 @@ app.get('/api/chat/inbox/:instanceId', resolveChatInstance, requireChatUiOrApi, 
 
   items.sort((a, b) => Number(b.lastAt || b.updatedAt || 0) - Number(a.lastAt || a.updatedAt || 0));
 
-  res.json({ success: true, instanceId, items });
+  res.json({ success: true, instanceId, items, recoveryIncomplete: recoveryTruncated && items.length < limit });
 });
 
 app.get('/api/chat/events/:instanceId', resolveChatInstance, requireChatUiOrApi, async (req, res) => {

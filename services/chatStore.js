@@ -75,11 +75,39 @@ function parseLegacyInboxRow(raw, now) {
   const object = parseJson(value);
   if (object && typeof object === 'object') {
     const phone = normalizePhone(object.phone || object.senderPhone || object.from || '');
-    return isPhone(phone) ? { phone, updatedAt: Number(object.createdAt || object.updatedAt || object.timestamp || now()) } : null;
+    return isPhone(phone) ? { phone, updatedAt: Number(object.createdAt || object.updatedAt || object.timestamp || object.time || 0) } : null;
   }
   const [phonePart, scorePart] = value.split(/[,|]/);
   const phone = normalizePhone(phonePart);
   return isPhone(phone) ? { phone, updatedAt: Number(scorePart) || 0 } : null;
+}
+
+// A presentation deadline comes from stored activity/transition time, never a read or
+// the remaining lifetime of durable OpenBot model history. null means unproved.
+function retentionDeadline(state, stamp, activity, archiveAt, expiry, at) {
+  if ([state, stamp, activity, archiveAt, expiry].some(value => value === undefined)) return null;
+  if (state && !CHAT_STATES.has(state)) return null;
+  // Expired index proof outlives short state keys. It may only be superseded by a
+  // genuine newer activity/transition, not bare model history recovered on a poll.
+  if (!state && !stamp && !archiveAt && expiry !== null && expiry !== '') {
+    const ended = Number(expiry);
+    if (Number.isSafeInteger(ended) && ended > 0 && ended <= at) return ended;
+    if (activity === null || activity === '') return null;
+  }
+  const current = CHAT_STATES.has(state) ? state : archiveAt ? 'archive' : 'all';
+  let raw;
+  if (stamp) {
+    const match = /^(new|all|operator|archive):([0-9]+)$/.exec(String(stamp));
+    if (!match || match[1] !== current) return null;
+    raw = match[2];
+  } else raw = current === 'archive' ? archiveAt : activity;
+  if (raw === null || raw === '') return state || stamp || archiveAt || expiry ? null : 0;
+  if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^[0-9]+$/.test(raw))) return null;
+  let origin = Number(raw);
+  if (!Number.isSafeInteger(origin) || origin <= 0) return null;
+  if (!Number.isSafeInteger(origin) || origin > at) return null;
+  const deadline = origin + ttlForState(current) * 1000;
+  return Number.isSafeInteger(deadline) ? deadline : null;
 }
 
 function createChatStore(redis, options = {}) {
@@ -100,6 +128,16 @@ function createChatStore(redis, options = {}) {
   }
 
 
+  async function getRetentionSnapshot(instanceId, phone) {
+    const script = "-- readOnlyRetentionSnapshot\nreturn {redis.call('GET', KEYS[1]) or '', redis.call('GET', KEYS[2]) or '', redis.call('ZSCORE', KEYS[3], ARGV[1]) or '', redis.call('GET', KEYS[4]) or '', redis.call('ZSCORE', KEYS[5], ARGV[1]) or ''}";
+    const values = await command(['EVAL', script, '5', keys.state(instanceId, phone), keys.retention(instanceId, phone),
+      keys.inbox(instanceId), keys.archiveMarker(instanceId, phone), keys.expiry(instanceId), phone], null);
+    if (!Array.isArray(values) || values.length !== 5 || values.some(value => typeof value !== 'string')) return { state: null, deadline: null };
+    const [state, stamp, activity, archivedAt, expiry] = values;
+    return { state: CHAT_STATES.has(state) ? state : archivedAt ? 'archive' : 'all',
+      deadline: retentionDeadline(state, stamp, activity, archivedAt, expiry, now()) };
+  }
+
   // Visible operator retention is separate from durable delivery/case obligations.
   // All identity/state/activity reads and changes occur in one Redis transaction.
   async function enforceOperatorRetention(instanceId, phone) {
@@ -118,14 +156,14 @@ function createChatStore(redis, options = {}) {
       "local expiresAt = origin + tonumber(ARGV[4]) * 1000",
       "if expiresAt > cutoff then",
       "  local remaining = math.max(1, math.ceil((expiresAt - cutoff) / 1000))",
-      "  for _, key in ipairs({KEYS[2], KEYS[5], KEYS[6], KEYS[8], KEYS[9], KEYS[10]}) do if redis.call('EXISTS', key) == 1 then local ttl = redis.call('TTL', key); if ttl < 0 or ttl > remaining then redis.call('EXPIRE', key, remaining) end end end",
+      "  for _, key in ipairs({KEYS[2], KEYS[5], KEYS[8], KEYS[9], KEYS[10]}) do if redis.call('EXISTS', key) == 1 then local ttl = redis.call('TTL', key); if ttl < 0 or ttl > remaining then redis.call('EXPIRE', key, remaining) end end end",
       "  local media = redis.pcall('SMEMBERS', KEYS[8]); if type(media) == 'table' and not media.err then for _, id in ipairs(media) do local key = ARGV[5] .. id; local ttl = redis.call('TTL', key); if ttl < 0 or ttl > remaining then redis.call('EXPIRE', key, remaining) end end end",
       "  redis.call('SET', KEYS[1], 'operator:' .. string.format('%.0f', origin), 'EX', remaining)",
       "  redis.call('ZADD', KEYS[3], expiresAt, ARGV[1]); return 2",
       "end",
       "local media = redis.pcall('SMEMBERS', KEYS[8]); if type(media) == 'table' and not media.err then for _, id in ipairs(media) do redis.call('DEL', ARGV[5] .. id) end end",
-      "redis.call('DEL', KEYS[1], KEYS[2], KEYS[5], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10])",
-      "redis.call('ZREM', KEYS[3], ARGV[1]); redis.call('ZREM', KEYS[4], ARGV[1]); redis.call('ZREM', KEYS[11], ARGV[1]); redis.call('SREM', KEYS[12], ARGV[1]); return 1"
+      "redis.call('DEL', KEYS[1], KEYS[2], KEYS[5], KEYS[7], KEYS[8], KEYS[9], KEYS[10])",
+      "redis.call('ZADD', KEYS[3], expiresAt, ARGV[1]); redis.call('ZREM', KEYS[4], ARGV[1]); redis.call('ZREM', KEYS[11], ARGV[1]); redis.call('SREM', KEYS[12], ARGV[1]); return 1"
     ].join('\n');
     return command(['EVAL', script, '12', keys.retention(instanceId, phone), keys.state(instanceId, phone),
       keys.expiry(instanceId), keys.inbox(instanceId), keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
@@ -458,7 +496,7 @@ function createChatStore(redis, options = {}) {
     const key = keys.inbox(instanceId);
     await ensureInboxSortedSet(instanceId);
     await pruneExpired(instanceId);
-    const rows = await command(['ZREVRANGE', key, '0', String(limit - 1), 'WITHSCORES'], []);
+    const rows = await command(['ZREVRANGE', key, '0', '9999', 'WITHSCORES'], []);
     const result = [];
     for (const row of parseScoredMembers(rows)) {
       const phone = normalizePhone(row.member);
@@ -477,47 +515,53 @@ function createChatStore(redis, options = {}) {
         continue;
       }
       if (Number(await enforceOperatorRetention(instanceId, phone)) === 1) continue;
+      const { deadline } = await getRetentionSnapshot(instanceId, phone);
+      if (!deadline || deadline <= now()) continue;
       result.push({ phone, updatedAt: row.score });
+      if (result.length >= limit) break;
     }
+    if (result.length < limit && parseScoredMembers(rows).length >= 10000) throw new Error('CHAT_VISIBLE_SCAN_INCOMPLETE');
     return result;
   }
 
   async function pruneExpired(instanceId) {
     const cutoff = now();
     // Old operator expiry scores used 24h. The atomic policy rechecks current state.
-    const operatorCandidates = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff + (STANDARD_TTL_SECONDS - OPERATOR_TTL_SECONDS) * 1000)], []);
+    const operatorCandidates = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff + (STANDARD_TTL_SECONDS - OPERATOR_TTL_SECONDS) * 1000), 'LIMIT', '0', '1000'], []);
     await Promise.all(operatorCandidates.filter(isPhone).map(phone => enforceOperatorRetention(instanceId, phone)));
-    const expiredPhones = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff)], []);
+    const expiredPhones = await command(['ZRANGEBYSCORE', keys.expiry(instanceId), '0', String(cutoff), 'LIMIT', '0', '1000'], []);
     const pruneScript = [
+      "-- presentationRetentionPolicy",
       "local score = redis.call('ZSCORE', KEYS[1], ARGV[1])",
       'if not score or tonumber(score) > tonumber(ARGV[2]) then return 0 end',
-      "local maxTtl = math.max(redis.call('TTL', KEYS[5]), redis.call('TTL', KEYS[6]), redis.call('TTL', KEYS[7]), redis.call('TTL', KEYS[8]))",
-      "if maxTtl > 0 then redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + maxTtl * 1000, ARGV[1]); return 2 end",
-      "local hasChat = redis.call('EXISTS', KEYS[5]) + redis.call('EXISTS', KEYS[6]) + redis.call('EXISTS', KEYS[7]) + redis.call('EXISTS', KEYS[8])",
-      "if hasChat > 0 then local repairTtl = ARGV[3]; if redis.call('GET', KEYS[7]) == 'archive' or redis.call('EXISTS', KEYS[8]) == 1 then repairTtl = ARGV[4] elseif redis.call(\'GET\', KEYS[7]) == \'operator\' then repairTtl = ARGV[5] end; for i = 5, 8 do if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('EXPIRE', KEYS[i], repairTtl) end end; redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + tonumber(repairTtl) * 1000, ARGV[1]); return 3 end",
-      "redis.call('ZREM', KEYS[1], ARGV[1])",
-      "redis.call('ZREM', KEYS[2], ARGV[1])",
-      "redis.call('ZREM', KEYS[3], ARGV[1])",
-      "redis.call('SREM', KEYS[4], ARGV[1])",
-      'return 1'
+      "local rawState = redis.call('GET', KEYS[7]); local state = rawState; local marker = redis.call('GET', KEYS[8])",
+      "if state and state ~= 'new' and state ~= 'all' and state ~= 'operator' and state ~= 'archive' then return 0 end; if not state then state = marker and 'archive' or 'all' end",
+      "local stamp = redis.call('GET', KEYS[9]); local origin = nil",
+      "if not rawState and not marker and redis.call('EXISTS', KEYS[10]) == 0 and redis.call('TYPE', KEYS[5]).ok == 'none' and redis.call('TYPE', KEYS[6]).ok == 'none' then redis.call('ZREM', KEYS[1], ARGV[1]); redis.call('ZREM', KEYS[2], ARGV[1]); redis.call('ZREM', KEYS[3], ARGV[1]); redis.call('SREM', KEYS[4], ARGV[1]); return 1 end",
+      "if not rawState and not stamp and not marker then return 0 end",
+      "if stamp then local kind, value = string.match(stamp, '^(%a+):(%d+)$'); if kind ~= state then return 0 end; origin = tonumber(value)",
+      "elseif state == 'archive' then if marker and string.match(marker, '^%d+$') then origin = tonumber(marker) end else origin = tonumber(redis.call('ZSCORE', KEYS[2], ARGV[1])) end",
+      "if not origin or origin <= 0 or origin % 1 ~= 0 or origin > 9007199254740991 then return 0 end",
+      "if origin > tonumber(ARGV[2]) then return 0 end",
+      "local ttl = tonumber(ARGV[3]); if state == 'archive' then ttl = tonumber(ARGV[4]) elseif state == 'operator' then ttl = tonumber(ARGV[5]) end",
+      "local deadline = origin + ttl * 1000; if deadline > 9007199254740991 then return 0 end",
+      "if deadline > tonumber(ARGV[2]) then",
+      "  redis.call('ZADD', KEYS[1], deadline, ARGV[1]); local time = redis.call('TIME'); local nativeNow = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)",
+      "  for _, key in ipairs({KEYS[7], KEYS[8], KEYS[9]}) do if redis.call('EXISTS', key) == 1 then local left = redis.call('PTTL', key); if left < 0 or nativeNow + left > deadline then redis.call('PEXPIREAT', key, deadline) end end end; return 2",
+      "end",
+      "if redis.call('EXISTS', KEYS[10]) == 1 then return 0 end",
+      "redis.call('ZADD', KEYS[1], deadline, ARGV[1]); redis.call('ZREM', KEYS[2], ARGV[1]); redis.call('ZREM', KEYS[3], ARGV[1]); redis.call('SREM', KEYS[4], ARGV[1])",
+      "redis.call('DEL', KEYS[7], KEYS[8]); return 1"
     ].join('\n');
     await Promise.all(expiredPhones.filter(isPhone).map(async phone => {
-      const result = await command(['EVAL', pruneScript, '8', keys.expiry(instanceId), keys.inbox(instanceId),
+      const result = await command(['EVAL', pruneScript, '10', keys.expiry(instanceId), keys.inbox(instanceId),
         keys.viewed(instanceId), keys.archive(instanceId), keys.history(instanceId, phone), keys.legacyHistory(instanceId, phone),
-        keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone), phone, String(cutoff),
+        keys.state(instanceId, phone), keys.archiveMarker(instanceId, phone), keys.retention(instanceId, phone),
+        'chatwoot:sos:' + instanceId + ':' + phone, phone, String(cutoff),
         String(STANDARD_TTL_SECONDS), String(ARCHIVE_TTL_SECONDS), String(OPERATOR_TTL_SECONDS)], null);
-      if (result !== null) return;
-      const score = Number(await command(['ZSCORE', keys.expiry(instanceId), phone], Infinity));
-      if (score > cutoff) return;
-      const authoritativeTypes = await Promise.all([
-        command(['TYPE', keys.history(instanceId, phone)], 'none'), command(['TYPE', keys.legacyHistory(instanceId, phone)], 'none'),
-        command(['TYPE', keys.state(instanceId, phone)], 'none'), command(['TYPE', keys.archiveMarker(instanceId, phone)], 'none')
-      ]);
-      if (authoritativeTypes.some(type => type !== 'none')) return;
-      await Promise.all([
-        command(['ZREM', keys.inbox(instanceId), phone], 0), command(['ZREM', keys.viewed(instanceId), phone], 0),
-        command(['ZREM', keys.expiry(instanceId), phone], 0), command(['SREM', keys.archive(instanceId), phone], 0)
-      ]);
+      // A failed atomic transaction proves neither absence nor expiry identity.
+      // Keep the negative proof and metadata; a later successful read may clean it.
+      return;
     }));
     return expiredPhones.length;
   }
@@ -592,7 +636,7 @@ function createChatStore(redis, options = {}) {
     return mapped || direct;
   }
 
-  return { appendMessage, appendMessageOnce, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, readInbox, pruneExpired, applyAction, applyTtl, rememberLidPhone, resolveLidPhone, keys };
+  return { appendMessage, appendMessageOnce, saveEntry: appendMessage, updateMessageReceipt, storeMedia, readMedia, getMedia: readMedia, getHistory, getState, getRetentionSnapshot, readInbox, pruneExpired, applyAction, applyTtl, rememberLidPhone, resolveLidPhone, keys };
 }
 
 const chatStore = createChatStore(redisClient);

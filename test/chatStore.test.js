@@ -84,6 +84,82 @@ class FakeRedis {
     if (command === 'SMEMBERS') return value?.type === 'set' ? [...value.value] : [];
     if (command === 'SISMEMBER') return value?.type === 'set' && value.value.has(args[2]) ? 1 : 0;
     if (command === 'RENAME') { this.data.set(args[2], value); this.data.delete(key); return 'OK'; }
+    if (command === 'EVAL' && args[1].includes('readOnlyRetentionSnapshot')) {
+      const member = args[8];
+      return [this.data.get(args[3])?.value || '', this.data.get(args[4])?.value || '',
+        String(this.data.get(args[5])?.value?.get(member) ?? ''), this.data.get(args[6])?.value || '',
+        String(this.data.get(args[7])?.value?.get(member) ?? '')];
+    }
+    if (command === 'EVAL' && args[1].includes('operatorRetentionPolicy')) {
+      const k = args.slice(3, 15), member = args[15], cutoff = Number(args[16]);
+      if (this.data.get(k[1])?.value !== 'operator' || this.data.has(k[6])) return 0;
+      const stamp = this.data.get(k[0])?.value || '';
+      let origin;
+      if (stamp !== '') {
+        const match = /^operator:([0-9]+)$/.exec(stamp);
+        if (!match) return 0;
+        origin = Number(match[1]);
+      } else {
+        const score = this.data.get(k[2])?.value?.get(member);
+        const activity = this.data.get(k[3])?.value?.get(member);
+        if (!Number.isSafeInteger(score) || !Number.isSafeInteger(activity)) return 0;
+        origin = Math.max(score - Number(args[17]) * 1000, activity);
+      }
+      if (!Number.isSafeInteger(origin) || origin <= 0 || origin > cutoff) return 0;
+      const deadline = origin + Number(args[18]) * 1000;
+      const media = this.data.get(k[7]);
+      const mediaIds = media?.type === 'set' ? [...media.value] : [];
+      if (deadline > cutoff) {
+        const remaining = Math.max(1, Math.ceil((deadline - cutoff) / 1000));
+        for (const key of [k[1], k[4], k[7], k[8], k[9], ...mediaIds.map(id => args[19] + id)]) {
+          if (this.data.has(key)) {
+            const ttl = this.expires.get(key);
+            if (ttl === undefined || ttl < 0 || ttl > remaining) this.expires.set(key, remaining);
+          }
+        }
+        this.data.set(k[0], { type: 'string', value: 'operator:' + origin });
+        this.expires.set(k[0], remaining);
+        const expiry = this.data.get(k[2]) || { type: 'zset', value: new Map() };
+        expiry.value.set(member, deadline); this.data.set(k[2], expiry);
+        return 2;
+      }
+      for (const key of [...mediaIds.map(id => args[19] + id), k[0], k[1], k[4], k[6], k[7], k[8], k[9]]) {
+        this.data.delete(key); this.expires.delete(key);
+      }
+      const expiry = this.data.get(k[2]) || { type: 'zset', value: new Map() };
+      expiry.value.set(member, deadline); this.data.set(k[2], expiry);
+      this.data.get(k[3])?.value?.delete(member);
+      this.data.get(k[10])?.value?.delete(member);
+      this.data.get(k[11])?.value?.delete(member);
+      return 1;
+    }
+    if (command === 'EVAL' && args[1].includes('presentationRetentionPolicy')) {
+      const member = args[13], cutoff = Number(args[14]);
+      const expiry = this.data.get(args[3]);
+      if (!expiry?.value?.has(member) || expiry.value.get(member) > cutoff) return 0;
+      const state = this.data.get(args[9])?.value, marker = this.data.get(args[10])?.value;
+      const stamp = this.data.get(args[11])?.value;
+      if (!state && !stamp && !marker) return 0;
+      const current = state || (marker ? 'archive' : 'all');
+      const match = stamp ? /^(new|all|operator|archive):([0-9]+)$/.exec(stamp) : null;
+      if (stamp && (!match || match[1] !== current)) return 0;
+      const origin = Number(match ? match[2] : current === 'archive' ? marker : this.data.get(args[4])?.value?.get(member));
+      if (!Number.isSafeInteger(origin) || origin <= 0 || origin > cutoff) return 0;
+      const ttl = Number(args[current === 'archive' ? 16 : current === 'operator' ? 17 : 15]);
+      const deadline = origin + ttl * 1000;
+      expiry.value.set(member, deadline);
+      if (deadline > cutoff) {
+        for (const key of [args[9], args[10], args[11]]) if (this.data.has(key)) {
+          const remaining = Math.ceil((deadline - cutoff) / 1000), before = this.expires.get(key);
+          if (before === undefined || before > remaining) this.expires.set(key, remaining);
+        }
+        return 2;
+      }
+      if (this.data.has(args[12])) return 0;
+      for (const key of [args[4], args[5], args[6]]) this.data.get(key)?.value?.delete(member);
+      for (const key of [args[9], args[10]]) { this.data.delete(key); this.expires.delete(key); }
+      return 1;
+    }
     if (command === 'EVAL' && args[1].includes('viewWithoutRetentionRefresh')) {
       const current = this.data.get(args[3]);
       if (current?.value !== 'new') return 0;
@@ -105,6 +181,8 @@ class FakeRedis {
       } else {
         this.data.get(archiveKey)?.value?.delete(phone); this.data.delete(markerKey); this.expires.delete(markerKey);
       }
+      this.data.set(args[argumentStart + 5], { type: 'string', value: state + ':' + args[argumentStart + 3] });
+      this.expires.set(args[argumentStart + 5], ttl);
       if (keyCount >= 4) {
         const expiry = this.data.get(args[6]) || { type: 'zset', value: new Map() };
         expiry.value.set(phone, Number(args[argumentStart + 4])); this.data.set(args[6], expiry);
@@ -122,6 +200,8 @@ class FakeRedis {
       const expiry = this.data.get(args[4]) || { type: 'zset', value: new Map() };
       expiry.value.set(args[argumentStart + 2], Number(args[argumentStart + 1])); this.data.set(args[4], expiry);
       const ttl = Number(args[argumentStart + 3]);
+      this.data.set(args[argumentStart + 4], { type: 'string', value: (this.data.get(args[3])?.value || 'all') + ':' + args[argumentStart + 5] });
+      this.expires.set(args[argumentStart + 4], ttl);
       for (const expiryKey of args.slice(5, 3 + keyCount)) if (this.data.has(expiryKey)) this.expires.set(expiryKey, ttl);
       return 1;
     }

@@ -645,8 +645,11 @@ const historyAdmissionAxes = [
 for (const [name, canonical, legacy, hasSos, preserve] of historyAdmissionAxes) {
   test('chat retention policy: inbox history admission ' + name, { skip: !enabled }, async t => {
     const marker = 'synthetic archive marker';
+    const retentionOrigin = Date.now();
     await real.multi().set('chatwoot:state:' + instance + ':' + phone, 'archive', { EX: 259200 })
       .set('chatwoot:archive:' + instance + ':' + phone, marker, { EX: 259200 })
+      .set('chatwoot:retention:' + instance + ':' + phone, 'archive:' + retentionOrigin, { EX: 259200 })
+      .zAdd('chatwoot:expiry:' + instance, [{ score: retentionOrigin + 259200_000, value: phone }])
       .sAdd('chatwoot:archive:' + instance, phone)
       .zAdd('chatwoot:inbox:' + instance, [{ score: Date.now(), value: phone }])
       .zAdd('chatwoot:viewed:' + instance, [{ score: Date.now() - 1, value: phone }]).exec();
