@@ -1622,8 +1622,9 @@ app.get('/api/wa/tenants/:instanceId', requireUiOrApi, async (req, res) => {
 const SHARED_PROMPT_KEY = 'whatspro:shared-prompt';
 
 async function readSharedPrompt() {
-  if (!redisClient.isOpen) return '';
-  return String(await redisClient.get(SHARED_PROMPT_KEY) || '');
+  if (!redisClient.isOpen) return null;
+  const prompt = await redisClient.get(SHARED_PROMPT_KEY);
+  return typeof prompt === 'string' ? prompt : null;
 }
 
 function adminError(res, error) {

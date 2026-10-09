@@ -309,11 +309,22 @@ function badRequest(errors) {
 // shared text later rewrites the rows that opted into it.
 function resolvePrompt(fields, input, sharedPrompt, existing = null) {
   if (fields.prompt_mode === 'custom') {
-    const custom = cleanMultiline(input.systemPrompt);
-    if (custom) return custom;
-    return cleanMultiline(existing?.system_prompt || '');
+    // Omitted means keep; an explicit string (including empty) replaces it.
+    if (input.systemPrompt !== undefined) {
+      if (typeof input.systemPrompt !== 'string') throw badRequest(['systemPrompt']);
+      return cleanMultiline(input.systemPrompt);
+    }
+    return cleanMultiline(existing?.system_prompt);
   }
-  return cleanMultiline(sharedPrompt || existing?.system_prompt || '');
+  if (typeof sharedPrompt === 'string') return cleanMultiline(sharedPrompt);
+  // A missing global source cannot authorize reusing an old custom policy.
+  // Same-mode partial edits may retain the prior resolved shared value.
+  if (existing && clean(existing.prompt_mode, 16).toLowerCase() !== 'custom') {
+    return cleanMultiline(existing.system_prompt);
+  }
+  const error = new Error('SHARED_PROMPT_UNAVAILABLE');
+  error.statusCode = 503;
+  throw error;
 }
 
 // Recognisable alternate spellings of the whitelisted update fields. Only these are
@@ -654,7 +665,7 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
     domain: input.domain,
     address: input.address || source.address,
     workHours: input.workHours || source.work_hours,
-    promptMode: input.promptMode || source.prompt_mode,
+    promptMode: input.promptMode === undefined ? source.prompt_mode : input.promptMode,
     alemiApiUrl: input.alemiApiUrl,
     alemiInstance: input.alemiInstance,
     active: input.active === undefined ? false : input.active
@@ -674,9 +685,7 @@ async function cloneTenant(sourceInstanceId, input, options = {}) {
     ...fields,
     ...platformFields(options.publicBase),
     alemi_secret: cloneSecret,
-    system_prompt: fields.prompt_mode === 'custom'
-      ? cleanMultiline(input.systemPrompt || source.system_prompt)
-      : cleanMultiline(options.sharedPrompt || source.system_prompt)
+    system_prompt: resolvePrompt(fields, input, options.sharedPrompt, source)
   };
   await tenantStore.createRow(payload);
   return { instanceId: fields.instance_id, clonedFrom: sourceInstanceId, created: true };
