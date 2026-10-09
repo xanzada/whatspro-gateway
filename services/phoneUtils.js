@@ -7,6 +7,25 @@ function isGroupOrStatusJid(value) {
     return GROUP_OR_STATUS_RE.test(raw);
 }
 
+// Only routing/sender-contact metadata identifies the current channel. A
+// customer's forwardedNewsletterMessageInfo belongs to message content.
+function isNewsletterPayload(payload = {}) {
+    if (!payload || typeof payload !== 'object') return false;
+    const values = [
+        payload.from, payload.sender, payload.phone, payload.chatId, payload.remoteJid,
+        payload.key?.remoteJid, payload.id?.remote,
+        payload._data?.from, payload._data?.chatId, payload._data?.id?.remote,
+        payload._baileys?.key?.remoteJid,
+        payload.data?.from, payload.data?.chatId, payload.data?.key?.remoteJid,
+        payload.contact?.id, payload.data?.contact?.id
+    ];
+    return values.some(value => {
+        const jid = typeof value === 'string' ? value
+            : typeof value?._serialized === 'string' ? value._serialized : '';
+        return /^[^@\s]+@newsletter$/i.test(jid.trim());
+    });
+}
+
 function normalizeKazakhstanPhone(digits) {
     if (!digits) return '';
 
@@ -114,6 +133,7 @@ function toWhatsAppChatId(value, jidLookup = null) {
 
 module.exports = {
     isGroupOrStatusJid,
+    isNewsletterPayload,
     isValidChatPhone,
     normalizePhone,
     normalizePhoneFromCandidates,

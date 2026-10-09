@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { redisClient } = require('../config/redis');
-const { isValidChatPhone, normalizePhoneFromCandidates } = require('./phoneUtils');
+const { isNewsletterPayload, isValidChatPhone, normalizePhoneFromCandidates } = require('./phoneUtils');
 const { chatStore } = require('./chatStore');
 const { publishChatEvent } = require('./chatEvents');
 const { isPhoneAllowed } = require('./testModePolicy');
@@ -73,6 +73,7 @@ const PROTOCOL_NOISE_TYPES = new Set([
  * conversational content - text or supported media - may create a chat.
  */
 function isNonConversationalPayload(payload = {}) {
+  if (isNewsletterPayload(payload)) return true;
   const type = String(payload.type || payload.mediaKind || '').trim().toLowerCase();
   if (PROTOCOL_NOISE_TYPES.has(type)) return true;
   if (payload.fromMe === true || payload.data?.key?.fromMe === true) return false;
@@ -125,6 +126,7 @@ async function isBotEnabled(instanceId, dependencies = {}) {
 }
 
 async function shouldSkipOpenBot(payload = {}, dependencies = {}) {
+  if (isNewsletterPayload(payload)) return true;
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
   const phone = getPayloadPhone(payload);
   if (!instanceId || !isValidChatPhone(phone)) return false;
@@ -220,6 +222,7 @@ function buildHistoryEntry(payload, instanceId, phone, timestamp) {
 }
 
 async function saveIncomingMessage(payload, dependencies = {}) {
+  if (isNewsletterPayload(payload)) return { skipped: true, reason: 'non_conversational' };
   const store = dependencies.store || chatStore;
   const publishEvent = dependencies.publishEvent || publishChatEvent;
   const instanceId = normalizeInstanceId(payload.instanceId || payload.instance);
@@ -287,6 +290,13 @@ async function forwardToOpenBot(payload) {
 }
 
 async function forwardIncomingWhatsAppMessage(payload) {
+  if (isNewsletterPayload(payload)) {
+    return {
+      redis: { status: 'skipped', reason: 'non_conversational' },
+      openbot: { status: 'skipped', reason: 'non_conversational' },
+      durable: false
+    };
+  }
   let record;
   try {
     // Disk intent is written before either dependency is called. A container

@@ -24,7 +24,7 @@ const { redisClient } = require('../config/redis');
 const fs = require('fs');
 const path = require('path');
 
-const { isGroupOrStatusJid, isValidChatPhone, normalizePhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
+const { isGroupOrStatusJid, isNewsletterPayload, isValidChatPhone, normalizePhone, normalizePhoneFromCandidates, toWhatsAppChatId } = require('./phoneUtils');
 const { forwardIncomingWhatsAppMessage } = require('./incomingWebhook');
 const { markOperatorActive, OPERATOR_ACTIVE_SECONDS } = require('./operatorLock');
 const { sosStore } = require('./sosStore');
@@ -1781,6 +1781,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
 
     client.on('message', async (msg) => {
         if (isGroupOrStatusJid(msg.from)) return;
+        if (isNewsletterPayload(msg)) return;
 
         let realSender = msg.from;
         let cleanNumber = '';
@@ -1819,6 +1820,7 @@ async function startWhatsAppInstance(instanceId, options = {}) {
                 // phone: a @lid message jid is never a key in that book (see contactByPhone).
                 contactInfo = await getContactInfoFromMessage(msg, client, cleanNumber);
             }
+            if (isNewsletterPayload({ ...msg, contact: contactInfo })) return;
             if (!cleanNumber) {
                 cleanNumber = normalizePhoneFromCandidates([
                     contactInfo.number, contactInfo.id
