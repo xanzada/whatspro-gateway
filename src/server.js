@@ -386,7 +386,7 @@ const configuredProxyHops = String(process.env.TRUST_PROXY_HOPS || '').trim();
 app.set('trust proxy', /^\d+$/.test(configuredProxyHops) ? Number(configuredProxyHops) : false);
 const smallJsonParser = express.json({ limit: '256kb' });
 const smallFormParser = express.urlencoded({ extended: true, limit: '64kb' });
-const apiSendJsonParser = express.json({ limit: '23mb' });
+const apiSendJsonParser = express.json({ limit: Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 65_536 });
 app.use((req, res, next) => req.path === '/api/send' ? next() : smallJsonParser(req, res, next));
 app.use((req, res, next) => req.path === '/api/send' ? next() : smallFormParser(req, res, next));
 

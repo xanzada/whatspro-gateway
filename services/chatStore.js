@@ -9,7 +9,11 @@ const ARCHIVE_TTL_SECONDS = 72 * 60 * 60;
 const OPERATOR_TTL_SECONDS = 3 * 60 * 60;
 const ttlForState = state => state === 'archive' ? ARCHIVE_TTL_SECONDS : state === 'operator' ? OPERATOR_TTL_SECONDS : STANDARD_TTL_SECONDS;
 const LID_MAP_TTL_SECONDS = 30 * 24 * 60 * 60;
-const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
+// Common decoded-media resource bound; provider/platform limits remain independent.
+const configuredMediaBytes = Number(process.env.MAX_MEDIA_BYTES || process.env.WHATSPRO_MAX_MEDIA_BYTES);
+const MAX_MEDIA_BYTES = Number.isSafeInteger(configuredMediaBytes) && configuredMediaBytes >= 1024
+  && configuredMediaBytes <= Math.floor((Number.MAX_SAFE_INTEGER - 262_144) / 6)
+  ? configuredMediaBytes : 64 * 1024 * 1024;
 const MAX_MEDIA_BASE64_LENGTH = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
 const CHAT_STATES = new Set(['new', 'all', 'operator', 'archive']);
 

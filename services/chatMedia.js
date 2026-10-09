@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const ffmpeg = require('fluent-ffmpeg');
 const bundledFfmpegPath = require('ffmpeg-static');
+const { MAX_MEDIA_BYTES } = require('./chatStore');
 
 function resolveFfmpegPath(env = process.env, bundledPath = bundledFfmpegPath) {
   return String(env.FFMPEG_PATH || bundledPath || 'ffmpeg').trim();
@@ -14,9 +15,9 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 const DEFAULT_CACHE_DIR = path.join(os.tmpdir(), 'whatspro-audio-cache');
 const CACHE_TTL_MS = 60 * 60 * 1000;
-const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+const MAX_AUDIO_BYTES = MAX_MEDIA_BYTES;
+const MAX_IMAGE_BYTES = MAX_MEDIA_BYTES;
+const MAX_DOCUMENT_BYTES = MAX_MEDIA_BYTES;
 const EXTENSIONS = new Map([
   ['audio/ogg', '.ogg'], ['audio/opus', '.ogg'], ['audio/webm', '.webm'],
   ['audio/mpeg', '.mp3'], ['audio/mp4', '.m4a'], ['audio/wav', '.wav'], ['audio/x-wav', '.wav']

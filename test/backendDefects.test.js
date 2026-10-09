@@ -491,3 +491,12 @@ test('media authentication accepts the existing header and route query fallback'
     else process.env.WHATSPRO_API_TOKEN = previous;
   }
 });
+
+test('ordinary supported audio above the former16MiB downloader cap is qualified and validated', async () => {
+  const bytes=Buffer.alloc(17*1024*1024); bytes.write('ID3');
+  const data=bytes.toString('base64');
+  assert.equal(whatsappTest.isQualifiedAudio({type:'audio',hasMedia:true,mimetype:'audio/mpeg'}),true);
+  assert.equal(whatsappTest.validateAudioBase64(data),data);
+  const streamed=await whatsappTest.collectMediaStream(Readable.from([bytes.subarray(0,9*1024*1024),bytes.subarray(9*1024*1024)]));
+  assert.equal(streamed.equals(bytes),true);
+});
