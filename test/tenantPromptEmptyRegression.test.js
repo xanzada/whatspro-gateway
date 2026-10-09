@@ -71,16 +71,16 @@ async function seed(fixture, mode = 'custom', text = 'Previous instructions', id
     system_prompt: text, alemi_instance: id, alemi_api_url: 'https://synthetic.example.invalid' });
 }
 
-function actualPromptRoute(fixture, sharedState, method = 'patch') {
+function actualPromptRoute(fixture, sharedState, method = 'patch', kind = 'clone') {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src/server.js'), 'utf8');
   const helperStart = source.indexOf('async function readSharedPrompt()');
   const helperEnd = source.indexOf('// Direct service failures', helperStart);
   const routeStart = source.indexOf(method === 'patch'
     ? "app.patch('/api/wa/tenants/:instanceId',"
-    : "app.post('/api/wa/tenants/:instanceId/clone',");
+    : (kind === 'create' ? "app.post('/api/wa/tenants'," : "app.post('/api/wa/tenants/:instanceId/clone',"));
   const routeEnd = source.indexOf(method === 'patch'
     ? "app.post('/api/wa/tenants/:instanceId/clone',"
-    : "app.post('/api/wa/tenants/:instanceId/rotate',", routeStart);
+    : (kind === 'create' ? "app.patch('/api/wa/tenants/:instanceId'," : "app.post('/api/wa/tenants/:instanceId/rotate',"), routeStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart && routeStart >= 0 && routeEnd > routeStart);
   let route;
   const redisClient = { isOpen: sharedState.open !== false,
@@ -136,16 +136,24 @@ test('9416 actual API switch to authoritative empty shared never leaks old custo
   assert.equal(fresh.service.runtimeTenant(stored).system_prompt, '');
 });
 
-for (const sharedState of [{ open: false }, { value: null }]) {
-  test('9416 actual API unavailable/missing shared source rejects mode switch with no partial write: ' + JSON.stringify(sharedState), async () => {
-    const fixture = createPromptFixture(); await seed(fixture);
-    const response = await actualPromptRoute(fixture, sharedState)({ promptMode: 'shared', address: 'Must not be written' });
-    assert.equal(response.code, 503); assert.equal(response.body.error, 'TENANT_WRITE_FAILED');
-    const stored = await fixture.store.findRow('alpha');
-    assert.equal(stored.prompt_mode, 'custom'); assert.equal(stored.system_prompt, 'Previous instructions');
-    assert.equal(stored.address, undefined);
-  });
-}
+test('9416 actual API disconnected shared source rejects mode switch with no partial write', async () => {
+  const fixture = createPromptFixture(); await seed(fixture);
+  const response = await actualPromptRoute(fixture, { open: false })({ promptMode: 'shared', address: 'Must not be written' });
+  assert.equal(response.code, 503); assert.equal(response.body.error, 'TENANT_WRITE_FAILED');
+  const stored = await fixture.store.findRow('alpha');
+  assert.equal(stored.prompt_mode, 'custom'); assert.equal(stored.system_prompt, 'Previous instructions');
+  assert.equal(stored.address, undefined);
+});
+
+// A successful Redis GET null proves known absence. Startup does not seed the
+// shared key, so this is the normal default-empty state, not a read failure.
+test('9416 actual API ready absent shared key clears old custom when switching mode', async () => {
+  const fixture = createPromptFixture(); await seed(fixture);
+  const response = await actualPromptRoute(fixture, { value: null })({ promptMode: 'shared' });
+  assert.equal(response.code, 200);
+  const stored = await fixture.fresh().store.findRow('alpha');
+  assert.equal(stored.prompt_mode, 'shared'); assert.equal(stored.system_prompt, '');
+});
 
 test('9416 shared same-mode edit keeps prior prompt while source is unavailable', async () => {
   const fixture = createPromptFixture(); await seed(fixture, 'shared');
@@ -234,3 +242,52 @@ test('9416 clone explicit default mode is shared rather than inherited custom', 
   const stored = await fixture.store.findRow('clone-alpha');
   assert.equal(stored.prompt_mode, 'shared'); assert.equal(stored.system_prompt, '');
 });
+
+
+for (const value of [null, '']) {
+  test('9416 actual new shared create accepts known absent or explicitly empty global prompt: ' + String(value), async () => {
+    const fixture = createPromptFixture();
+    const response = await actualPromptRoute(fixture, { value }, 'post', 'create')({ instanceId: 'new-alpha', brand: 'Synthetic new',
+      promptMode: 'shared', alemiSecret: 'synthetic-create-only' });
+    assert.equal(response.code, 201);
+    const stored = await fixture.fresh().store.findRow('new-alpha');
+    assert.equal(stored.prompt_mode, 'shared'); assert.equal(stored.system_prompt, '');
+  });
+}
+
+
+test('9416 actual clone switching custom to shared accepts a ready absent global key without altering source', async () => {
+  const fixture = createPromptFixture(); await seed(fixture);
+  const response = await actualPromptRoute(fixture, { value: null }, 'post')({ instanceId: 'clone-alpha', brand: 'Synthetic clone',
+    promptMode: 'shared', alemiSecret: 'synthetic-clone-only' });
+  assert.equal(response.code, 201);
+  const stored = await fixture.fresh().store.findRow('clone-alpha');
+  assert.equal(stored.prompt_mode, 'shared'); assert.equal(stored.system_prompt, '');
+  const source = await fixture.store.findRow('alpha');
+  assert.equal(source.prompt_mode, 'custom'); assert.equal(source.system_prompt, 'Previous instructions');
+});
+
+for (const sharedState of [{ open: false }, { failure: new Error('SYNTHETIC_SHARED_READ_FAILURE') }]) {
+  test('9416 actual new shared create fails before writes on unavailable connection or GET error: ' + (sharedState.failure ? 'read error' : 'disconnected'), async () => {
+    const fixture = createPromptFixture();
+    const response = await actualPromptRoute(fixture, sharedState, 'post', 'create')({ instanceId: 'new-alpha', brand: 'Synthetic new',
+      promptMode: 'shared', alemiSecret: 'synthetic-create-only' });
+    assert.equal(response.code, sharedState.failure ? 502 : 503);
+    assert.equal(response.body.error, 'TENANT_WRITE_FAILED');
+    assert.equal(await fixture.store.findRow('new-alpha'), null);
+  });
+}
+
+
+for (const sharedState of [{ open: false }, { failure: new Error('SYNTHETIC_CLONE_READ_FAILURE') }]) {
+  test('9416 actual shared clone rejects unavailable connection or GET error before creating a row: ' + (sharedState.failure ? 'read error' : 'disconnected'), async () => {
+    const fixture = createPromptFixture(); await seed(fixture);
+    const response = await actualPromptRoute(fixture, sharedState, 'post')({ instanceId: 'clone-alpha', brand: 'Synthetic clone',
+      promptMode: 'shared', alemiSecret: 'synthetic-clone-only' });
+    assert.equal(response.code, sharedState.failure ? 502 : 503);
+    assert.equal(response.body.error, 'TENANT_WRITE_FAILED');
+    assert.equal(await fixture.store.findRow('clone-alpha'), null);
+    const source = await fixture.store.findRow('alpha');
+    assert.equal(source.prompt_mode, 'custom'); assert.equal(source.system_prompt, 'Previous instructions');
+  });
+}

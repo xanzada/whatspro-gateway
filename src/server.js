@@ -1624,6 +1624,8 @@ const SHARED_PROMPT_KEY = 'whatspro:shared-prompt';
 async function readSharedPrompt() {
   if (!redisClient.isOpen) return null;
   const prompt = await redisClient.get(SHARED_PROMPT_KEY);
+  // A successful read with no key is the supported default-empty shared prompt.
+  if (prompt === null) return '';
   return typeof prompt === 'string' ? prompt : null;
 }
 
